@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     model_prefix: str = Field(default="")  # prepend to model names
 
     host: str = Field(default="0.0.0.0")
-    port: int = Field(default=11434)
+    port: int = Field(default=11436)
 
     signature_enabled: bool = Field(default=True)
     signature_format: str = Field(default="\nModel: {model}")

@@ -7,39 +7,77 @@ services:
       dockerfile: Dockerfile
     container_name: llm-router
     ports:
-      - "11434:11434"
+      - "11436:11436"
     environment:
-      - ROUTER_OLLAMA_URL=http://host.docker.internal:11434
-      - ROUTER_SIGNATURE_ENABLED=true
-      - ROUTER_LOG_LEVEL=INFO
-      - ROUTER_POLLING_INTERVAL=60
+      # --- Provider Selection ---
+      ROUTER_PROVIDER: "ollama"
+
+      # --- Ollama Settings (if ROUTER_PROVIDER=ollama) ---
+      ROUTER_OLLAMA_URL: "http://ollama:11434"
+      ROUTER_PINNED_MODEL: "" # Optional: e.g., phi3:mini
+
+      # --- llama.cpp Server Settings (if ROUTER_PROVIDER=llama.cpp) ---
+      # ROUTER_LLAMA_CPP_URL: "http://llama-cpp:8080"
+      # ROUTER_MODEL_PREFIX: ""
+
+      # --- OpenAI-Compatible API Settings (if ROUTER_PROVIDER=openai) ---
+      # ROUTER_OPENAI_BASE_URL: "https://api.openai.com/v1"
+      # ROUTER_OPENAI_API_KEY: "your-api-key-here"
+      # ROUTER_MODEL_PREFIX: ""
+
+      # --- Server Settings ---
+      ROUTER_HOST: "0.0.0.0"
+      ROUTER_PORT: 11436
+
+      # --- Security Settings (optional but recommended) ---
+      # ROUTER_ADMIN_API_KEY: "your-secret-key-change-this"
+      # ROUTER_RATE_LIMIT_ENABLED: "false"
+      # ROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE: 60
+      # ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE: 10
+
+      # --- Timeout Configuration ---
+      ROUTER_PROFILE_TIMEOUT: 30
+      ROUTER_GENERATION_TIMEOUT: 120
+      ROUTER_PROFILE_PROMPTS_PER_CATEGORY: 3
+
+      # --- Routing & Benchmark Settings ---
+      ROUTER_MODEL: "" # Set to model name for LLM dispatch
+      ROUTER_TEMPERATURE: 0.0
+      ROUTER_MAX_TOKENS: 50
+      ROUTER_PREFER_SMALLER_MODELS: "true"
+      ROUTER_PREFER_NEWER_MODELS: "true"
+      ROUTER_BENCHMARK_SOURCES: "huggingface,lmsys"
+
+      # --- Response & Monitoring ---
+      ROUTER_SIGNATURE_ENABLED: "true"
+      ROUTER_SIGNATURE_FORMAT: "\nModel: {model}"
+      ROUTER_POLLING_INTERVAL: 60
+      ROUTER_LOG_LEVEL: "INFO"
+      ROUTER_DATABASE_URL: "sqlite:///router.db"
+
     volumes:
       - ./router.db:/app/router.db
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
-      - ollama-network
+      - llm-router-network
 
-  # This assumes you have an existing Ollama container
-  # Remove or modify if Ollama runs differently in your setup
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    restart: unless-stopped
-    networks:
-      - ollama-network
-    # Uncomment if Ollama should be managed by this compose
-    # profiles:
-    #   - ollama
+  # === Example Ollama Service ===
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_KEEP_ALIVE=-1
+  #   restart: unless-stopped
+  #   networks:
+  #     - llm-router-network
 
 volumes:
   ollama-data:
 
 networks:
-  ollama-network:
+  llm-router-network:
     driver: bridge

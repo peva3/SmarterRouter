@@ -39,7 +39,7 @@ ROUTER_PINNED_MODEL=
 ROUTER_HOST=0.0.0.0
 
 # Server port (default: 11434 - matches Ollama default for drop-in replacement)
-ROUTER_PORT=11434
+ROUTER_PORT=11436
 
 # =============================================================================
 # SECURITY CONFIGURATION
@@ -67,7 +67,7 @@ ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE=10
 # Router model for LLM-based dispatch (optional)
 # Leave empty to use keyword-based routing (fast, no extra LLM calls)
 # Set to a small model like "llama3.2:1b" for smarter LLM-based routing
-ROUTER_MODEL=llama3.2:1b
+#ROUTER_MODEL=llama3.2:1b
 
 # Dispatcher temperature (default: 0.0 for deterministic routing)
 ROUTER_TEMPERATURE=0.0
