@@ -39,11 +39,19 @@ from router.skills import skills_registry
 
 class AppState:
     def __init__(self):
+        from datetime import datetime, timezone
         self.backend: LLMBackend | None = None
         self.router_engine: RouterEngine | None = None
         self.background_tasks: set[asyncio.Task] = set()
         self.current_loaded_model: str | None = None
         self.rate_limiter: dict[str, list[float]] = {}
+        
+        # Health and stats tracking
+        self.start_time: datetime = datetime.now(timezone.utc)
+        self.total_requests: int = 0
+        self.total_errors: int = 0
+        self.requests_by_model: dict[str, int] = {}
+        self.requests_by_category: dict[str, int] = {}
 
 
 app_state = AppState()
@@ -278,14 +286,46 @@ async def chat_completions(
     # Generate response ID early
     response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
+    # Check for model override query parameter
+    model_override = request.query_params.get("model")
+    
+    # Track request
+    if hasattr(app_state, 'total_requests'):
+        app_state.total_requests += 1
+
     try:
-        # Pass full request object for capability detection
-        routing_result = await app_state.router_engine.select_model(messages[-1].content, validated_request)
-        selected_model = routing_result.selected_model
-        reasoning = routing_result.reasoning
-        confidence = routing_result.confidence
-        # Use sanitized logging
-        logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
+        # Model override - skip routing and use specified model
+        if model_override:
+            available_models = await app_state.backend.list_models()
+            model_names = [m.name for m in available_models]
+            
+            # Try exact match first, then partial match
+            selected_model = None
+            for name in model_names:
+                if name == model_override:
+                    selected_model = name
+                    break
+                if model_override.lower() in name.lower():
+                    selected_model = name
+                    break
+            
+            if not selected_model:
+                return JSONResponse(
+                    {"error": {"message": f"Model '{model_override}' not available. Available: {model_names[:5]}...", "type": "invalid_request_error"}},
+                    status_code=400,
+                )
+            
+            reasoning = f"User-specified model override: {selected_model}"
+            confidence = 1.0
+            logger.info(f"Model override: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
+        else:
+            # Pass full request object for capability detection
+            routing_result = await app_state.router_engine.select_model(messages[-1].content, validated_request)
+            selected_model = routing_result.selected_model
+            reasoning = routing_result.reasoning
+            confidence = routing_result.confidence
+            # Use sanitized logging
+            logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
         logger.error(f"Routing failed: {e}")
         models = await app_state.backend.list_models()
@@ -327,6 +367,8 @@ async def chat_completions(
         "seed": validated_request.seed,
         "logprobs": validated_request.logprobs,
         "top_logprobs": validated_request.top_logprobs,
+        "tools": skills_registry.list_skills() if validated_request.tools else None,
+        "tool_choice": validated_request.tool_choice,
     }
     # Remove None values
     backend_kwargs = {k: v for k, v in backend_kwargs.items() if v is not None}
@@ -391,6 +433,10 @@ async def chat_completions(
             app_state.current_loaded_model = final_model
             logger.info(f"Generation succeeded with model: {final_model}")
             
+            # Track stats
+            if hasattr(app_state, 'requests_by_model'):
+                app_state.requests_by_model[final_model] = app_state.requests_by_model.get(final_model, 0) + 1
+            
             # If we fell back, update reasoning
             if final_model != selected_model:
                 reasoning += f" (Fallback from {selected_model})"
@@ -403,13 +449,52 @@ async def chat_completions(
     
     if response is None:
         logger.error(f"All models failed. Last error: {last_error}")
+        if hasattr(app_state, 'total_errors'):
+            app_state.total_errors += 1
         return JSONResponse(
             {"error": {"message": f"All models failed. Last error: {last_error}", "type": "internal_error"}},
             status_code=500,
         )
 
-    # Log the final decision
+    # Log the initial routing decision
     app_state.router_engine.log_decision(prompt, final_model, confidence, reasoning, response_id)
+
+    # === TOOL EXECUTION LOOP ===
+    max_tool_calls = 5
+    tool_calls_made = 0
+    
+    while tool_calls_made < max_tool_calls:
+        tool_calls = response.get("message", {}).get("tool_calls")
+        if not tool_calls:
+            break
+
+        logger.info(f"Model {final_model} requested {len(tool_calls)} tool call(s)")
+        
+        # Add assistant message with tool calls to history
+        messages_dict.append(response["message"])
+
+        for tool_call in tool_calls:
+            tool_name = tool_call["function"]["name"]
+            tool_args = json.loads(tool_call["function"]["arguments"])
+            
+            logger.info(f"Executing tool: {tool_name}({tool_args})")
+            tool_result = await skills_registry.execute_skill(tool_name, **tool_args)
+
+            messages_dict.append({
+                "role": "tool",
+                "tool_call_id": tool_call["id"],
+                "content": tool_result,
+            })
+        
+        tool_calls_made += 1
+
+        # Continue conversation with tool results
+        response = await app_state.backend.chat(
+            model=final_model,
+            messages=messages_dict,
+            stream=False,
+            **backend_kwargs,
+        )
 
     content = response.get("message", {}).get("content", "")
 
@@ -602,6 +687,43 @@ async def get_benchmarks(
             "last_sync": last_sync_time,
             "sync_status": sync_status,
         }
+
+
+@app.get("/admin/stats")
+async def get_stats(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+):
+    """Get router statistics (requires admin API key if configured)."""
+    from datetime import datetime, timezone
+    
+    await rate_limit_request(request, config, is_admin=True)
+    
+    # Calculate uptime
+    uptime_seconds = 0
+    if hasattr(app_state, 'start_time'):
+        uptime_seconds = (datetime.now(timezone.utc) - app_state.start_time).total_seconds()
+    
+    # Get cache stats from router engine
+    cache_stats = {}
+    if app_state.router_engine and hasattr(app_state.router_engine, 'semantic_cache'):
+        cache = app_state.router_engine.semantic_cache
+        cache_stats = {
+            "cache_size": len(cache.cache),
+            "cache_max": cache.max_size,
+            "recent_selections_count": len(cache.recent_selections),
+        }
+    
+    return {
+        "uptime_seconds": uptime_seconds,
+        "total_requests": getattr(app_state, 'total_requests', 0),
+        "total_errors": getattr(app_state, 'total_errors', 0),
+        "requests_by_model": getattr(app_state, 'requests_by_model', {}),
+        "requests_by_category": getattr(app_state, 'requests_by_category', {}),
+        "cache": cache_stats,
+        "current_loaded_model": app_state.current_loaded_model,
+    }
 
 
 @app.post("/admin/reprofile")

@@ -69,10 +69,11 @@ Running multiple models locally is a VRAM nightmare.
     - It filters out models that lack required capabilities (e.g., Vision).
     - It calculates a weighted score for each remaining model.
     - The model with the highest score is selected.
-4. **Execution**:
+4. **Execution & Tool Loop**:
     - The router checks if the model is loaded.
     - If a different model is in VRAM, it triggers an unload.
     - It forwards the request to the backend, passing through all standard parameters (temperature, top_p, etc.).
+    - **Tool Execution**: If the model response contains `tool_calls`, the router executes the specified tools (e.g., web search) and sends the results back to the model, looping up to 5 times.
 5. **Egress**:
     - The response is streamed back to the user (if requested).
     - An optional signature is appended (e.g., "Model: deepseek-r1:7b").

@@ -1,3 +1,21 @@
+## [1.6.0] - 2026-02-16
+
+### Tool Execution & Feature Enhancements
+
+#### Added
+- **Tool Execution Engine**:
+  - Implemented tool execution loop in `main.py`
+  - `web_search` skill now uses DuckDuckGo API
+  - `calculator` skill safely evaluates expressions
+- **Model Override**: `?model=xxx` query parameter to force a specific model
+- **Health Stats**: New `/admin/stats` endpoint with detailed metrics
+  - Total requests, errors, uptime
+  - Requests by model
+  - Cache stats (size, hits)
+- **Smart Caching**: Cache now stores full `RoutingResult` objects
+
+---
+
 ## [1.5.3] - 2026-02-16
 
 ### Category-Aware Minimum Size Requirements
