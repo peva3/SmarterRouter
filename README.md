@@ -6,6 +6,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 
 - **Multi-Backend Support**: Works with Ollama, llama.cpp servers, and any OpenAI-compatible API.
 - **Smart Routing**: Category-first routing (coding, reasoning, creativity) and complexity-aware model selection.
+- **Category-Minimum Size**: Prevents small models from being selected for complex tasks (e.g., 0.5B for hard coding).
 - **Vector Embeddings**: Full `/v1/embeddings` endpoint for RAG and semantic search applications.
 - **Multimodal Support**: Automatically routes vision tasks to vision-capable models.
 - **Tool Use Detection**: Routes function-calling requests to optimized models.

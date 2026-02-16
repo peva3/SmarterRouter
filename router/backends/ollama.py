@@ -89,9 +89,13 @@ class OllamaBackend:
         keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/api/chat"
-        start_time = time.perf_counter()
+        
+        # Use a mutable container to track timing inside the generator
+        timing = {"start": time.perf_counter(), "first_token": None}
+        latency_ms = 0.0
 
         async def stream_generator() -> AsyncIterator[dict[str, Any]]:
+            nonlocal latency_ms
             async with httpx.AsyncClient(timeout=self.generation_timeout) as client:
                 async with client.stream(
                     "POST",
@@ -106,10 +110,13 @@ class OllamaBackend:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if line.strip():
+                            # Measure time to first token
+                            if timing["first_token"] is None:
+                                timing["first_token"] = time.perf_counter()
+                                latency_ms = (timing["first_token"] - timing["start"]) * 1000
                             yield json.loads(line)
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
-        return stream_generator(), elapsed_ms
+        return stream_generator(), latency_ms
 
     async def unload_model(self, model_name: str) -> bool:
         """Unload model from VRAM by setting keep_alive to 0."""

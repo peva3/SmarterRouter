@@ -86,9 +86,12 @@ class LlamaCppBackend:
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/v1/chat/completions"
         full_model = self._full_model_name(model)
-        start_time = time.perf_counter()
+        
+        timing = {"start": time.perf_counter(), "first_token": None}
+        latency_ms = 0.0
 
         async def stream_generator() -> AsyncIterator[dict[str, Any]]:
+            nonlocal latency_ms
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream(
                     "POST",
@@ -101,11 +104,34 @@ class LlamaCppBackend:
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        if line.strip() and line.startswith("data: "):
-                            yield json.loads(line[6:])
+                        if not line.strip():
+                            continue
+                        # Handle [DONE] sentinel
+                        if line.startswith("data: [DONE]"):
+                            yield {"done": True}
+                            continue
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])
+                                # Measure time to first token
+                                if timing["first_token"] is None:
+                                    timing["first_token"] = time.perf_counter()
+                                    latency_ms = (timing["first_token"] - timing["start"]) * 1000
+                                # Normalize to Ollama format
+                                content = ""
+                                finish_reason = None
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    choice = data["choices"][0]
+                                    content = choice.get("delta", {}).get("content", "")
+                                    finish_reason = choice.get("finish_reason")
+                                yield {
+                                    "message": {"content": content},
+                                    "done": finish_reason == "stop"
+                                }
+                            except json.JSONDecodeError:
+                                continue
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
-        return stream_generator(), elapsed_ms
+        return stream_generator(), latency_ms
 
     async def generate(
         self,

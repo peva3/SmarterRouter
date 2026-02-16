@@ -39,15 +39,27 @@ def get_all_benchmarks() -> list[dict]:
         ]
 
 
-def get_benchmarks_for_models(model_names: list[str]) -> list[ModelBenchmark]:
+def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
+    if not model_names:
+        return []
     with get_session() as session:
-        return list(
-            session.execute(
-                select(ModelBenchmark).where(
-                    ModelBenchmark.ollama_name.in_(model_names)
-                )
-            ).scalars().all()
-        )
+        benchmarks = session.execute(
+            select(ModelBenchmark).where(
+                ModelBenchmark.ollama_name.in_(model_names)
+            )
+        ).scalars().all()
+        # Convert to dicts to avoid detached instance issues
+        return [
+            {
+                "ollama_name": b.ollama_name,
+                "reasoning_score": b.reasoning_score,
+                "coding_score": b.coding_score,
+                "general_score": b.general_score,
+                "elo_rating": b.elo_rating,
+                "benchmark_source": b.benchmark_source,
+            }
+            for b in benchmarks
+        ]
 
 
 def upsert_benchmark(data: dict[str, Any]) -> None:

@@ -34,6 +34,11 @@ The "Brain" of the system. It handles the scoring and selection process using a 
     2. **Runtime Profiles**: Local data from our profiler (how the model performs on *your* hardware).
     3. **Name Affinity**: Heuristic matching for specific tasks (e.g., routing `.py` requests to `*coder` models).
 - **Quality vs. Speed Tuner**: The `ROUTER_QUALITY_PREFERENCE` setting acts as a global bias. A low value prioritizes throughput; a high value prioritizes benchmark scores and model size.
+- **Category-Minimum Size**: Prevents small models from being selected for complex tasks. Each category (coding, reasoning, creativity) has minimum size requirements based on prompt complexity:
+    - **Coding**: simple=0B, medium=4B+, hard=8B+
+    - **Reasoning**: simple=0B, medium=4B+, hard=8B+
+    - **Creativity**: simple=0B, medium=1B+, hard=4B+
+    - Models below minimum get a severe penalty (-10 * size deficit).
 
 ### 2.3 The Profiling Pipeline (`router/profiler.py` & `router/judge.py`)
 Model evaluation is often subjective. We moved from a basic "did it respond?" check to a sophisticated evaluation pipeline.

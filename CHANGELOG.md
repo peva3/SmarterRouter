@@ -1,3 +1,66 @@
+## [1.5.3] - 2026-02-16
+
+### Category-Aware Minimum Size Requirements
+
+Added intelligence to routing to prevent small models from being selected for complex tasks.
+
+#### Added
+- **Category-Minimum Size Mapping**:
+  - `coding`: simple=0B, medium=4B+, hard=8B+
+  - `reasoning`: simple=0B, medium=4B+, hard=8B+
+  - `creativity`: simple=0B, medium=1B+, hard=4B+
+  - `general`: simple=0B, medium=1B+, hard=4B+
+- **Minimum Size Penalty**: Models below minimum size for their category get a severe penalty (-10 * size deficit)
+- **Complexity Bucket Detection**: Helper function to categorize prompts as simple/medium/hard
+- **Size-Aware Category Boost**: Category-first boost now considers adequate model size, not just benchmark data
+
+#### Impact
+- Complex coding tasks will no longer route to 0.5B models
+- Simple prompts can still use small fast models
+- Large models (14B+) will be preferred for hard tasks
+
+---
+
+## [1.5.2] - 2026-02-16
+
+### Critical Bug Fixes
+
+#### Fixed
+- **Benchmark Sync**: Fixed incorrect argument passing - now passes actual model names instead of source names
+- **LLM Dispatch**: Added missing `_parse_llm_response` and `_build_dispatch_context` methods
+- **Streaming Latency**: Fixed latency measurement to track time-to-first-token correctly
+- **Streaming Format**: Normalized OpenAI/LlamaCpp streaming output to match Ollama format
+- **[DONE] Handling**: Fixed crash when streaming receives `[DONE]` sentinel
+- **Detached ORM Objects**: Fixed `get_benchmarks_for_models` returning detached SQLAlchemy objects
+- **Bare Except**: Changed to `except Exception:` to avoid swallowing system signals
+- **OpenAI Model List**: Fixed double `/v1/` in URL path
+
+#### Removed
+- **Dead Code**: Removed unused `router/client.py` file
+
+---
+
+## [1.5.1] - 2026-02-16
+
+### Routing Optimizations & Bug Fixes
+
+#### Fixed
+- **Critical Bug**: Removed references to deprecated `factual` field in profiler
+- **Duplicate Signatures**: Fixed issue where models outputting their own "Model:" signatures caused duplicates
+
+#### Added
+- **Semantic Caching**: New `SemanticCache` class stores routing decisions based on prompt hash
+  - Reduces latency for repeated queries
+  - 1-hour TTL, 100-entry LRU cache
+- **Diversity Enforcement**: Added penalty for models selected too frequently
+  - Prevents single-model monopolization
+  - Tracks recent selections and applies up to 50% penalty
+
+#### Changed
+- **Scoring Update**: Uses `creativity` instead of deprecated `factual` in profile matching
+
+---
+
 ## [1.5.0] - 2026-02-16
 
 ### OpenAI-Compatible Embeddings & Enhanced API

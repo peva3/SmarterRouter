@@ -1,7 +1,10 @@
+import asyncio
 import hashlib
 import json
 import logging
 import re
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -24,12 +27,76 @@ class RoutingResult:
     reasoning: str
 
 
+# Minimum model sizes (in billions) required for task complexity
+# If a model is below the minimum for its category/complexity, it gets a severe penalty
+CATEGORY_MIN_SIZES = {
+    "coding":     {"simple": 0, "medium": 4, "hard": 8},
+    "reasoning": {"simple": 0, "medium": 4, "hard": 8},
+    "creativity": {"simple": 0, "medium": 1, "hard": 4},
+    "general":    {"simple": 0, "medium": 1, "hard": 4},
+}
+
+
+class SemanticCache:
+    """Simple LRU cache for routing decisions based on prompt hash."""
+    
+    def __init__(self, max_size: int = 100, ttl_seconds: int = 3600):
+        self.cache: OrderedDict[str, tuple[RoutingResult, float]] = OrderedDict()
+        self.max_size = max_size
+        self.ttl = ttl_seconds
+        self.recent_selections: list[tuple[str, float]] = []
+        self.max_recent = 20
+        self._lock = asyncio.Lock()
+    
+    def _hash_prompt(self, prompt: str) -> str:
+        return hashlib.sha256(prompt.encode()).hexdigest()[:32]
+    
+    def get(self, prompt: str) -> RoutingResult | None:
+        key = self._hash_prompt(prompt)
+        if key in self.cache:
+            result, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                self.cache.move_to_end(key)
+                logger.debug(f"Cache hit for prompt hash: {key[:8]}...")
+                return result
+            else:
+                del self.cache[key]
+        return None
+    
+    def set(self, prompt: str, result: RoutingResult) -> None:
+        key = self._hash_prompt(prompt)
+        self.cache[key] = (result, time.time())
+        self.cache.move_to_end(key)
+        if len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
+        
+        # Track recent selections for diversity
+        self.recent_selections.append((result.selected_model, time.time()))
+        if len(self.recent_selections) > self.max_recent:
+            self.recent_selections.pop(0)
+        logger.debug(f"Cached routing decision for: {key[:8]}...")
+    
+    def get_model_frequency(self, model_name: str) -> float:
+        """Get frequency of a model in recent selections (0.0 to 1.0)."""
+        if not self.recent_selections:
+            return 0.0
+        recent_count = sum(1 for m, _ in self.recent_selections if m == model_name)
+        return recent_count / len(self.recent_selections)
+
+
 class RouterEngine:
     def __init__(self, client: LLMBackend, dispatcher_model: str | None = None):
         self.client = client
         self.dispatcher_model = dispatcher_model or settings.router_model
+        self.semantic_cache = SemanticCache(max_size=100, ttl_seconds=3600)
 
     async def select_model(self, prompt: str | list[dict], request_obj: Any = None) -> RoutingResult:
+        # Check semantic cache first
+        prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt, sort_keys=True)
+        cached = self.semantic_cache.get(prompt_str)
+        if cached:
+            return cached
+        
         available_models = await self.client.list_models()
         if not available_models:
             raise ValueError("No models available")
@@ -107,6 +174,44 @@ Select the model that best matches the user's prompt needs."""
 
         return await self._keyword_dispatch(prompt, model_names)
 
+    def _build_dispatch_context(self, benchmarks: list[dict]) -> str:
+        """Build context string for LLM dispatcher with benchmark data."""
+        context_lines = []
+        for bm in benchmarks:
+            name = bm.get("ollama_name", "unknown")
+            elo = bm.get("elo_rating", "N/A")
+            reasoning = bm.get("reasoning_score", "N/A")
+            coding = bm.get("coding_score", "N/A")
+            context_lines.append(f"- {name}: ELO={elo}, Reasoning={reasoning}, Coding={coding}")
+        return "\n".join(context_lines) if context_lines else "No benchmark data available"
+
+    def _parse_llm_response(self, content: str, model_names: list[str]) -> dict | None:
+        """Parse LLM response to extract model selection."""
+        import json
+        try:
+            data = json.loads(content)
+            model = data.get("model", "")
+            reasoning = data.get("reasoning", "")
+            
+            # Validate model exists
+            if model in model_names:
+                return {"model": model, "reasoning": reasoning}
+            
+            # Try fuzzy match
+            for name in model_names:
+                if model.lower() in name.lower() or name.lower() in model.lower():
+                    return {"model": name, "reasoning": reasoning}
+                    
+        except json.JSONDecodeError:
+            pass
+        
+        # Try extracting from text
+        for name in model_names:
+            if name in content:
+                return {"model": name, "reasoning": "Extracted from response"}
+        
+        return None
+
     # ... existing methods ...
 
     def _get_model_feedback_scores(self) -> dict[str, float]:
@@ -159,9 +264,9 @@ Select the model that best matches the user's prompt needs."""
         
         # Log all scores for debugging
         sorted_scores = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
-        top5 = [(m, round(s["score"], 2), round(s.get("base_score", 0), 2), s.get("coding", 0), s.get("factual", 0)) for m, s in sorted_scores[:8]]
+        top5 = [(m, round(s["score"], 2), round(s.get("base_score", 0), 2), s.get("coding", 0), s.get("creativity", 0)) for m, s in sorted_scores[:8]]
         logger.info(f"Model scores (top 8): {top5}")
-        logger.info(f"  (format: model, total_score, base_score, coding, factual)")
+        logger.info(f"  (format: model, total_score, base_score, coding, creativity)")
         
         # Determine dominant category (threshold > 0.5) - but exclude complexity!
         task_categories = {k: v for k, v in analysis.items() if k != "complexity"}
@@ -242,7 +347,6 @@ Select the model that best matches the user's prompt needs."""
                     "reasoning": p.reasoning,
                     "coding": p.coding,
                     "creativity": p.creativity,
-                    "factual": p.factual,
                     "speed": p.speed,
                     "avg_response_time_ms": p.avg_response_time_ms,
                     "first_seen": p.first_seen,
@@ -336,7 +440,7 @@ Select the model that best matches the user's prompt needs."""
                 "reasoning": ("reasoning_score", "reasoning"),
                 "coding": ("coding_score", "coding"),
                 "creativity": ("creativity", None),  # No benchmark creativity, use profile
-                "factual": ("general_score", "factual"),
+                "creativity": ("creativity_score", "creativity"),
             }
 
             for category, weight in analysis.items():
@@ -371,13 +475,22 @@ Select the model that best matches the user's prompt needs."""
                                      (inference_score * 0.4 * quality_weight)
                 
                 # If this is the dominant category, apply the 20x Category-First boost
-                # BUT only if we have actual benchmark data (not just name inference)
+                # BUT only if we have actual benchmark data OR model is appropriately sized
                 has_actual_data = benchmark_score > 0 or elo_signal > 0
+                
+                # Check if model meets minimum size for this category + complexity
+                complexity_bucket = self._get_complexity_bucket(analysis.get("complexity", 0.0))
+                min_size = CATEGORY_MIN_SIZES.get(category, {}).get(complexity_bucket, 0)
+                params = self._extract_parameter_count(model_name)
+                has_adequate_size = params is not None and params >= min_size
+                
                 if category == dominant_category and combined_cat_score > 0.05:
                     if has_actual_data:
                         combined_cat_score *= 20.0  # Strong boost with data
+                    elif has_adequate_size:
+                        combined_cat_score *= 10.0  # Moderate boost with adequate size but no benchmark
                     else:
-                        combined_cat_score *= 3.0   # Weak boost without data (name-based only)
+                        combined_cat_score *= 1.5   # Weak boost without data or size
                 
                 if weight > 0:
                     base_score += combined_cat_score * weight
@@ -449,6 +562,19 @@ Select the model that best matches the user's prompt needs."""
                 elif params and params >= 30:
                     bonus_score -= 0.3 * speed_weight
             
+            # === CATEGORY-AWARE MINIMUM SIZE REQUIREMENTS ===
+            # Apply severe penalty if model is below minimum size for category + complexity
+            if dominant_category and params is not None:
+                complexity_bucket = self._get_complexity_bucket(complexity)
+                min_size = CATEGORY_MIN_SIZES.get(dominant_category, {}).get(complexity_bucket, 0)
+                
+                if params < min_size:
+                    # Calculate deficit - scales with how far below minimum
+                    size_deficit = min_size - params
+                    min_size_penalty = -10.0 * size_deficit
+                    bonus_score += min_size_penalty
+                    logger.debug(f"Min size penalty for {model_name}: {min_size_penalty} (params={params}, min={min_size} for {dominant_category}/{complexity_bucket})")
+            
             if profile:
                 # Speed bonus (only for simple tasks OR if speed is preferred)
                 # Boost speed importance if quality_pref is low
@@ -464,13 +590,19 @@ Select the model that best matches the user's prompt needs."""
                     newness = self._calculate_newness_score(profile["first_seen"])
                     bonus_score += newness * 0.05
             
-            total_score = base_score + bonus_score
+            # Diversity Penalty: Reduce score if model has been selected too frequently recently
+            # This prevents one model from dominating and encourages exploration
+            model_frequency = self.semantic_cache.get_model_frequency(model_name)
+            diversity_penalty = -model_frequency * 0.5  # Max 50% penalty for monopolization
+            
+            total_score = base_score + bonus_score + diversity_penalty
 
             # Use the actual scores used for routing in the debug log
             scores[model_name] = {
                 "score": total_score,
                 "base_score": base_score,
                 "bonus": bonus_score,
+                "diversity": diversity_penalty,
                 "reasoning": affinity.get("reasoning", 0),
                 "coding": affinity.get("coding", 0),
                 "creativity": affinity.get("creativity", 0),
@@ -526,6 +658,15 @@ Select the model that best matches the user's prompt needs."""
             if ":72b" in name_lower or "72b" in model_tag: return 72.0
             
         return None
+
+    def _get_complexity_bucket(self, complexity: float) -> str:
+        """Determine complexity bucket based on complexity score."""
+        if complexity < 0.2:
+            return "simple"
+        elif complexity < 0.5:
+            return "medium"
+        else:
+            return "hard"
 
     def _calculate_size_score(self, params: float | None) -> float:
         """Calculate score based on model size (smaller is better)."""
@@ -768,5 +909,14 @@ Select the model that best matches the user's prompt needs."""
                 )
                 session.add(decision)
                 session.commit()
+            
+            # Also cache the routing decision for future similar prompts
+            result = RoutingResult(
+                selected_model=selected,
+                confidence=confidence,
+                reasoning=reasoning,
+            )
+            self.semantic_cache.set(prompt, result)
+            
         except Exception as e:
             logger.debug(f"Failed to log routing decision: {e}")

@@ -169,7 +169,10 @@ async def background_sync_task():
                 
                 if should_sync:
                     logger.info("Starting benchmark sync...")
-                    await sync_benchmarks(settings.benchmark_sources.split(","))
+                    # Get available model names to match against benchmarks
+                    models = await app_state.backend.list_models()
+                    model_names = [m.name for m in models]
+                    await sync_benchmarks(model_names)
                 
                 # 2. Profile New Models
                 # This will only profile models that haven't been profiled yet
@@ -297,7 +300,19 @@ async def chat_completions(
             )
 
     # Convert Pydantic models back to dicts for backend compatibility
-    messages_dict = [{"role": msg.role, "content": msg.content} for msg in messages]
+    # and strip signatures from previous assistant messages to prevent stacking
+    def clean_message_content(msg):
+        content = msg.content
+        if isinstance(content, str) and msg.role == "assistant":
+            # Remove any previous signatures from assistant messages
+            import re
+            content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
+        return content
+    
+    messages_dict = [
+        {"role": msg.role, "content": clean_message_content(msg)} 
+        for msg in messages
+    ]
 
     # Collect additional parameters for backend
     backend_kwargs = {
@@ -346,7 +361,7 @@ async def chat_completions(
         fallback_list = [m.name for m in available_models if m.name != selected_model]
         # Put selected_model first in retry list
         fallback_list = [selected_model] + fallback_list
-    except:
+    except Exception:
         fallback_list = [selected_model]
     
     # If cascading is enabled, we might want to ensure we don't just randomly fallback, 
