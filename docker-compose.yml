@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  llm-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-router
+    ports:
+      - "11434:11434"
+    environment:
+      - ROUTER_OLLAMA_URL=http://host.docker.internal:11434
+      - ROUTER_SIGNATURE_ENABLED=true
+      - ROUTER_LOG_LEVEL=INFO
+      - ROUTER_POLLING_INTERVAL=60
+    volumes:
+      - ./router.db:/app/router.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - ollama-network
+
+  # This assumes you have an existing Ollama container
+  # Remove or modify if Ollama runs differently in your setup
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - ollama-network
+    # Uncomment if Ollama should be managed by this compose
+    # profiles:
+    #   - ollama
+
+volumes:
+  ollama-data:
+
+networks:
+  ollama-network:
+    driver: bridge
