@@ -21,6 +21,11 @@ from router.config import Settings, init_logging, settings
 from router.database import get_session, init_db
 from router.models import BenchmarkSync, ModelBenchmark, ModelProfile
 from router.profiler import ModelProfiler, profile_all_models
+from router.schemas import (
+    ChatCompletionRequest,
+    sanitize_for_logging,
+    sanitize_prompt,
+)
 from sqlalchemy import select
 from router.router import RouterEngine
 
@@ -287,24 +292,44 @@ async def chat_completions(
             status_code=503,
         )
 
-    body = await request.json()
-    messages = body.get("messages", [])
-    stream = body.get("stream", False)
-
-    if not messages:
+    # Validate Content-Type header
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("application/json"):
         return JSONResponse(
-            {"error": {"message": "No messages provided", "type": "invalid_request_error"}},
+            {"error": {"message": "Content-Type must be application/json", "type": "invalid_request_error"}},
+            status_code=415,
+        )
+
+    # Parse and validate request body using Pydantic
+    try:
+        body = await request.json()
+        validated_request = ChatCompletionRequest(**body)
+    except Exception as e:
+        logger.warning(f"Request validation failed: {e}")
+        return JSONResponse(
+            {"error": {"message": f"Invalid request: {str(e)}", "type": "invalid_request_error"}},
             status_code=400,
         )
 
+    # Extract and sanitize prompt from last message
+    messages = validated_request.messages
+    stream = validated_request.stream
+
     last_message = messages[-1]
-    prompt = last_message.get("content", "")
+    prompt = sanitize_prompt(last_message.content)
+
+    if not prompt:
+        return JSONResponse(
+            {"error": {"message": "Prompt cannot be empty", "type": "invalid_request_error"}},
+            status_code=400,
+        )
 
     try:
         routing_result = await app_state.router_engine.select_model(prompt)
         selected_model = routing_result.selected_model
         reasoning = routing_result.reasoning
-        logger.info(f"Routed to: {selected_model}")
+        # Use sanitized logging
+        logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
         logger.error(f"Routing failed: {e}")
         models = await app_state.backend.list_models()
@@ -317,9 +342,12 @@ async def chat_completions(
                 status_code=500,
             )
 
+    # Convert Pydantic models back to dicts for backend compatibility
+    messages_dict = [{"role": msg.role, "content": msg.content} for msg in messages]
+
     if stream:
         return StreamingResponse(
-            stream_chat(app_state.backend, selected_model, messages, reasoning, config),
+            stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config),
             media_type="text/event-stream",
         )
 
@@ -349,7 +377,7 @@ async def chat_completions(
         try:
             response = await app_state.backend.chat(
                 model=try_model,
-                messages=messages,
+                messages=messages_dict,
                 stream=False,
             )
             selected_model = try_model

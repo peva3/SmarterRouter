@@ -57,6 +57,24 @@ Added support for multiple LLM backends and proactive VRAM management for system
   - Configurable limits for general and admin endpoints
   - Returns 429 Too Many Requests when limit exceeded
   - In-memory rate limiter with per-endpoint tracking
+- **SQL Injection Prevention**: Replaced raw SQL delete with ORM-based delete
+  - All database queries use SQLAlchemy ORM with parameterized queries
+  - Input validation on model names before database operations
+- **Input Validation**: Pydantic models validate all API requests
+  - Content-Type header validation (must be `application/json`)
+  - Request body schema validation with detailed error messages
+  - Length limits: prompts max 10,000 chars, max 100 messages per request
+  - Role validation: only `user`, `assistant`, `system` allowed
+  - Model name validation (alphanumeric, hyphens, underscores, colons, dots, slashes)
+- **Prompt Sanitization**: Automatic sanitization of user input
+  - Removal of null bytes (`\x00`)
+  - Removal of control characters (except newlines, tabs, carriage returns)
+  - Whitespace trimming
+- **Log Sanitization**: Protection of sensitive data in logs
+  - API key redaction (OpenAI format: `sk-...`)
+  - Potential secret pattern detection and masking
+  - Prompt truncation for logging (max 200 characters)
+  - Newline removal for single-line logging
 
 #### Improved Routing
 - Better benchmark matching with fuzzy logic

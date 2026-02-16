@@ -352,4 +352,27 @@ No existing Cursor or Copilot rules found in this repository.
 - Backend abstraction via LLMBackend Protocol in `router/backends/`
 - VRAM management: Set `pinned_model` to keep a small model in VRAM
 - Generation timeout: Set `generation_timeout` for large models (default 120s)
+
+### Security Best Practices
+
+#### Database Security
+- **Always use ORM methods** - Never use `__table__.delete()` or raw SQL
+- **Validate inputs before DB operations** - Check type and length before queries
+- **Use parameterized queries** - SQLAlchemy ORM provides this automatically
+
+#### Input Validation
+- **Use Pydantic models** in `router/schemas.py` for all API requests
+- **Validate Content-Type** - Must be `application/json` for POST endpoints
+- **Sanitize prompts** - Use `sanitize_prompt()` before processing
+- **Length limits** - Enforce max lengths (prompts: 10k chars, messages: 100)
+
+#### Logging Security
+- **Use `sanitize_for_logging()`** before logging any user input
+- **Redact API keys** - Automatically masks `sk-...` patterns
+- **Truncate long content** - Max 200 chars for log entries
+
+#### API Security
+- **Enable admin API key** in production: `ROUTER_ADMIN_API_KEY`
+- **Enable rate limiting** in production: `ROUTER_RATE_LIMIT_ENABLED=true`
+- **Validate Bearer tokens** - Use `verify_admin_token` dependency for admin endpoints
 - Backward compatible: Default `provider=ollama` preserves existing behavior

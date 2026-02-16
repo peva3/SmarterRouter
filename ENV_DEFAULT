@@ -1,0 +1,186 @@
+# LLM Router Proxy - Environment Configuration Reference
+# Copy this file to .env and customize values for your deployment
+# All variables are optional - sensible defaults are provided
+
+# =============================================================================
+# BACKEND PROVIDER CONFIGURATION
+# =============================================================================
+
+# Provider selection: ollama, llama.cpp, or openai (default: ollama)
+ROUTER_PROVIDER=ollama
+
+# === Ollama Backend Settings ===
+# URL of your Ollama instance
+ROUTER_OLLAMA_URL=http://localhost:11434
+
+# Model to keep permanently loaded in VRAM (optional)
+# Useful for keeping a small/fast model ready for simple queries
+# Example: ROUTER_PINNED_MODEL=phi3:mini
+ROUTER_PINNED_MODEL=
+
+# === llama.cpp Server Settings ===
+# Uncomment to use llama.cpp server instead of Ollama
+# ROUTER_PROVIDER=llama.cpp
+# ROUTER_LLAMA_CPP_URL=http://localhost:8080
+
+# === OpenAI-Compatible API Settings ===
+# Uncomment to use external OpenAI-compatible API
+# ROUTER_PROVIDER=openai
+# ROUTER_OPENAI_BASE_URL=https://api.openai.com/v1
+# ROUTER_OPENAI_API_KEY=your-api-key-here
+# ROUTER_MODEL_PREFIX=
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+
+# Server bind address (default: 0.0.0.0 binds to all interfaces)
+# Change to 127.0.0.1 to accept only local connections
+ROUTER_HOST=0.0.0.0
+
+# Server port (default: 11434 - matches Ollama default for drop-in replacement)
+ROUTER_PORT=11434
+
+# =============================================================================
+# SECURITY CONFIGURATION
+# =============================================================================
+
+# Admin API key for protecting admin endpoints (optional but recommended)
+# When set, admin endpoints (/admin/*) require Bearer token authentication
+# Example: ROUTER_ADMIN_API_KEY=your-secret-key-change-this-in-production
+ROUTER_ADMIN_API_KEY=
+
+# Enable rate limiting (default: false)
+# Set to true to prevent abuse and DoS attacks
+ROUTER_RATE_LIMIT_ENABLED=false
+
+# Rate limit for general endpoints (requests per minute per client IP)
+ROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE=60
+
+# Rate limit for admin endpoints (requests per minute per client IP)
+ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE=10
+
+# =============================================================================
+# MODEL ROUTING CONFIGURATION
+# =============================================================================
+
+# Router model for LLM-based dispatch (optional)
+# Leave empty to use keyword-based routing (fast, no extra LLM calls)
+# Set to a small model like "llama3.2:1b" for smarter LLM-based routing
+ROUTER_MODEL=llama3.2:1b
+
+# Dispatcher temperature (default: 0.0 for deterministic routing)
+ROUTER_TEMPERATURE=0.0
+
+# Dispatcher max tokens (default: 50)
+ROUTER_MAX_TOKENS=50
+
+# Scoring preferences
+# Prefer smaller models for simple tasks (default: true)
+ROUTER_PREFER_SMALLER_MODELS=true
+
+# Prefer newer models (default: true)
+ROUTER_PREFER_NEWER_MODELS=true
+
+# =============================================================================
+# TIMEOUT CONFIGURATION
+# =============================================================================
+
+# Timeout for profiling operations in seconds (default: 30)
+# Lower values speed up profiling but may miss slow models
+ROUTER_PROFILE_TIMEOUT=30
+
+# Timeout for model generation in seconds (default: 120)
+# Larger models need more time - increase if large models timeout
+ROUTER_GENERATION_TIMEOUT=120
+
+# Number of prompts per category during profiling (default: 3)
+# Higher values give more accurate profiles but take longer
+ROUTER_PROFILE_PROMPTS_PER_CATEGORY=3
+
+# =============================================================================
+# BENCHMARK CONFIGURATION
+# =============================================================================
+
+# Benchmark data sources (comma-separated)
+# Available: huggingface, lmsys, artificial_analysis
+ROUTER_BENCHMARK_SOURCES=huggingface,lmsys
+
+# =============================================================================
+# RESPONSE CONFIGURATION
+# =============================================================================
+
+# Enable model signature in responses (default: true)
+# Adds "\nModel: {model_name}" to identify which model was used
+ROUTER_SIGNATURE_ENABLED=true
+
+# Signature format string
+# Use {model} placeholder for model name
+ROUTER_SIGNATURE_FORMAT=\nModel: {model}
+
+# =============================================================================
+# MONITORING & MAINTENANCE
+# =============================================================================
+
+# Polling interval in seconds for checking new models (default: 60)
+ROUTER_POLLING_INTERVAL=60
+
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+ROUTER_LOG_LEVEL=INFO
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+
+# Database URL for storing profiles and benchmarks (default: SQLite)
+# For production, consider PostgreSQL: postgresql://user:pass@localhost/router
+ROUTER_DATABASE_URL=sqlite:///router.db
+
+# =============================================================================
+# EXAMPLES
+# =============================================================================
+
+# Example 1: Secure production setup with Ollama
+# ROUTER_ADMIN_API_KEY=change-this-to-a-random-string
+# ROUTER_RATE_LIMIT_ENABLED=true
+# ROUTER_HOST=127.0.0.1
+# ROUTER_PINNED_MODEL=phi3:mini
+
+# Example 2: Using OpenAI API
+# ROUTER_PROVIDER=openai
+# ROUTER_OPENAI_BASE_URL=https://api.openai.com/v1
+# ROUTER_OPENAI_API_KEY=sk-...
+
+# Example 3: Using llama.cpp server
+# ROUTER_PROVIDER=llama.cpp
+# ROUTER_LLAMA_CPP_URL=http://localhost:8080
+
+# =============================================================================
+# INPUT VALIDATION & SECURITY
+# =============================================================================
+
+# The router includes several security features (enabled by default):
+#
+# 1. Content-Type Validation: POST requests must use application/json
+# 2. Request Body Validation: Pydantic models validate all requests
+#    - Prompts: max 10,000 characters
+#    - Messages: max 100 per request
+#    - Roles: only user, assistant, system allowed
+# 3. Prompt Sanitization: Automatic removal of null bytes and control characters
+# 4. SQL Injection Prevention: All DB queries use ORM with parameterized queries
+# 5. Log Sanitization: API keys are redacted from logs
+#
+# These features require no configuration and are always active.
+
+# =============================================================================
+# NOTES
+# =============================================================================
+
+# - All variables are prefixed with ROUTER_ to avoid collisions
+# - Boolean values: use "true" or "false" (case-insensitive)
+# - Timeouts are in seconds
+# - Model names should match your backend exactly
+# - Restart the server after changing configuration
+# - Admin endpoints: /admin/profiles, /admin/benchmarks, /admin/reprofile
+
+# For more information, see README.md and AGENTS.md

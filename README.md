@@ -122,6 +122,14 @@ curl -X POST http://localhost:11434/admin/reprofile \
 - **Rate Limiting**: Optional request throttling per client IP
   - Enable with `ROUTER_RATE_LIMIT_ENABLED=true`
   - Configure limits with `ROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE` and `ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE`
+- **Input Validation**: Pydantic models validate all incoming requests
+  - Content-Type validation (must be `application/json`)
+  - Request body schema validation
+  - Length limits (prompts max 10,000 characters, max 100 messages)
+  - Role validation (only `user`, `assistant`, `system` allowed)
+- **SQL Injection Prevention**: All database queries use ORM with parameterized queries
+- **Prompt Sanitization**: Automatic removal of null bytes and control characters
+- **Log Sanitization**: API keys and sensitive data are redacted from logs
 - **Backward Compatible**: If no API key is set, admin endpoints remain open (existing behavior)
 
 ## Testing

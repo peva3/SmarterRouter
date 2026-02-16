@@ -115,13 +115,20 @@ def update_sync_status(status: str, models_count: int = 0) -> None:
 
 
 def remove_benchmarks_not_in(model_names: list[str]) -> int:
+    """Remove benchmarks not in the provided list using ORM delete (SQL injection safe)."""
     with get_session() as session:
         if not model_names:
             return 0
-        deleted = session.execute(
-            ModelBenchmark.__table__.delete().where(
-                ~ModelBenchmark.ollama_name.in_(model_names)
-            )
-        )
+        
+        # Validate all model names are strings and reasonable length
+        if not all(isinstance(name, str) and len(name) < 200 for name in model_names):
+            logger.warning("Invalid model names provided to remove_benchmarks_not_in")
+            return 0
+        
+        # Use ORM delete instead of raw SQL for safety
+        deleted = session.query(ModelBenchmark).filter(
+            ~ModelBenchmark.ollama_name.in_(model_names)
+        ).delete(synchronize_session=False)
+        
         session.commit()
-        return deleted.rowcount
+        return deleted
