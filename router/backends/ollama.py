@@ -184,3 +184,16 @@ class OllamaBackend:
         
         self._current_model = model_name
         return True
+
+    async def embed(
+        self,
+        model: str,
+        input_text: str | list[str],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": input_text,
+        }
+        payload.update(kwargs)
+        return await self._request("POST", "/api/embed", json=payload, timeout=self.generation_timeout)

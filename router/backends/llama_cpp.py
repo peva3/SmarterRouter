@@ -127,3 +127,17 @@ class LlamaCppBackend:
         """Llama.cpp doesn't support explicit unloading via API."""
         logger.debug(f"unload_model not supported for llama.cpp backend")
         return False
+
+    async def embed(
+        self,
+        model: str,
+        input_text: str | list[str],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        full_model = self._full_model_name(model)
+        payload: dict[str, Any] = {
+            "model": full_model,
+            "input": input_text,
+        }
+        payload.update(kwargs)
+        return await self._request("POST", "/v1/embeddings", json=payload)

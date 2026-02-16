@@ -6,6 +6,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 
 - **Multi-Backend Support**: Works with Ollama, llama.cpp servers, and any OpenAI-compatible API.
 - **Smart Routing**: Category-first routing (coding, reasoning, creativity) and complexity-aware model selection.
+- **Vector Embeddings**: Full `/v1/embeddings` endpoint for RAG and semantic search applications.
 - **Multimodal Support**: Automatically routes vision tasks to vision-capable models.
 - **Tool Use Detection**: Routes function-calling requests to optimized models.
 - **LLM-as-Judge Scoring**: Qualitative model evaluation using high-end models as judges (e.g., GPT-4o).
@@ -122,6 +123,17 @@ curl -X POST http://localhost:11436/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [{"role": "user", "content": "Write a Python function for a binary search tree."}]
+  }'
+```
+
+### `/v1/embeddings` (New)
+Generate vector embeddings for RAG and semantic search.
+```bash
+curl -X POST http://localhost:11436/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nomic-embed-text",
+    "input": "The quick brown fox jumps over the lazy dog"
   }'
 ```
 

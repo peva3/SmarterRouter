@@ -1,3 +1,28 @@
+## [1.5.0] - 2026-02-16
+
+### OpenAI-Compatible Embeddings & Enhanced API
+
+Major update to bring the router closer to full OpenAI API compatibility, adding support for vector embeddings and standard generation parameters.
+
+#### Added
+- **Embeddings Endpoint (`/v1/embeddings`)**:
+  - Full support for generating vector embeddings via Ollama, llama.cpp, or OpenAI backends.
+  - OpenAI-compatible request and response formats.
+  - Support for batch processing (multiple input strings in one request).
+- **Enhanced Chat Completion Parameters**:
+  - Added support for standard OpenAI parameters: `temperature`, `top_p`, `n`, `max_tokens`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `user`, `seed`, `logprobs`, and `top_logprobs`.
+  - Parameters are now validated by Pydantic and passed through to the underlying backends.
+- **Usage Tracking**:
+  - Responses now include a standard `usage` object with `prompt_tokens`, `completion_tokens`, and `total_tokens`.
+  - Works for both regular and streaming responses (final chunk).
+
+#### Changed
+- **Backend Abstraction**: Updated `LLMBackend` protocol with an `embed` method.
+- **Request Validation**: Significant expansion of `ChatCompletionRequest` schema.
+- **Streaming Response**: Improved streaming chunks to include more metadata and reliable finish reasons.
+
+---
+
 ## [1.4.0] - 2026-02-16
 
 ### Quality-Based Profiling & Standardized Benchmarks

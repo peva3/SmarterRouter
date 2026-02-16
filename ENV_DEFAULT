@@ -48,6 +48,14 @@ ROUTER_JUDGE_BASE_URL=https://api.openai.com/v1
 ROUTER_JUDGE_API_KEY=
 
 # =============================================================================
+# EMBEDDINGS CONFIGURATION
+# =============================================================================
+
+# Default embedding model (optional)
+# Some frontends might not specify a model for /v1/embeddings
+# ROUTER_DEFAULT_EMBEDDING_MODEL=all-minilm:latest
+
+# =============================================================================
 # SERVER CONFIGURATION
 # =============================================================================
 

@@ -65,6 +65,20 @@ class ChatCompletionRequest(BaseModel):
         default=False,
         description="Whether to stream the response"
     )
+    
+    # Standard OpenAI parameters
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    n: int | None = Field(default=None, ge=1, le=128)
+    max_tokens: int | None = Field(default=None, ge=1)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    logit_bias: dict[str, int] | None = Field(default=None)
+    user: str | None = Field(default=None, max_length=100)
+    seed: int | None = Field(default=None)
+    logprobs: bool | None = Field(default=None)
+    top_logprobs: int | None = Field(default=None, ge=0, le=20)
+
     tools: list[dict[str, Any]] | None = Field(default=None, description="List of available tools")
     tool_choice: str | dict[str, Any] | None = Field(default=None, description="Tool choice strategy")
     response_format: dict[str, Any] | None = Field(default=None, description="Expected response format (e.g. JSON)")
@@ -89,6 +103,40 @@ class FeedbackRequest(BaseModel):
     score: float = Field(..., ge=-1.0, le=1.0, description="Feedback score: 1.0 (good), -1.0 (bad), or 0.0-1.0 scale")
     comment: str | None = Field(default=None, max_length=500, description="Optional comment")
     category: str | None = Field(default=None, description="Optional task category")
+
+
+class EmbeddingsRequest(BaseModel):
+    """OpenAI-compatible embeddings request."""
+    
+    model: str = Field(..., description="Model to use for embeddings")
+    input: str | list[str] = Field(..., description="Input text or list of texts to embed")
+    user: str | None = Field(default=None, max_length=100)
+    encoding_format: Literal["float", "base64"] | None = Field(default="float")
+
+
+class EmbeddingData(BaseModel):
+    """Single embedding result."""
+    
+    object: str = "embedding"
+    embedding: list[float]
+    index: int
+
+
+class UsageInfo(BaseModel):
+    """Token usage information."""
+    
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class EmbeddingsResponse(BaseModel):
+    """OpenAI-compatible embeddings response."""
+    
+    object: str = "list"
+    data: list[EmbeddingData]
+    model: str
+    usage: UsageInfo
 
 
 def sanitize_prompt(prompt: str | list[dict] | None, max_length: int = 10000) -> str:

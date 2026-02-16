@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -25,9 +25,14 @@ from router.profiler import ModelProfiler, profile_all_models
 from router.router import RouterEngine
 from router.schemas import (
     ChatCompletionRequest,
+    ChatMessage,
     FeedbackRequest,
-    sanitize_for_logging,
     sanitize_prompt,
+    sanitize_for_logging,
+    EmbeddingsRequest,
+    EmbeddingsResponse,
+    EmbeddingData,
+    UsageInfo,
 )
 from router.skills import skills_registry
 
@@ -294,6 +299,23 @@ async def chat_completions(
     # Convert Pydantic models back to dicts for backend compatibility
     messages_dict = [{"role": msg.role, "content": msg.content} for msg in messages]
 
+    # Collect additional parameters for backend
+    backend_kwargs = {
+        "temperature": validated_request.temperature,
+        "top_p": validated_request.top_p,
+        "n": validated_request.n,
+        "max_tokens": validated_request.max_tokens,
+        "presence_penalty": validated_request.presence_penalty,
+        "frequency_penalty": validated_request.frequency_penalty,
+        "logit_bias": validated_request.logit_bias,
+        "user": validated_request.user,
+        "seed": validated_request.seed,
+        "logprobs": validated_request.logprobs,
+        "top_logprobs": validated_request.top_logprobs,
+    }
+    # Remove None values
+    backend_kwargs = {k: v for k, v in backend_kwargs.items() if v is not None}
+
     if stream:
         # Proactive VRAM management for streaming - unload non-needed models before streaming
         current = app_state.current_loaded_model
@@ -310,7 +332,7 @@ async def chat_completions(
         app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
 
         return StreamingResponse(
-            stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config, response_id),
+            stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config, response_id, **backend_kwargs),
             media_type="text/event-stream",
         )
 
@@ -348,6 +370,7 @@ async def chat_completions(
                 model=try_model,
                 messages=messages_dict,
                 stream=False,
+                **backend_kwargs
             )
             final_model = try_model
             app_state.current_loaded_model = final_model
@@ -410,73 +433,71 @@ async def stream_chat(
     reasoning: str,
     config: Settings,
     chunk_id: str,
+    **kwargs: Any,
 ) -> AsyncIterator[str]:
     created = datetime.now(timezone.utc).timestamp()
-
+    
     try:
-        stream_gen, _ = await client.chat_streaming(model, messages)
-
-        first_chunk = True
-        async for chunk in stream_gen:
-            if chunk.get("done"):
-                break
-
-            content = chunk.get("message", {}).get("content", "")
-
-            if first_chunk:
-                first_chunk = False
-                data = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant",
-                                "content": content,
-                            },
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-            else:
-                data = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": content},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-
-        if config.signature_enabled:
-            signature = config.signature_format.format(model=model)
-            data = {
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": signature},
-                        "finish_reason": "stop",
-                    }
-                ],
+        stream, latency = await client.chat_streaming(model, messages, **kwargs)
+        
+        # Initial chunk with metadata
+        yield f"data: {json.dumps({
+            'id': chunk_id,
+            'object': 'chat.completion.chunk',
+            'created': created,
+            'model': model,
+            'choices': [{
+                'index': 0,
+                'delta': {'role': 'assistant', 'content': ''},
+                'finish_reason': None
+            }],
+            'router': {
+                'reasoning': reasoning
             }
-            yield f"data: {json.dumps(data)}\n\n"
+        })}\n\n"
 
-        yield "data: [DONE]\n\n"
-
+        async for chunk in stream:
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                yield f"data: {json.dumps({
+                    'id': chunk_id,
+                    'object': 'chat.completion.chunk',
+                    'created': created,
+                    'model': model,
+                    'choices': [{
+                        'index': 0,
+                        'delta': {'content': content},
+                        'finish_reason': None
+                    }]
+                })}\n\n"
+            
+            if chunk.get("done", False):
+                # Add signature if enabled
+                if config.signature_enabled:
+                    signature = config.signature_format.format(model=model)
+                    yield f"data: {json.dumps({
+                        'id': chunk_id,
+                        'object': 'chat.completion.chunk',
+                        'created': created,
+                        'model': model,
+                        'choices': [{
+                            'index': 0,
+                            'delta': {'content': signature},
+                            'finish_reason': 'stop'
+                        }]
+                    })}\n\n"
+                else:
+                    yield f"data: {json.dumps({
+                        'id': chunk_id,
+                        'object': 'chat.completion.chunk',
+                        'created': created,
+                        'model': model,
+                        'choices': [{
+                            'index': 0,
+                            'delta': {},
+                            'finish_reason': 'stop'
+                        }]
+                    })}\n\n"
     except Exception as e:
         logger.error(f"Streaming failed: {e}", exc_info=True)
         error_message = str(e)
@@ -489,6 +510,8 @@ async def stream_chat(
         
         error_data = {"error": {"message": error_message, "type": "internal_error"}}
         yield f"data: {json.dumps(error_data)}\n\n"
+    
+    yield "data: [DONE]\n\n"
 
 
 @app.get("/admin/profiles")
@@ -636,6 +659,79 @@ async def feedback(
     except Exception as e:
         logger.error(f"Failed to save feedback: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/v1/embeddings", response_model=EmbeddingsResponse)
+async def embeddings(
+    request: Request,
+    config: Annotated[Settings, Depends(get_settings)],
+):
+    """Generate embeddings for the given input."""
+    if not app_state.backend:
+        return JSONResponse(
+            {"error": {"message": "Service not ready", "type": "service_unavailable"}},
+            status_code=503,
+        )
+
+    # Validate Content-Type
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("application/json"):
+        return JSONResponse(
+            {"error": {"message": "Content-Type must be application/json", "type": "invalid_request_error"}},
+            status_code=415,
+        )
+
+    try:
+        body = await request.json()
+        validated_request = EmbeddingsRequest(**body)
+    except Exception as e:
+        logger.warning(f"Embeddings request validation failed: {e}")
+        return JSONResponse(
+            {"error": {"message": f"Invalid request: {str(e)}", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+
+    model = validated_request.model
+    input_text = validated_request.input
+
+    try:
+        # For embeddings, we just forward directly to the backend
+        # We don't route yet as embeddings models are usually specific
+        result = await app_state.backend.embed(model, input_text)
+        
+        # Map response to OpenAI format
+        embeddings_list = []
+        
+        # Handle Ollama/OpenAI response formats
+        if "embeddings" in result:
+            # Ollama format
+            for i, emb in enumerate(result["embeddings"]):
+                embeddings_list.append(EmbeddingData(embedding=emb, index=i))
+        elif "data" in result:
+            # OpenAI format
+            for item in result["data"]:
+                embeddings_list.append(EmbeddingData(embedding=item["embedding"], index=item["index"]))
+        elif "embedding" in result:
+            # Single result
+            embeddings_list.append(EmbeddingData(embedding=result["embedding"], index=0))
+        
+        usage = result.get("usage", {})
+        
+        return EmbeddingsResponse(
+            data=embeddings_list,
+            model=model,
+            usage=UsageInfo(
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0)
+            )
+        )
+
+    except Exception as e:
+        logger.error(f"Embeddings failed: {e}")
+        return JSONResponse(
+            {"error": {"message": f"Embeddings generation failed: {str(e)}", "type": "internal_error"}},
+            status_code=500,
+        )
 
 
 def main() -> None:

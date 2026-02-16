@@ -10,6 +10,8 @@ The primary goal of this project is to solve the "Paradox of Choice" in local LL
 
 Most users default to their largest model, which is slow, or their fastest model, which might be too simple for complex tasks. This router acts as an intelligent middleware that makes that decision automatically, balancing capability, speed, and resource constraints.
 
+Additionally, the router now supports **Vector Embeddings** generation, making it a complete local AI gateway. It can handle both generative tasks (chat) and retrieval tasks (embeddings) through a single, unified API.
+
 ---
 
 ## 2. Component Architecture
@@ -17,8 +19,8 @@ Most users default to their largest model, which is slow, or their fastest model
 ### 2.1 Backend Abstraction Layer (`router/backends/`)
 We didn't want to build a tool that only works with Ollama. The backend layer uses a Protocol-based abstraction (similar to a Java Interface) to ensure that the core routing logic is decoupled from the specific LLM engine.
 
-- **Ollama Backend**: The primary target for local users. Supports VRAM management and model unloading.
-- **llama.cpp Backend**: Designed for high-performance deployments using the standard `llama.cpp` server.
+- **Ollama Backend**: The primary target for local users. Supports VRAM management, model unloading, and native embeddings.
+- **llama.cpp Backend**: Designed for high-performance deployments using the standard `llama.cpp` server. Supports embeddings.
 - **OpenAI-Compatible Backend**: Allows the router to act as a bridge to external APIs (OpenAI, Anthropic, or even other instances of this router).
 
 **Why this matters:** It future-proofs the system. If a new high-performance engine emerges tomorrow, we only need to implement one Python class to support it.
@@ -52,6 +54,7 @@ Running multiple models locally is a VRAM nightmare.
 
 ## 3. Data Flow: Anatomy of a Request
 
+### 3.1 Chat Completions (Intelligent Routing)
 1. **Ingress**: A user sends an OpenAI-style `/v1/chat/completions` request to the router.
 2. **Analysis**:
     - The router identifies if the request needs Vision or specific Tools.
@@ -64,12 +67,23 @@ Running multiple models locally is a VRAM nightmare.
 4. **Execution**:
     - The router checks if the model is loaded.
     - If a different model is in VRAM, it triggers an unload.
-    - It forwards the request to the backend.
+    - It forwards the request to the backend, passing through all standard parameters (temperature, top_p, etc.).
 5. **Egress**:
-    - The response is streamed back to the user.
+    - The response is streamed back to the user (if requested).
     - An optional signature is appended (e.g., "Model: deepseek-r1:7b").
+    - Token usage is calculated and returned.
 6. **Feedback (Optional)**:
     - If the user provides a rating via `/v1/feedback`, that score is saved to the database and will influence that model's selection in the future.
+
+### 3.2 Embeddings (Direct Forwarding)
+The `/v1/embeddings` endpoint works differently from chat:
+
+1. **Ingress**: User sends an embedding request with a specific model name (e.g., `nomic-embed-text`).
+2. **Validation**: The request is validated against Pydantic schemas.
+3. **Execution**: The request is forwarded directly to the specified backend model.
+4. **Response**: The embedding vectors are returned in OpenAI-compatible format.
+
+*Note: The router does not currently "route" embeddings requests intelligently. Embedding models are typically specialized and specific to the use case (e.g., semantic search vs. classification), so the user is expected to select the correct model.*
 
 ---
 
@@ -95,3 +109,103 @@ While often used locally, we've added features to make the router safe for multi
 - **Admin Keys**: Protects sensitive endpoints like `/admin/reprofile` while keeping the main chat API accessible.
 - **Sanitization**: All prompts are stripped of control characters and validated against length limits to prevent injection or memory-exhaustion attacks.
 - **Cascading Fallbacks**: If the "best" model happens to be down or fails mid-generation, the router can automatically retry with the "second best" model, improving overall system reliability.
+
+---
+
+## 6. API Reference
+
+The router implements a fully OpenAI-compatible API, allowing it to serve as a drop-in replacement for most AI applications.
+
+### 6.1 Core Endpoints
+
+| Endpoint | Method | Description |
+|---------|--------|-------------|
+| `/v1/chat/completions` | POST | Main chat endpoint. Routes prompts to the best available model. Supports streaming. |
+| `/v1/embeddings` | POST | Generates vector embeddings for text input. Useful for RAG and semantic search. |
+| `/v1/models` | GET | Lists available models (returns the router as a single model entry). |
+| `/v1/skills` | GET | Lists available tools/skills for agentic workflows. |
+| `/v1/feedback` | POST | Submit user feedback to improve future routing decisions. |
+
+### 6.2 Admin Endpoints
+
+| Endpoint | Method | Description |
+|---------|--------|-------------|
+| `/admin/profiles` | GET | View performance profiles of all profiled models. |
+| `/admin/benchmarks` | GET | View aggregated benchmark data from external sources. |
+| `/admin/reprofile` | POST | Trigger manual reprofiling of models. |
+
+### 6.3 Chat Completion Parameters
+
+The router supports all standard OpenAI generation parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `messages` | array | List of message objects. **Required.** |
+| `model` | string | Optional model override. |
+| `temperature` | float | Sampling temperature (0.0 - 2.0). |
+| `top_p` | float | Nucleus sampling threshold (0.0 - 1.0). |
+| `n` | integer | Number of chat completion choices to generate. |
+| `max_tokens` | integer | Maximum tokens to generate. |
+| `presence_penalty` | float | Repetition penalty (-2.0 - 2.0). |
+| `frequency_penalty` | float | Frequency penalty (-2.0 - 2.0). |
+| `logit_bias` | object | Modify likelihood of specific tokens. |
+| `user` | string | End-user identifier for tracking. |
+| `seed` | integer | Seed for reproducible outputs. |
+| `logprobs` | boolean | Include token log probabilities in response. |
+| `top_logprobs` | integer | Number of most likely tokens to return. |
+| `stream` | boolean | Enable server-sent events streaming. |
+| `tools` | array | List of tools the model may call. |
+| `tool_choice` | string/object | Force specific tool or auto. |
+| `response_format` | object | Require JSON output. |
+
+### 6.4 Embeddings Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | **Required.** Embedding model to use. |
+| `input` | string/array | Text or list of texts to embed. |
+| `user` | string | End-user identifier. |
+| `encoding_format` | string | `float` (default) or `base64`. |
+
+### 6.5 Response Structure
+
+**Chat Completion Response:**
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "llama3:8b-instruct",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "..."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 50,
+    "total_tokens": 60
+  }
+}
+```
+
+**Embeddings Response:**
+```json
+{
+  "object": "list",
+  "data": [{
+    "object": "embedding",
+    "embedding": [0.123, -0.456, ...],
+    "index": 0
+  }],
+  "model": "nomic-embed-text",
+  "usage": {
+    "prompt_tokens": 8,
+    "completion_tokens": 0,
+    "total_tokens": 8
+  }
+}
+```

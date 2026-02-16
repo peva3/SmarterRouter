@@ -58,6 +58,15 @@ class LLMBackend(Protocol):
         """Explicitly load a model into VRAM. Return False if not supported."""
         return False
 
+    async def embed(
+        self,
+        model: str,
+        input_text: str | list[str],
+        **kwargs: object,
+    ) -> dict:
+        """Generate embeddings for the given input."""
+        ...
+
 
 def supports_unload(backend: LLMBackend) -> bool:
     """Check if backend supports model unloading."""
