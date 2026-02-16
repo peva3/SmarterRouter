@@ -1,4 +1,4 @@
-# LLM Router Proxy - Environment Configuration Reference
+# LLM Router Configuration - Environment Configuration Reference
 # Copy this file to .env and customize values for your deployment
 # All variables are optional - sensible defaults are provided
 
@@ -40,6 +40,14 @@ ROUTER_HOST=0.0.0.0
 
 # Server port (default: 11434 - matches Ollama default for drop-in replacement)
 ROUTER_PORT=11436
+
+# =============================================================================
+# EXTERNAL FRONTEND CONFIGURATION
+# =============================================================================
+# Name the router presents itself as to external UIs (e.g., OpenWebUI)
+# This will be the single model name shown in model selection dropdowns.
+# Default: LLM Router Proxy
+ROUTER_EXTERNAL_MODEL_NAME=hubrouter/main
 
 # =============================================================================
 # SECURITY CONFIGURATION
@@ -135,52 +143,3 @@ ROUTER_LOG_LEVEL=INFO
 # Database URL for storing profiles and benchmarks (default: SQLite)
 # For production, consider PostgreSQL: postgresql://user:pass@localhost/router
 ROUTER_DATABASE_URL=sqlite:///router.db
-
-# =============================================================================
-# EXAMPLES
-# =============================================================================
-
-# Example 1: Secure production setup with Ollama
-# ROUTER_ADMIN_API_KEY=change-this-to-a-random-string
-# ROUTER_RATE_LIMIT_ENABLED=true
-# ROUTER_HOST=127.0.0.1
-# ROUTER_PINNED_MODEL=phi3:mini
-
-# Example 2: Using OpenAI API
-# ROUTER_PROVIDER=openai
-# ROUTER_OPENAI_BASE_URL=https://api.openai.com/v1
-# ROUTER_OPENAI_API_KEY=sk-...
-
-# Example 3: Using llama.cpp server
-# ROUTER_PROVIDER=llama.cpp
-# ROUTER_LLAMA_CPP_URL=http://localhost:8080
-
-# =============================================================================
-# INPUT VALIDATION & SECURITY
-# =============================================================================
-
-# The router includes several security features (enabled by default):
-#
-# 1. Content-Type Validation: POST requests must use application/json
-# 2. Request Body Validation: Pydantic models validate all requests
-#    - Prompts: max 10,000 characters
-#    - Messages: max 100 per request
-#    - Roles: only user, assistant, system allowed
-# 3. Prompt Sanitization: Automatic removal of null bytes and control characters
-# 4. SQL Injection Prevention: All DB queries use ORM with parameterized queries
-# 5. Log Sanitization: API keys are redacted from logs
-#
-# These features require no configuration and are always active.
-
-# =============================================================================
-# NOTES
-# =============================================================================
-
-# - All variables are prefixed with ROUTER_ to avoid collisions
-# - Boolean values: use "true" or "false" (case-insensitive)
-# - Timeouts are in seconds
-# - Model names should match your backend exactly
-# - Restart the server after changing configuration
-# - Admin endpoints: /admin/profiles, /admin/benchmarks, /admin/reprofile
-
-# For more information, see README.md and AGENTS.md

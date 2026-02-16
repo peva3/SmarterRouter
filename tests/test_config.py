@@ -17,7 +17,7 @@ class TestSettings:
             default_settings = Settings(_env_file=None)
             assert default_settings.ollama_url == "http://localhost:11434"
             assert default_settings.host == "0.0.0.0"
-            assert default_settings.port == 11434
+            assert default_settings.port == 11436
             assert default_settings.signature_enabled is True
             assert default_settings.polling_interval == 60
             assert default_settings.profile_timeout == 30

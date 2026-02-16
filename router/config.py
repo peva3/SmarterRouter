@@ -54,6 +54,9 @@ class Settings(BaseSettings):
 
     pinned_model: str | None = Field(default=None) # Model to keep loaded in VRAM
 
+    # Name the router presents itself as to external UIs (e.g., OpenWebUI)
+    router_external_model_name: str = Field(default="hubrouter/main")
+
     # Security settings
     admin_api_key: str | None = Field(default=None)  # API key for admin endpoints (if not set, admin endpoints are open)
     rate_limit_enabled: bool = Field(default=False)  # Enable rate limiting

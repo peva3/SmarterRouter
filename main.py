@@ -122,7 +122,8 @@ async def rate_limit_request(
     if not rate_limiter.is_allowed(key, limit):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Limit: {limit} requests per minute."
+            detail=f"Rate limit exceeded. Limit: {limit} requests per minute.",
+            headers={"Retry-After": "60"},
         )
 
 
@@ -261,22 +262,20 @@ async def health():
 
 
 @app.get("/v1/models")
-async def list_models():
-    if not app_state.backend:
-        return JSONResponse({"error": "Client not initialized"}, status_code=503)
-
-    models = await app_state.backend.list_models()
-
+async def list_models(config: Annotated[Settings, Depends(get_settings)]):
+    """List available models. Returns the router itself as a single model for external UIs."""
+    
     return {
         "object": "list",
         "data": [
             {
-                "id": m.name,
+                "id": config.router_external_model_name,
                 "object": "model",
                 "created": datetime.now(timezone.utc).timestamp(),
                 "owned_by": "local",
+                "description": "An intelligent router that selects the best LLM based on prompt analysis and model capabilities.",
+                "admin_auth_required": config.admin_api_key is not None
             }
-            for m in models
         ],
     }
 

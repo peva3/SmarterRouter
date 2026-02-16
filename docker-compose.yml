@@ -8,53 +8,8 @@ services:
     container_name: llm-router
     ports:
       - "11436:11436"
-    environment:
-      # --- Provider Selection ---
-      ROUTER_PROVIDER: "ollama"
-
-      # --- Ollama Settings (if ROUTER_PROVIDER=ollama) ---
-      ROUTER_OLLAMA_URL: "http://ollama:11434"
-      ROUTER_PINNED_MODEL: "" # Optional: e.g., phi3:mini
-
-      # --- llama.cpp Server Settings (if ROUTER_PROVIDER=llama.cpp) ---
-      # ROUTER_LLAMA_CPP_URL: "http://llama-cpp:8080"
-      # ROUTER_MODEL_PREFIX: ""
-
-      # --- OpenAI-Compatible API Settings (if ROUTER_PROVIDER=openai) ---
-      # ROUTER_OPENAI_BASE_URL: "https://api.openai.com/v1"
-      # ROUTER_OPENAI_API_KEY: "your-api-key-here"
-      # ROUTER_MODEL_PREFIX: ""
-
-      # --- Server Settings ---
-      ROUTER_HOST: "0.0.0.0"
-      ROUTER_PORT: 11436
-
-      # --- Security Settings (optional but recommended) ---
-      # ROUTER_ADMIN_API_KEY: "your-secret-key-change-this"
-      # ROUTER_RATE_LIMIT_ENABLED: "false"
-      # ROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE: 60
-      # ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE: 10
-
-      # --- Timeout Configuration ---
-      ROUTER_PROFILE_TIMEOUT: 30
-      ROUTER_GENERATION_TIMEOUT: 120
-      ROUTER_PROFILE_PROMPTS_PER_CATEGORY: 3
-
-      # --- Routing & Benchmark Settings ---
-      ROUTER_MODEL: "" # Set to model name for LLM dispatch
-      ROUTER_TEMPERATURE: 0.0
-      ROUTER_MAX_TOKENS: 50
-      ROUTER_PREFER_SMALLER_MODELS: "true"
-      ROUTER_PREFER_NEWER_MODELS: "true"
-      ROUTER_BENCHMARK_SOURCES: "huggingface,lmsys"
-
-      # --- Response & Monitoring ---
-      ROUTER_SIGNATURE_ENABLED: "true"
-      ROUTER_SIGNATURE_FORMAT: "\nModel: {model}"
-      ROUTER_POLLING_INTERVAL: 60
-      ROUTER_LOG_LEVEL: "INFO"
-      ROUTER_DATABASE_URL: "sqlite:///router.db"
-
+    env_file:
+      - .env
     volumes:
       - ./router.db:/app/router.db
     restart: unless-stopped
@@ -62,6 +17,8 @@ services:
       - llm-router-network
 
   # === Example Ollama Service ===
+  # Uncomment to run Ollama as part of this compose setup.
+  # Make sure ROUTER_OLLAMA_URL is set to http://ollama:11434 in your .env file.
   # ollama:
   #   image: ollama/ollama:latest
   #   container_name: ollama

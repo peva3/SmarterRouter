@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Added support for multiple LLM backends and proactive VRAM management for systems with limited GPU memory.
 
 #### Added
+- **Configurable Router Model Name**:
+  - New `ROUTER_EXTERNAL_MODEL_NAME` config option to set the name the router presents to external UIs (e.g., OpenWebUI).
+  - The `/v1/models` endpoint now returns this single model name, simplifying integration with frontends.
 - **Backend Abstraction Layer**: Unified interface for all LLM backends
   - `LLMBackend` Protocol defining common operations
   - Factory function for dynamic backend creation
