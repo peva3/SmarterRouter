@@ -400,6 +400,10 @@ async def chat_completions(
 
     if config.signature_enabled:
         signature = config.signature_format.format(model=final_model)
+        # Strip any existing "Model:" signatures from the response to avoid duplicates
+        # Some models helpfully add their own signatures
+        import re
+        content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
         content += signature
 
     return {

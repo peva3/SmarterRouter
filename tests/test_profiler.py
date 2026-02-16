@@ -2,7 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from router.profiler import CATEGORY_PROMPTS, ModelProfiler
+from router.profiler import ModelProfiler
+from router.prompts import BENCHMARK_PROMPTS
 
 
 @pytest.fixture
@@ -29,7 +30,6 @@ async def test_profile_model_success(profiler, mock_client):
     assert 0 <= result.reasoning <= 1.0
     assert 0 <= result.coding <= 1.0
     assert 0 <= result.creativity <= 1.0
-    assert 0 <= result.factual <= 1.0
     assert 0 <= result.speed <= 1.0
 
 
@@ -50,13 +50,12 @@ async def test_profile_model_timeout(profiler, mock_client):
 
 
 def test_category_prompts_exist():
-    assert "reasoning" in CATEGORY_PROMPTS
-    assert "coding" in CATEGORY_PROMPTS
-    assert "creativity" in CATEGORY_PROMPTS
-    assert "factual" in CATEGORY_PROMPTS
+    assert "reasoning" in BENCHMARK_PROMPTS
+    assert "coding" in BENCHMARK_PROMPTS
+    assert "creativity" in BENCHMARK_PROMPTS
 
-    for category in CATEGORY_PROMPTS:
-        assert len(CATEGORY_PROMPTS[category]) > 0
+    for category in BENCHMARK_PROMPTS:
+        assert len(BENCHMARK_PROMPTS[category]) > 0
 
 
 @pytest.mark.asyncio
