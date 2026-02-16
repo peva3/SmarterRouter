@@ -96,11 +96,12 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
     return count
 
 
-def get_last_sync() -> BenchmarkSync | None:
+def get_last_sync() -> datetime | None:
     with get_session() as session:
-        return session.execute(
-            select(BenchmarkSync).order_by(BenchmarkSync.id.desc()).limit(1)
+        result = session.execute(
+            select(BenchmarkSync.last_sync).order_by(BenchmarkSync.id.desc()).limit(1)
         ).scalar_one_or_none()
+        return result
 
 
 def update_sync_status(status: str, models_count: int = 0) -> None:

@@ -6,7 +6,10 @@ An intelligent, multi-backend AI router that sits between your application and v
 
 - **Multi-Backend Support**: Works with Ollama, llama.cpp servers, and any OpenAI-compatible API.
 - **Smart Routing**: Category-first routing (coding, reasoning, creativity) and complexity-aware model selection.
-- **Benchmark Integration**: Pulls data from HuggingFace Leaderboard and LMSYS Chatbot Arena to make data-driven decisions.
+- **Multimodal Support**: Automatically routes vision tasks to vision-capable models.
+- **Tool Use Detection**: Routes function-calling requests to optimized models.
+- **LLM-as-Judge Scoring**: Qualitative model evaluation using high-end models as judges (e.g., GPT-4o).
+- **Standardized Benchmarks**: Uses MT-Bench style prompts for rigorous performance measurement.
 - **VRAM Management**: Proactive model unloading for systems with limited GPU memory, with a "pinned model" option for speed.
 - **Runtime Profiling**: Tests your actual models with real prompts to measure their capabilities on your hardware.
 - **Security Hardening**:

@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # Name the router presents itself as to external UIs (e.g., OpenWebUI)
     router_external_model_name: str = Field(default="hubrouter/main")
 
+    # LLM-as-Judge Settings
+    judge_enabled: bool = Field(default=False)
+    judge_model: str = Field(default="gpt-4o")
+    judge_base_url: str = Field(default="https://api.openai.com/v1")
+    judge_api_key: str | None = Field(default=None)
+
     # Security settings
     admin_api_key: str | None = Field(default=None)  # API key for admin endpoints (if not set, admin endpoints are open)
     rate_limit_enabled: bool = Field(default=False)  # Enable rate limiting

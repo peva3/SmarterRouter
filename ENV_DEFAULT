@@ -31,6 +31,23 @@ ROUTER_PINNED_MODEL=
 # ROUTER_MODEL_PREFIX=
 
 # =============================================================================
+# LLM-AS-JUDGE CONFIGURATION
+# =============================================================================
+
+# Enable LLM-as-Judge for quality-based profiling (default: false)
+# When enabled, a powerful model (the "Judge") grades the output of other models.
+ROUTER_JUDGE_ENABLED=false
+
+# Model to use as the Judge (e.g., gpt-4o, mistral-large-latest)
+ROUTER_JUDGE_MODEL=gpt-4o
+
+# Base URL for the Judge's API endpoint
+ROUTER_JUDGE_BASE_URL=https://api.openai.com/v1
+
+# API Key for the Judge's service
+ROUTER_JUDGE_API_KEY=
+
+# =============================================================================
 # SERVER CONFIGURATION
 # =============================================================================
 

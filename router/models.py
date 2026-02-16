@@ -25,6 +25,10 @@ class ModelProfile(Base):
     first_seen: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    
+    # New capabilities
+    vision: Mapped[bool] = mapped_column(Integer, default=0) # SQLite uses Integer for Boolean
+    tool_calling: Mapped[bool] = mapped_column(Integer, default=0)
 
     def capability_dict(self) -> dict[str, float]:
         return {
@@ -83,6 +87,10 @@ class ModelBenchmark(Base):
     elo_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     throughput: Mapped[float | None] = mapped_column(Float, nullable=True)
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    
+    # New capabilities
+    vision: Mapped[bool] = mapped_column(Integer, default=0)
+    tool_calling: Mapped[bool] = mapped_column(Integer, default=0)
 
     last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

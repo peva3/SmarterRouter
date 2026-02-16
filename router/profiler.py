@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from router.backends.base import LLMBackend
 from router.config import settings
 from router.database import get_session
+from router.judge import JudgeClient
 from router.models import ModelProfile
+from router.prompts import BENCHMARK_PROMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -18,38 +20,16 @@ class ProfileResult:
     reasoning: float
     coding: float
     creativity: float
-    factual: float
     speed: float
     avg_response_time_ms: float
-
-
-CATEGORY_PROMPTS = {
-    "reasoning": [
-        "If a train travels 120km in 1.5 hours, what is its average speed in m/s?",
-        "All roses are flowers. Some flowers fade quickly. Therefore, some roses fade quickly. Is this logically valid?",
-        "What comes next in the sequence: 2, 6, 12, 20, 30, ?",
-    ],
-    "coding": [
-        "Write a Python function to check if a string is a palindrome.",
-        "Implement a binary search algorithm in JavaScript.",
-        "Create a SQL query to find the second highest salary from an employees table.",
-    ],
-    "creativity": [
-        "Write a short haiku about moonlight.",
-        "Describe a city where music has become the primary form of communication.",
-        "Create a brief origin story for a superhero whose powers come from dreams.",
-    ],
-    "factual": [
-        "What is the capital of Australia?",
-        "Explain the process of photosynthesis in one sentence.",
-        "Who wrote 'Romeo and Juliet'?",
-    ],
-}
+    vision: bool = False
+    tool_calling: bool = False
 
 
 class ModelProfiler:
     def __init__(self, client: LLMBackend, total_models: int = 0, current_model_num: int = 0):
         self.client = client
+        self.judge = JudgeClient()
         self.timeout = settings.profile_timeout
         self.total_models = total_models
         self.current_model_num = current_model_num
@@ -60,9 +40,15 @@ class ModelProfiler:
         elapsed = time.perf_counter() - self.start_time
         
         # Calculate progress
-        categories_completed = list(CATEGORY_PROMPTS.keys()).index(category)
-        prompts_completed = categories_completed * 3 + prompt_num
-        total_prompts_all = len(CATEGORY_PROMPTS) * 3
+        cat_list = list(BENCHMARK_PROMPTS.keys())
+        try:
+            categories_completed = cat_list.index(category)
+        except ValueError:
+            categories_completed = 0
+            
+        prompts_per_cat = len(BENCHMARK_PROMPTS.get(category, [1]))
+        prompts_completed = categories_completed * prompts_per_cat + prompt_num
+        total_prompts_all = sum(len(p) for p in BENCHMARK_PROMPTS.values())
         
         # Estimate time remaining
         if prompts_completed > 0:
@@ -110,14 +96,15 @@ class ModelProfiler:
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
-                if result.response and len(result.response.strip()) > 10:
-                    scores.append(1.0)
-                else:
-                    scores.append(0.0)
+                response_text = result.response if hasattr(result, "response") else result.get("response", "") if isinstance(result, dict) else str(result)
+                
+                # Use Judge if enabled
+                score = await self.judge.score_response(prompt, response_text)
+                scores.append(score)
 
                 times.append(elapsed_ms)
 
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 logger.warning(f"Profile timeout for {model} on category {category}")
                 scores.append(0.0)
                 times.append(self.timeout * 1000)
@@ -134,43 +121,59 @@ class ModelProfiler:
         logger.info(f"PROGRESS [{self.current_model_num}/{self.total_models}] Starting profiling: {model}")
 
         reasoning_score, reasoning_time = await self._test_category(
-            model, "reasoning", CATEGORY_PROMPTS["reasoning"]
+            model, "reasoning", BENCHMARK_PROMPTS["reasoning"]
         )
-        coding_score, coding_time = await self._test_category(model, "coding", CATEGORY_PROMPTS["coding"])
+        coding_score, coding_time = await self._test_category(model, "coding", BENCHMARK_PROMPTS["coding"])
         creativity_score, creativity_time = await self._test_category(
-            model, "creativity", CATEGORY_PROMPTS["creativity"]
+            model, "creativity", BENCHMARK_PROMPTS["creativity"]
         )
-        factual_score, factual_time = await self._test_category(model, "factual", CATEGORY_PROMPTS["factual"])
 
-        all_times = [reasoning_time, coding_time, creativity_time, factual_time]
+        all_times = [reasoning_time, coding_time, creativity_time]
         avg_time = sum(all_times) / len(all_times)
 
         speed_score = 1.0 - min(avg_time / 30000.0, 1.0)
+        
+        # Capability Detection
+        vision_capable = self._detect_vision_capability(model)
+        tool_capable = self._detect_tool_capability(model)
 
         result = ProfileResult(
             model_name=model,
             reasoning=reasoning_score,
             coding=coding_score,
             creativity=creativity_score,
-            factual=factual_score,
             speed=speed_score,
             avg_response_time_ms=avg_time,
+            vision=vision_capable,
+            tool_calling=tool_capable,
         )
 
         self._save_profile(result)
         
-        total_score = result.reasoning + result.coding + result.creativity + result.factual + result.speed
+        total_score = result.reasoning + result.coding + result.creativity + result.speed
         elapsed_total = time.perf_counter() - self.start_time
         
         logger.info(
             f"PROGRESS [{self.current_model_num}/{self.total_models}] Profile complete for {model}: "
             f"reasoning={result.reasoning:.2f}, coding={result.coding:.2f}, "
-            f"creativity={result.creativity:.2f}, factual={result.factual:.2f}, "
-            f"speed={result.speed:.2f}, total={total_score:.2f}, "
-            f"time={elapsed_total:.1f}s"
+            f"creativity={result.creativity:.2f}, "
+            f"speed={result.speed:.2f}, vision={result.vision}, tools={result.tool_calling}, "
+            f"total={total_score:.2f}, time={elapsed_total:.1f}s"
         )
 
         return result
+
+    def _detect_vision_capability(self, model_name: str) -> bool:
+        """Heuristic detection of vision capabilities."""
+        name = model_name.lower()
+        vision_keywords = ["vision", "llava", "pixtral", "gpt-4o", "gemini", "claude-3", "minicpm", "moondream", "vl"]
+        return any(kw in name for kw in vision_keywords)
+
+    def _detect_tool_capability(self, model_name: str) -> bool:
+        """Heuristic detection of tool calling capabilities."""
+        name = model_name.lower()
+        tool_keywords = ["gpt-4", "claude-3", "mistral-large", "qwen2.5", "llama3.1", "command-r", "hermes", "tool"]
+        return any(kw in name for kw in tool_keywords)
 
     def _save_profile(self, result: ProfileResult) -> None:
         try:
@@ -181,20 +184,22 @@ class ModelProfiler:
                     profile.reasoning = result.reasoning
                     profile.coding = result.coding
                     profile.creativity = result.creativity
-                    profile.factual = result.factual
                     profile.speed = result.speed
                     profile.avg_response_time_ms = result.avg_response_time_ms
                     profile.last_profiled = datetime.now(timezone.utc)
+                    profile.vision = result.vision
+                    profile.tool_calling = result.tool_calling
                 else:
                     profile = ModelProfile(
                         name=result.model_name,
                         reasoning=result.reasoning,
                         coding=result.coding,
                         creativity=result.creativity,
-                        factual=result.factual,
                         speed=result.speed,
                         avg_response_time_ms=result.avg_response_time_ms,
                         last_profiled=datetime.now(timezone.utc),
+                        vision=result.vision,
+                        tool_calling=result.tool_calling,
                     )
                     session.add(profile)
 

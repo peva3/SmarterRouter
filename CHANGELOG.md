@@ -1,9 +1,61 @@
-# Changelog
+## [1.4.0] - 2026-02-16
 
-All notable changes to this project will be documented in this file.
+### Quality-Based Profiling & Standardized Benchmarks
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Major upgrade to model evaluation: transitioning from simple completion checks to qualitative assessment using the "LLM-as-Judge" pattern and standardized prompts.
+
+#### Added
+- **LLM-as-Judge Scoring Engine**:
+  - New "Judge" capability that uses a high-end model (e.g., GPT-4o) to grade the responses of other models.
+  - Replaces binary pass/fail checks with a 0.0-1.0 quality score based on accuracy, clarity, and instruction following.
+  - Fully configurable via `ROUTER_JUDGE_*` settings, supporting any OpenAI-compatible API as the judge.
+- **Standardized Benchmark Prompts**:
+  - Replaced simple hardcoded prompts with a curated set of 15 prompts inspired by **MT-Bench**.
+  - Prompts cover Reasoning, Coding, and Creativity with increased rigor.
+- **Improved Progress Tracking**:
+  - Profiler now provides more accurate progress percentages and ETA calculations based on the new prompt set.
+- **New Configuration Settings**:
+  - `ROUTER_JUDGE_ENABLED`: Toggle qualitative scoring.
+  - `ROUTER_JUDGE_MODEL`: Specify the model to act as judge.
+  - `ROUTER_JUDGE_BASE_URL`: Use any OpenAI-compatible endpoint for the judge.
+  - `ROUTER_JUDGE_API_KEY`: Secure access to the judge model.
+
+#### Changed
+- **Profiler Overhaul**:
+  - Significant refactor of `ModelProfiler` to support asynchronous judge calls.
+  - Category testing now integrates the judge's qualitative feedback into the final scores.
+  - Optimized progress logging for the expanded prompt set.
+
+---
+
+## [1.3.0] - 2026-02-16
+
+### Skills & Capabilities
+
+Major update introducing "Agentic" features: Skills Registry, Multimodal Support, and Capability-based Routing.
+
+#### Added
+- **Skills Endpoint (`/v1/skills`)**:
+  - Lists available tools/skills (e.g., Web Search, Calculator) that can be used by models.
+  - Prepares the router for future "Model Context Protocol" (MCP) integration.
+- **Multimodal Support**:
+  - API now accepts OpenAI-style multimodal inputs (text + images in `messages`).
+  - Automatically detects images and routes to vision-capable models (Llava, Pixtral, GPT-4o).
+- **Tool Use Detection**:
+  - Detects `tools` definitions in requests.
+  - Routes to models optimized for function calling (e.g., Qwen2.5-Coder, Mistral Large).
+- **Capability-Based Filtering**:
+  - Strict filtering ensures vision tasks go to vision models.
+  - "JSON Mode" requests prioritize coding/structured output models.
+- **Enhanced Profiler**:
+  - Auto-detects capabilities (Vision/Tools) based on model names.
+  - Updates `ModelProfile` with these new flags.
+
+#### Changed
+- **Database Schema**: Added `vision` and `tool_calling` columns to `model_profiles` and `model_benchmarks`.
+- **Request Validation**: Updated `ChatCompletionRequest` to support list-based content and `tools`.
+
+---
 
 ## [1.2.0] - 2026-02-16
 
@@ -345,9 +397,12 @@ After several iterations of development and testing, the LLM Router Proxy is now
 
 ## Version History Summary
 
-- **v1.1.0** (Current): Multi-backend support (Ollama, llama.cpp, OpenAI-compatible), VRAM management, 81 tests
+- **v1.3.0**: Skills Registry, Multimodal Support, Capability-based Routing
+- **v1.2.0**: Query Difficulty Predictor, Cost-Quality Tuner, User Feedback Loop
+- **v1.1.0**: Multi-backend support (Ollama, llama.cpp, OpenAI-compatible), VRAM management, 81 tests
 - **v1.0.0**: Production ready, multi-provider benchmarks, 79 tests, progress logging
 - **v0.3.0**: LLM-based dispatcher mode added
 - **v0.2.0**: Real HuggingFace + LMSYS integration (no more mock data)
 - **v0.1.0**: MVP with keyword routing and runtime profiling
+
 

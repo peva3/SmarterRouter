@@ -29,19 +29,36 @@ class RouterEngine:
         self.client = client
         self.dispatcher_model = dispatcher_model or settings.router_model
 
-    async def select_model(self, prompt: str) -> RoutingResult:
+    async def select_model(self, prompt: str | list[dict], request_obj: Any = None) -> RoutingResult:
         available_models = await self.client.list_models()
         if not available_models:
             raise ValueError("No models available")
 
         model_names = [m.name for m in available_models]
 
+        # Extract text prompt if multimodal
+        text_prompt = prompt
+        if isinstance(prompt, list):
+            # Concatenate text parts
+            text_parts = []
+            for msg in prompt:
+                if isinstance(msg, dict):
+                    content = msg.get("content")
+                    if isinstance(content, str):
+                        text_parts.append(content)
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                text_parts.append(part.get("text", ""))
+            text_prompt = "\n".join(text_parts)
+
         if self.dispatcher_model:
-            return await self._llm_dispatch(prompt, model_names)
+            return await self._llm_dispatch(text_prompt, model_names)
         else:
-            return await self._keyword_dispatch(prompt, model_names)
+            return await self._keyword_dispatch(text_prompt, model_names, request_obj)
 
     async def _llm_dispatch(self, prompt: str, model_names: list[str]) -> RoutingResult:
+        # ... existing implementation ... (no changes needed here for now as it's string based)
         benchmarks = get_benchmarks_for_models(model_names)
 
         if not benchmarks:
@@ -90,63 +107,7 @@ Select the model that best matches the user's prompt needs."""
 
         return await self._keyword_dispatch(prompt, model_names)
 
-    def _build_dispatch_context(self, benchmarks: list[ModelBenchmark]) -> str:
-        lines = []
-        for b in benchmarks:
-            caps = []
-            if b.reasoning_score:
-                caps.append(f"reasoning={b.reasoning_score:.2f}")
-            if b.coding_score:
-                caps.append(f"coding={b.coding_score:.2f}")
-            if b.general_score:
-                caps.append(f"general={b.general_score:.2f}")
-            
-            # Add new metrics
-            if b.elo_rating:
-                caps.append(f"elo={b.elo_rating:.0f}")
-            if b.throughput:
-                caps.append(f"speed={b.throughput:.0f}t/s")
-            if b.context_window:
-                caps.append(f"ctx={b.context_window}")
-
-            params_info = f" ({b.parameters})" if b.parameters else ""
-            lines.append(f"- {b.ollama_name}{params_info}: {', '.join(caps)}")
-
-        return "\n".join(lines)
-
-    def _parse_llm_response(self, content: str, model_names: list[str]) -> dict[str, Any] | None:
-        # Try to find JSON in markdown blocks first
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1)
-        else:
-            # Fallback to finding raw JSON object
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-            else:
-                json_str = None
-
-        if json_str:
-            try:
-                result = json.loads(json_str)
-                if isinstance(result, dict) and "model" in result:
-                    model = str(result["model"]).strip()
-                    
-                    # Direct match
-                    if model in model_names:
-                        return {"model": model, "reasoning": result.get("reasoning", "")}
-                        
-                    # Fuzzy match against provided names
-                    normalized_model = model.lower().replace(":", "").replace("_", "").replace("-", "")
-                    for name in model_names:
-                        normalized_name = name.lower().replace(":", "").replace("_", "").replace("-", "")
-                        if normalized_name in normalized_model or normalized_model in normalized_name:
-                            return {"model": name, "reasoning": result.get("reasoning", "")}
-            except json.JSONDecodeError:
-                logger.debug(f"Failed to parse JSON from LLM response: {json_str}")
-
-        return None
+    # ... existing methods ...
 
     def _get_model_feedback_scores(self) -> dict[str, float]:
         """Get average feedback score for each model."""
@@ -175,7 +136,7 @@ Select the model that best matches the user's prompt needs."""
             logger.warning(f"Failed to fetch feedback scores: {e}")
             return {}
 
-    async def _keyword_dispatch(self, prompt: str, model_names: list[str]) -> RoutingResult:
+    async def _keyword_dispatch(self, prompt: str, model_names: list[str], request_obj: Any = None) -> RoutingResult:
         profiles = self._get_all_profiles()
         benchmarks = get_all_benchmarks()  # Get ALL benchmarks for fuzzy matching
         feedback_scores = self._get_model_feedback_scores()
@@ -188,9 +149,10 @@ Select the model that best matches the user's prompt needs."""
                 reasoning="No profiling data available, defaulting to first model",
             )
 
-        analysis = self._analyze_prompt(prompt)
+        analysis = self._analyze_prompt(prompt, request_obj)
         logger.info(f"Prompt analysis: {analysis}")
         
+        # ... rest of the method ...
         scores = self._calculate_combined_scores(
             profiles, benchmarks, analysis, model_names, feedback_scores
         )
@@ -206,9 +168,46 @@ Select the model that best matches the user's prompt needs."""
         top_category = max(task_categories.items(), key=lambda x: x[1])
         dominant_category = top_category[0] if top_category[1] > 0.5 else None
 
+        # STRICT FILTERING for Vision and Tools
+        candidates_filter = set(model_names)
+        
+        # 1. Vision Filter
+        if analysis.get("vision", 0) > 0:
+            # Filter for models that support vision (llava, pixtral, gpt-4o, etc)
+            vision_models = {
+                name for name in model_names 
+                if "llava" in name.lower() or "pixtral" in name.lower() or "vision" in name.lower() 
+                or "gpt-4o" in name.lower() or "claude-3" in name.lower() or "gemini" in name.lower()
+                or "minicpm" in name.lower() or "moondream" in name.lower()
+            }
+            if vision_models:
+                candidates_filter &= vision_models
+                logger.info(f"Vision detected. Filtering candidates: {candidates_filter}")
+            else:
+                logger.warning("Vision task detected but no vision models found!")
+
+        # 2. Tool Calling Filter
+        if analysis.get("tools", 0) > 0:
+            # Filter for models good at tool use
+            tool_models = {
+                name for name in model_names 
+                if any(kw in name.lower() for kw in ["gpt-4", "claude-3", "mistral-large", "qwen2.5", "llama3.1", "command-r", "hermes"])
+            }
+            # Fallback: if no specific tool models, allow all but warn
+            if tool_models:
+                candidates_filter &= tool_models
+                logger.info(f"Tool use detected. Filtering candidates: {candidates_filter}")
+
+        if not candidates_filter:
+            # If we filtered everything out, reset to all models
+            logger.warning("Strict filtering removed all models. Resetting to full list.")
+            candidates_filter = set(model_names)
+
+        # Filter scores dict to only include candidates
+        scores = {k: v for k, v in scores.items() if k in candidates_filter}
+
         if dominant_category:
-            # Filter models that are good at this specific category
-            # We want models that are within 15% of the best score in this category
+            # ... existing logic ...
             max_cat_score = max(s[dominant_category] for s in scores.values())
             threshold = max_cat_score * 0.85
             
@@ -216,13 +215,6 @@ Select the model that best matches the user's prompt needs."""
                 m: s for m, s in scores.items() 
                 if s[dominant_category] >= threshold
             }
-            
-            # Among candidates, pick the one with best bonus score (speed + newness + size)
-            # We recalculate the "bonus" part from the total score
-            # Total = weighted_cat + bonus -> Bonus = Total - weighted_cat
-            # Or simpler: just use the total score which already includes bonuses
-            # Since we filtered by capability, the total score will now effectively 
-            # use bonuses as tie-breakers among the capable models.
             
             best_model_name = max(candidates.items(), key=lambda x: x[1]["score"])[0]
             confidence = candidates[best_model_name]["score"]
@@ -233,8 +225,7 @@ Select the model that best matches the user's prompt needs."""
             confidence = scores[best_model_name]["score"]
             reasoning = self._build_reasoning(analysis, scores[best_model_name])
 
-        # self._log_decision(prompt, best_model_name, confidence, reasoning) # Moved to explicit call
-
+        # ... rest of method ...
         return RoutingResult(
             selected_model=best_model_name,
             confidence=confidence,
@@ -335,8 +326,9 @@ Select the model that best matches the user's prompt needs."""
         for model_name in model_names:
             profile = profile_map.get(model_name)
             benchmark = normalized_benchmark_map.get(model_name)
+            affinity = model_category_affinity.get(model_name, {})
+            # print(f"DEBUG {model_name} affinity: {affinity} dominant={dominant_category}")
 
-            # Base score: start with benchmark if available, else profile
             base_score = 0.0
             
             # Map prompt categories to benchmark/profile fields
@@ -347,21 +339,6 @@ Select the model that best matches the user's prompt needs."""
                 "factual": ("general_score", "factual"),
             }
 
-        # Map prompt categories to benchmark/profile fields
-        category_map = {
-            "reasoning": ("reasoning_score", "reasoning"),
-            "coding": ("coding_score", "coding"),
-            "creativity": ("creativity", None),
-            "factual": ("general_score", "factual"),
-        }
-
-        for model_name in model_names:
-            profile = profile_map.get(model_name)
-            benchmark = normalized_benchmark_map.get(model_name)
-            affinity = model_category_affinity.get(model_name, {})
-
-            base_score = 0.0
-            
             for category, weight in analysis.items():
                 # Skip complexity - it's handled separately as a bonus
                 if category == "complexity":
@@ -595,7 +572,7 @@ Select the model that best matches the user's prompt needs."""
         else:
             return 0.0
 
-    def _analyze_prompt(self, prompt: str) -> dict[str, float]:
+    def _analyze_prompt(self, prompt: str, request_obj: Any = None) -> dict[str, float]:
         prompt_lower = prompt.lower()
 
         analysis: dict[str, float] = {
@@ -604,8 +581,34 @@ Select the model that best matches the user's prompt needs."""
             "creativity": 0.0,
             "factual": 0.0,
             "complexity": 0.0,
+            "vision": 0.0, # New
+            "tools": 0.0,  # New
         }
 
+        # New: Inspect request object for capabilities
+        if request_obj:
+            # 1. Vision Detection
+            if hasattr(request_obj, "messages"):
+                for msg in request_obj.messages:
+                    if isinstance(msg.content, list):
+                        for part in msg.content:
+                            if isinstance(part, dict) and part.get("type") == "image_url":
+                                analysis["vision"] = 1.0
+                                break
+            
+            # 2. Tool Detection
+            if hasattr(request_obj, "tools") and request_obj.tools:
+                analysis["tools"] = 1.0
+                analysis["complexity"] += 0.3 # Tools imply complexity
+                analysis["coding"] += 0.2 # Tools often relate to coding/structured output
+            
+            # 3. JSON Mode Detection
+            if hasattr(request_obj, "response_format") and request_obj.response_format:
+                if request_obj.response_format.get("type") == "json_object":
+                    analysis["coding"] += 0.3 # JSON mode is coding-adjacent
+                    analysis["complexity"] += 0.1
+
+        # ... existing logic ...
         reasoning_keywords = [
             "calculate", "logic", "solve", "reason", "prove", "math",
             "sequence", "pattern", "if then", "therefore", "because", "derive",
@@ -615,7 +618,9 @@ Select the model that best matches the user's prompt needs."""
             "code", "function", "implement", "algorithm", "program",
             "python", "javascript", "java", "sql", "debug", "api", "class",
             "def ", "return", "import", "write code", "bug", "fix", "script",
+            "json", "xml", "yaml", "parse", "schema" # Added data formats
         ]
+        # ... rest of keyword analysis ...
         creative_keywords = [
             "story", "write", "poem", "creative", "imagine", "describe",
             "invent", "fantasy", "narrative", "character", "scene", "song",

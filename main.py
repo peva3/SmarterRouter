@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 
 from router.backends import create_backend
 from router.backends.base import LLMBackend
@@ -21,216 +22,158 @@ from router.config import Settings, init_logging, settings
 from router.database import get_session, init_db
 from router.models import BenchmarkSync, ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
 from router.profiler import ModelProfiler, profile_all_models
+from router.router import RouterEngine
 from router.schemas import (
     ChatCompletionRequest,
     FeedbackRequest,
     sanitize_for_logging,
     sanitize_prompt,
 )
-from sqlalchemy import select
-from router.router import RouterEngine
+from router.skills import skills_registry
 
+
+class AppState:
+    def __init__(self):
+        self.backend: LLMBackend | None = None
+        self.router_engine: RouterEngine | None = None
+        self.background_tasks: set[asyncio.Task] = set()
+        self.current_loaded_model: str | None = None
+        self.rate_limiter: dict[str, list[float]] = {}
+
+
+app_state = AppState()
 logger = logging.getLogger(__name__)
-
-# Security schemes
 security = HTTPBearer(auto_error=False)
 
 
-# Dependency for configuration
 def get_settings() -> Settings:
     return settings
 
 
-# Authentication dependency
 async def verify_admin_token(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-    config: Annotated[Settings, Depends(get_settings)]
+    config: Annotated[Settings, Depends(get_settings)],
 ) -> bool:
     """Verify admin API key if configured."""
-    # If no admin API key is configured, allow access (backward compatibility)
+    # print(f"DEBUG: admin_key={config.admin_api_key}, creds={credentials.credentials if credentials else 'None'}")
     if not config.admin_api_key:
         return True
-    
-    # If admin API key is configured, require valid token
+
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Admin API key required",
+            detail="Admin authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if credentials.credentials != config.admin_api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return True
 
 
-# Rate limiting
-class RateLimiter:
-    """Simple in-memory rate limiter."""
-    
-    def __init__(self):
-        self.requests: dict[str, list[float]] = {}
-    
-    def is_allowed(self, key: str, limit: int, window: int = 60) -> bool:
-        """Check if request is allowed under rate limit."""
-        now = time.time()
-        
-        # Clean old requests
-        if key in self.requests:
-            self.requests[key] = [
-                req_time for req_time in self.requests[key]
-                if now - req_time < window
-            ]
-        else:
-            self.requests[key] = []
-        
-        # Check limit
-        if len(self.requests[key]) >= limit:
-            return False
-        
-        # Record request
-        self.requests[key].append(now)
-        return True
-
-
-rate_limiter = RateLimiter()
-
-
 async def rate_limit_request(
-    request: Request,
-    config: Annotated[Settings, Depends(get_settings)],
+    request: Request, 
+    config: Settings, 
     is_admin: bool = False
 ) -> None:
-    """Apply rate limiting if enabled."""
+    """Simple in-memory rate limiter."""
     if not config.rate_limit_enabled:
         return
+
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
     
-    # Get client identifier (IP address or forwarded IP)
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-    key = f"{client_ip}:{request.url.path}"
+    # Clean up old requests
+    if client_ip in app_state.rate_limiter:
+        app_state.rate_limiter[client_ip] = [
+            t for t in app_state.rate_limiter[client_ip] 
+            if now - t < 60
+        ]
     
-    # Determine limit
-    if is_admin:
-        limit = config.rate_limit_admin_requests_per_minute
-    else:
-        limit = config.rate_limit_requests_per_minute
+    current_requests = len(app_state.rate_limiter.get(client_ip, []))
+    limit = config.rate_limit_admin_requests_per_minute if is_admin else config.rate_limit_requests_per_minute
     
-    if not rate_limiter.is_allowed(key, limit):
+    if current_requests >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Limit: {limit} requests per minute.",
-            headers={"Retry-After": "60"},
+            detail="Rate limit exceeded",
         )
+        
+    if client_ip not in app_state.rate_limiter:
+        app_state.rate_limiter[client_ip] = []
+    app_state.rate_limiter[client_ip].append(now)
 
 
-# Application state
-class AppState:
-    def __init__(self):
-        self.backend: LLMBackend | None = None
-        self.router_engine: RouterEngine | None = None
-        self.known_models: set[str] = set()
-        self.polling_task: asyncio.Task | None = None
-        self.benchmark_sync_task: asyncio.Task | None = None
-        self.current_loaded_model: str | None = None
-
-
-app_state = AppState()
-
-
-async def poll_models(state: AppState) -> None:
-    while True:
-        try:
-            if state.backend:
-                models = await state.backend.list_models()
-                current_models = {m.name for m in models}
-
-                new_models = current_models - state.known_models
-                if new_models:
-                    logger.info(f"New models detected: {new_models}")
-                    profiler = ModelProfiler(state.backend)
-                    for model_name in new_models:
-                        try:
-                            await profiler.profile_model(model_name)
-                        except Exception as e:
-                            logger.error(f"Failed to profile {model_name}: {e}")
-
-                state.known_models = current_models
-
-        except Exception as e:
-            logger.error(f"Error in model polling: {e}")
-
-        await asyncio.sleep(settings.polling_interval)
-
-
-async def sync_benchmarks_daily(state: AppState) -> None:
-    while True:
-        try:
-            if state.backend:
-                models = await state.backend.list_models()
-                model_names = [m.name for m in models]
-                logger.info("Running daily benchmark sync...")
-                count, matched = await sync_benchmarks(model_names)
-                logger.info(f"Benchmark sync completed: {count} models synced")
-
-        except Exception as e:
-            logger.error(f"Error in benchmark sync: {e}")
-
-        await asyncio.sleep(86400)
-
-
-async def startup_event() -> None:
+async def startup_event():
     init_logging()
     init_db()
-    logger.info(f"Starting LLM Router Proxy (provider: {settings.provider})")
+    logger.info("Starting LLM Router Proxy...")
 
-    app_state.backend = create_backend(settings)
-    app_state.router_engine = RouterEngine(
-        app_state.backend, dispatcher_model=settings.router_model
-    )
+    # Initialize backend
+    try:
+        app_state.backend = create_backend(settings)
+        logger.info(f"Initialized backend: {settings.provider}")
+    except Exception as e:
+        logger.error(f"Failed to initialize backend: {e}")
+        # Don't crash, allow retry or partial functionality
+    
+    # Initialize router engine
+    if app_state.backend:
+        app_state.router_engine = RouterEngine(
+            client=app_state.backend,
+            dispatcher_model=settings.router_model
+        )
 
-    models = await app_state.backend.list_models()
-    app_state.known_models = {m.name for m in models}
-    logger.info(f"Initial models: {app_state.known_models}")
+    # Start background sync task
+    if settings.provider == "ollama":
+        task = asyncio.create_task(background_sync_task())
+        app_state.background_tasks.add(task)
+        task.add_done_callback(app_state.background_tasks.discard)
 
-    if app_state.known_models:
-        logger.info("Running initial profiling...")
-        await profile_all_models(app_state.backend)
 
-        logger.info("Running initial benchmark sync...")
+async def shutdown_event():
+    logger.info("Shutting down LLM Router Proxy...")
+    for task in app_state.background_tasks:
+        task.cancel()
+    
+    # Unload model if pinned
+    if settings.pinned_model and app_state.backend:
+        await app_state.backend.unload_model(settings.pinned_model)
+
+
+async def background_sync_task():
+    """Background task to sync benchmarks and profile new models."""
+    while True:
         try:
-            count, matched = await sync_benchmarks(list(app_state.known_models))
-            logger.info(f"Benchmark sync: {count} models synced")
+            if app_state.backend:
+                # 1. Sync Benchmarks (once per day or on startup)
+                # For simplicity, we run it on startup and then rely on restart
+                # But here we can check if it's needed
+                with get_session() as session:
+                    last_sync = get_last_sync()
+                    should_sync = False
+                    if not last_sync:
+                        should_sync = True
+                    elif (datetime.now(timezone.utc) - last_sync.replace(tzinfo=timezone.utc)).days >= 1:
+                        should_sync = True
+                
+                if should_sync:
+                    logger.info("Starting benchmark sync...")
+                    await sync_benchmarks(settings.benchmark_sources.split(","))
+                
+                # 2. Profile New Models
+                # This will only profile models that haven't been profiled yet
+                await profile_all_models(app_state.backend)
+                
         except Exception as e:
-            logger.warning(f"Benchmark sync failed: {e}")
-
-    app_state.polling_task = asyncio.create_task(poll_models(app_state))
-    logger.info("Model polling started")
-
-    app_state.benchmark_sync_task = asyncio.create_task(sync_benchmarks_daily(app_state))
-    logger.info("Benchmark sync task started")
-
-
-async def shutdown_event() -> None:
-    logger.info("Shutting down LLM Router Proxy")
-
-    if app_state.polling_task:
-        app_state.polling_task.cancel()
-        try:
-            await app_state.polling_task
-        except asyncio.CancelledError:
-            pass
-
-    if app_state.benchmark_sync_task:
-        app_state.benchmark_sync_task.cancel()
-        try:
-            await app_state.benchmark_sync_task
-        except asyncio.CancelledError:
-            pass
+            logger.error(f"Background sync task failed: {e}")
+        
+        await asyncio.sleep(settings.polling_interval)
 
 
 @asynccontextmanager
@@ -328,7 +271,8 @@ async def chat_completions(
     response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
     try:
-        routing_result = await app_state.router_engine.select_model(prompt)
+        # Pass full request object for capability detection
+        routing_result = await app_state.router_engine.select_model(messages[-1].content, validated_request)
         selected_model = routing_result.selected_model
         reasoning = routing_result.reasoning
         confidence = routing_result.confidence
@@ -638,6 +582,12 @@ async def reprofile(
         "profiled": [r.model_name for r in results],
         "count": len(results),
     }
+
+
+@app.get("/v1/skills")
+async def list_skills():
+    """List available tools/skills."""
+    return {"skills": skills_registry.list_skills()}
 
 
 @app.post("/v1/feedback")
