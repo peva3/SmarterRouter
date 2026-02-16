@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     prefer_smaller_models: bool = Field(default=True)
     prefer_newer_models: bool = Field(default=True)
 
+    # Quality vs Cost/Speed Tuner (0.0 = max speed/cost saving, 1.0 = max quality)
+    quality_preference: float = Field(default=0.5)
+
+    # Cascading / Fallback settings
+    cascading_enabled: bool = Field(default=True)  # If true, retry with larger models on failure
+
+    # Feedback settings
+    feedback_enabled: bool = Field(default=True)
+
     # Benchmark sources (comma separated)
     benchmark_sources: str = Field(default="huggingface,lmsys")
 

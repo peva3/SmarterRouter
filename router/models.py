@@ -49,6 +49,7 @@ class RoutingDecision(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
+    response_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     prompt_hash: Mapped[str] = mapped_column(String, index=True)
     selected_model: Mapped[str] = mapped_column(String)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -107,3 +108,23 @@ class BenchmarkSync(Base):
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     models_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="pending")
+
+
+class ModelFeedback(Base):
+    """User feedback for model performance."""
+    __tablename__ = "model_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    
+    model_name: Mapped[str] = mapped_column(String, index=True)
+    prompt_hash: Mapped[str | None] = mapped_column(String, index=True)
+    
+    # Feedback type: "positive" (1) or "negative" (-1)
+    # Or detailed: score 1-5
+    score: Mapped[float] = mapped_column(Float) # 1.0 = good, 0.0 = bad, or -1.0 for dislike
+    
+    category: Mapped[str | None] = mapped_column(String) # e.g. "coding", "reasoning"
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)

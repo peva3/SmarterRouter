@@ -58,9 +58,10 @@ When you start the router for the first time:
 ### Normal Operation
 1.  **Polling**: The router periodically checks for new models in your backend.
 2.  **Routing**: When a request comes in:
-    a.  The prompt is analyzed for its category (e.g., coding, reasoning) and complexity.
-    b.  The router queries its database for benchmark data and runtime profiles of available models.
-    c.  A scoring algorithm selects the best model, prioritizing models with strong benchmark data for the prompt's category and matching model size to prompt complexity.
+    a.  The prompt is analyzed for its category (e.g., coding, reasoning) and complexity (difficulty prediction).
+    b.  The router queries its database for benchmark data, runtime profiles, and **user feedback**.
+    c.  A scoring algorithm selects the best model, balancing **quality vs. speed** based on your preference.
+    d.  **Cascading/Fallback**: If the selected model fails, the system automatically retries with the next best capable model.
 3.  **Dispatch**: The request is forwarded to the chosen model.
 4.  **Response**: The response is returned to the user, with an optional signature identifying the model used.
 
@@ -70,14 +71,24 @@ All configuration is managed via environment variables (or the `.env` file). See
 
 **Key Settings:**
 - `ROUTER_PROVIDER`: `ollama`, `llama.cpp`, or `openai`.
-- `ROUTER_OLLAMA_URL`, `ROUTER_LLAMA_CPP_URL`, `ROUTER_OPENAI_BASE_URL`: The URL for your chosen backend.
-- `ROUTER_EXTERNAL_MODEL_NAME`: The name the router presents to frontends (e.g., `hubrouter/main`).
-- `ROUTER_ADMIN_API_KEY`: Set this to a secure key to protect admin endpoints.
-- `ROUTER_GENERATION_TIMEOUT`: How long to wait for a model to generate a response (default: 120s).
+- `ROUTER_QUALITY_PREFERENCE`: 0.0 (Max Speed) to 1.0 (Max Quality). Default 0.5.
+- `ROUTER_CASCADING_ENABLED`: Enable automatic fallback to other models on failure (default: true).
+- `ROUTER_FEEDBACK_ENABLED`: Enable feedback collection to improve routing (default: true).
+- `ROUTER_OLLAMA_URL`: The URL for your chosen backend.
 
 ## API Usage
 
-The router exposes an OpenAI-compatible API.
+### `/v1/feedback` (New)
+Submit user feedback to improve future routing.
+```bash
+curl -X POST http://localhost:11436/v1/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "response_id": "chatcmpl-...",
+    "score": 1.0,
+    "comment": "Great answer!"
+  }'
+```
 
 ### `/v1/models`
 Returns the router itself as a single model, which simplifies frontend integration.

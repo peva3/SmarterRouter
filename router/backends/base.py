@@ -25,6 +25,7 @@ class LLMBackend(Protocol):
         model: str,
         messages: list[dict[str, str]],
         stream: bool = False,
+        keep_alive: float = -1,
         **kwargs: object,
     ) -> dict:
         """Send a chat completion request."""
@@ -34,6 +35,7 @@ class LLMBackend(Protocol):
         self,
         model: str,
         messages: list[dict[str, str]],
+        keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict], float]:
         """Send a streaming chat request. Returns (iterator, latency_ms)."""
         ...
@@ -50,6 +52,10 @@ class LLMBackend(Protocol):
 
     async def unload_model(self, model_name: str) -> bool:
         """Unload model from VRAM. Return False if not supported."""
+        return False
+
+    async def load_model(self, model_name: str, keep_alive: float = -1) -> bool:
+        """Explicitly load a model into VRAM. Return False if not supported."""
         return False
 
 

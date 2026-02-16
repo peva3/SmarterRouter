@@ -62,6 +62,16 @@ class ChatCompletionRequest(BaseModel):
         return v
 
 
+class FeedbackRequest(BaseModel):
+    """User feedback for a routing decision."""
+    
+    response_id: str | None = Field(default=None, description="The ID of the chat completion response")
+    model_name: str | None = Field(default=None, description="The name of the model (optional if response_id provided)")
+    score: float = Field(..., ge=-1.0, le=1.0, description="Feedback score: 1.0 (good), -1.0 (bad), or 0.0-1.0 scale")
+    comment: str | None = Field(default=None, max_length=500, description="Optional comment")
+    category: str | None = Field(default=None, description="Optional task category")
+
+
 def sanitize_prompt(prompt: str, max_length: int = 10000) -> str:
     """
     Sanitize a prompt for safe processing.

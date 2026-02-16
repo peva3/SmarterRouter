@@ -70,12 +70,14 @@ class OllamaBackend:
         model: str,
         messages: list[dict[str, str]],
         stream: bool = False,
+        keep_alive: float = -1,
         **kwargs: Any,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": stream,
+            "keep_alive": keep_alive,
         }
         payload.update(kwargs)
         return await self._request("POST", "/api/chat", json=payload, timeout=self.generation_timeout)
@@ -84,16 +86,22 @@ class OllamaBackend:
         self,
         model: str,
         messages: list[dict[str, str]],
+        keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/api/chat"
         start_time = time.perf_counter()
 
         async def stream_generator() -> AsyncIterator[dict[str, Any]]:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.generation_timeout) as client:
                 async with client.stream(
                     "POST",
                     url,
-                    json={"model": model, "messages": messages, "stream": True},
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": True,
+                        "keep_alive": keep_alive,
+                    },
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
@@ -123,3 +131,56 @@ class OllamaBackend:
         except Exception as e:
             logger.error(f"Error during unload model {model_name}: {e}")
             return False
+
+    async def load_model(self, model_name: str, keep_alive: float = -1) -> bool:
+        """Explicitly load a model into VRAM with optional keep_alive duration.
+        
+        Args:
+            model_name: Name of the model to load
+            keep_alive: Duration to keep model in VRAM. -1 = forever, 0 = unload after, 
+                       positive number = seconds to keep loaded
+        """
+        logger.info(f"Loading model: {model_name} (keep_alive={keep_alive})")
+        try:
+            await self._request(
+                "POST",
+                "/api/generate",
+                json={"model": model_name, "prompt": "", "keep_alive": keep_alive},
+                timeout=self.generation_timeout,
+            )
+            logger.info(f"Model {model_name} loaded successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load model {model_name}: {e}")
+            return False
+
+    async def ensure_model_loaded(self, model_name: str, pinned_model: str | None = None) -> bool:
+        """Ensure a model is loaded in VRAM, unloading others if necessary.
+        
+        This is the key method for proactive VRAM management:
+        1. First unload any model that's NOT the target model and NOT the pinned model
+        2. Then load the target model
+        
+        Args:
+            model_name: The model we want to use
+            pinned_model: A model that should be kept in VRAM (e.g., a small fast model)
+        
+        Returns:
+            True if the model is ready for inference
+        """
+        current = getattr(self, '_current_model', None)
+        
+        if current == model_name:
+            logger.debug(f"Model {model_name} already loaded")
+            return True
+        
+        if current and current != pinned_model:
+            logger.info(f"VRAM management: unloading {current} to load {model_name}")
+            await self.unload_model(current)
+        
+        if model_name != pinned_model:
+            logger.info(f"VRAM management: loading {model_name}")
+            await self.load_model(model_name)
+        
+        self._current_model = model_name
+        return True

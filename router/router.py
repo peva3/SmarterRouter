@@ -12,7 +12,7 @@ from router.backends.base import LLMBackend
 from router.benchmark_db import get_all_benchmarks, get_benchmarks_for_models
 from router.config import settings
 from router.database import get_session
-from router.models import ModelBenchmark, ModelProfile, RoutingDecision
+from router.models import ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ Select the model that best matches the user's prompt needs."""
             result = self._parse_llm_response(content, model_names)
 
             if result:
-                self._log_decision(prompt, result["model"], 0.9, result["reasoning"])
+                # self._log_decision(prompt, result["model"], 0.9, result["reasoning"]) # Moved to explicit call
                 return RoutingResult(
                     selected_model=result["model"],
                     confidence=0.9,
@@ -148,9 +148,37 @@ Select the model that best matches the user's prompt needs."""
 
         return None
 
+    def _get_model_feedback_scores(self) -> dict[str, float]:
+        """Get average feedback score for each model."""
+        if not settings.feedback_enabled:
+            return {}
+            
+        try:
+            with get_session() as session:
+                # Simple average score per model
+                # In real prod, use proper aggregation query: SELECT model_name, AVG(score) ...
+                feedbacks = session.execute(select(ModelFeedback)).scalars().all()
+                
+                model_scores = {}
+                model_counts = {}
+                
+                for f in feedbacks:
+                    model_scores[f.model_name] = model_scores.get(f.model_name, 0.0) + f.score
+                    model_counts[f.model_name] = model_counts.get(f.model_name, 0) + 1
+                
+                return {
+                    name: score / model_counts[name]
+                    for name, score in model_scores.items() 
+                    if model_counts.get(name, 0) > 0
+                }
+        except Exception as e:
+            logger.warning(f"Failed to fetch feedback scores: {e}")
+            return {}
+
     async def _keyword_dispatch(self, prompt: str, model_names: list[str]) -> RoutingResult:
         profiles = self._get_all_profiles()
         benchmarks = get_all_benchmarks()  # Get ALL benchmarks for fuzzy matching
+        feedback_scores = self._get_model_feedback_scores()
 
         if not profiles and not benchmarks:
             logger.warning("No profiles or benchmarks found, selecting first available model")
@@ -163,7 +191,9 @@ Select the model that best matches the user's prompt needs."""
         analysis = self._analyze_prompt(prompt)
         logger.info(f"Prompt analysis: {analysis}")
         
-        scores = self._calculate_combined_scores(profiles, benchmarks, analysis, model_names)
+        scores = self._calculate_combined_scores(
+            profiles, benchmarks, analysis, model_names, feedback_scores
+        )
         
         # Log all scores for debugging
         sorted_scores = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
@@ -203,7 +233,7 @@ Select the model that best matches the user's prompt needs."""
             confidence = scores[best_model_name]["score"]
             reasoning = self._build_reasoning(analysis, scores[best_model_name])
 
-        self._log_decision(prompt, best_model_name, confidence, reasoning)
+        # self._log_decision(prompt, best_model_name, confidence, reasoning) # Moved to explicit call
 
         return RoutingResult(
             selected_model=best_model_name,
@@ -235,11 +265,17 @@ Select the model that best matches the user's prompt needs."""
         benchmarks: list[dict],
         analysis: dict[str, float],
         model_names: list[str],
+        feedback_scores: dict[str, float] = {},
     ) -> dict[str, dict[str, float]]:
         scores: dict[str, dict[str, float]] = {}
 
         profile_map = {p["name"]: p for p in profiles}
         benchmark_map = {b["ollama_name"]: b for b in benchmarks}
+        
+        # Quality vs Speed Trade-off
+        quality_pref = settings.quality_preference
+        speed_weight = 1.0 - quality_pref
+        quality_weight = quality_pref + 0.5 # Boost quality signals if preferred
 
         normalized_benchmark_map = {}
         for name in model_names:
@@ -353,7 +389,9 @@ Select the model that best matches the user's prompt needs."""
                 inference_score = affinity.get(category, 0.0)
                 
                 # Weighted combination of signals
-                combined_cat_score = (benchmark_score * 1.5) + (elo_signal * 1.0) + (inference_score * 0.4)
+                combined_cat_score = (benchmark_score * 1.5 * quality_weight) + \
+                                     (elo_signal * 1.0 * quality_weight) + \
+                                     (inference_score * 0.4 * quality_weight)
                 
                 # If this is the dominant category, apply the 20x Category-First boost
                 # BUT only if we have actual benchmark data (not just name inference)
@@ -369,39 +407,80 @@ Select the model that best matches the user's prompt needs."""
                 else:
                     base_score += combined_cat_score * 0.01
 
-            # Bonus factors (speed, size, newness, complexity)
+            # Bonus factors (speed, size, newness, complexity, feedback)
             bonus_score = 0.0
             params = self._extract_parameter_count(model_name)
             complexity = analysis.get("complexity", 0.0)
             has_benchmark = normalized_benchmark_map.get(model_name) is not None
             
+            # Feedback Bonus
+            fb_score = feedback_scores.get(model_name, 0.0)
+            if fb_score != 0:
+                bonus_score += fb_score * 2.0 # Significant impact for user preference
+            
             # Bonus for having benchmark data (prefer data-driven over name-based)
             if has_benchmark:
-                bonus_score += 0.3  # Moderate bonus for having actual benchmark data
+                bonus_score += 0.3 * quality_weight
 
-            # Complexity-Size Matching Logic
-            if complexity >= 0.3:
-                # Moderate to high complexity: Prefer larger models
+            # === SIZE/CAPACITY SCORING ===
+            # Only apply size bonus when we have benchmark data OR high complexity
+            # This prevents size from dominating when we only have runtime profiles (speed-based routing)
+            size_score = 0.0
+            if params:
+                if params >= 30:
+                    size_score = 3.0 * quality_weight   # Strong preference for very large models
+                elif params >= 14:
+                    size_score = 2.0 * quality_weight   # Good preference for large models
+                elif params >= 7:
+                    size_score = 1.0 * quality_weight   # Medium preference for mid-size models
+                elif params >= 3:
+                    size_score = 0.0   # Neutral for small models
+                else:
+                    # Penalize tiny models less if we prefer speed (low quality_pref)
+                    penalty = -2.0 if quality_pref >= 0.5 else -0.5
+                    size_score = penalty
+            
+            # Apply size score only when we have benchmark data OR high complexity
+            if has_benchmark or complexity >= 0.3:
+                bonus_score += size_score * 0.5
+
+            # Complexity-Size Matching Logic (enhanced)
+            if complexity >= 0.5:
+                # Very high complexity: STRONGLY prefer larger models
                 if params and params >= 30:
-                    bonus_score += 2.0  # Strong boost for 30B+ on complex tasks
+                    bonus_score += 3.0 * quality_weight
                 elif params and params >= 14:
-                    bonus_score += 1.2  # Good boost for 14B+
+                    bonus_score += 2.0 * quality_weight
                 elif params and params >= 7:
-                    bonus_score += 0.4  # Small boost for 7B+
+                    bonus_score += 1.0 * quality_weight
                 elif params and params < 4:
-                    bonus_score -= 2.0  # Penalty for tiny models on complex tasks
+                    bonus_score -= 3.0 * quality_weight
+            elif complexity >= 0.3:
+                # Moderate complexity: Prefer larger models
+                if params and params >= 30:
+                    bonus_score += 2.0 * quality_weight
+                elif params and params >= 14:
+                    bonus_score += 1.2 * quality_weight
+                elif params and params >= 7:
+                    bonus_score += 0.4 * quality_weight
+                elif params and params < 4:
+                    bonus_score -= 2.0 * quality_weight
             elif complexity < 0.15:
                 # Low complexity: Slight preference for small models, but not heavy penalty for large
                 if params and params <= 4:
-                    bonus_score += 0.3 
+                    bonus_score += 0.3 * speed_weight
                 elif params and params >= 30:
-                    bonus_score -= 0.3 # Small penalty for overkill (not -1.0)
+                    bonus_score -= 0.3 * speed_weight
             
             if profile:
-                # Speed bonus (only for simple tasks)
-                if complexity < 0.4 and profile.get("avg_response_time_ms", 0) > 0:
-                    time_factor = 1.0 - min(profile["avg_response_time_ms"] / 60000.0, 0.5)
-                    bonus_score += time_factor * 0.1
+                # Speed bonus (only for simple tasks OR if speed is preferred)
+                # Boost speed importance if quality_pref is low
+                speed_importance = speed_weight * 2.0
+                
+                if (complexity < 0.4 or speed_importance > 1.0) and profile.get("avg_response_time_ms", 0) > 0:
+                    # More sensitive time factor (baseline 10s instead of 60s)
+                    time_factor = 1.0 - min(profile["avg_response_time_ms"] / 10000.0, 0.8)
+                    bonus_score += time_factor * 0.2 * speed_importance
                 
                 # Newness bonus
                 if settings.prefer_newer_models and profile.get("first_seen"):
@@ -430,8 +509,11 @@ Select the model that best matches the user's prompt needs."""
         """Extract parameter count in billions from model name."""
         name_lower = model_name.lower()
         
-        # 1. Direct Regex (e.g., "7b", "0.5b", "1.5b")
-        match = re.search(r"(\d+(\.\d+)?)b", name_lower)
+        # 1. Direct Regex (e.g., "7b", "0.5b", "1.5b") - check BEFORE colon
+        # First, get the part before the colon (the model tag)
+        model_tag = name_lower.split(":")[0] if ":" in name_lower else name_lower
+        
+        match = re.search(r"(\d+(\.\d+)?)\s*b", model_tag)
         if match:
             return float(match.group(1))
             
@@ -443,6 +525,8 @@ Select the model that best matches the user's prompt needs."""
             "large": 70.0,
             "nemo": 12.0,   # Mistral-Nemo
             "r1": 14.0,     # DeepSeek-R1 (common Ollama default is 14B)
+            "gemma3": 1.0,  # Gemma 3 is 1B
+            "gemma2": 9.0,  # Gemma 2 is 9B
         }
         
         for key, size in size_map.items():
@@ -451,18 +535,18 @@ Select the model that best matches the user's prompt needs."""
                 
         # 3. Handle names like "llama3.1" (default is 8b)
         if "llama3" in name_lower or "llama3.1" in name_lower or "llama3.2" in name_lower:
-            if ":1b" in name_lower: return 1.0
-            if ":3b" in name_lower: return 3.0
-            if ":8b" in name_lower: return 8.0
+            if ":1b" in name_lower or "1b" in model_tag: return 1.0
+            if ":3b" in name_lower or "3b" in model_tag: return 3.0
+            if ":8b" in name_lower or "8b" in model_tag: return 8.0
             return 8.0 # default
             
         if "qwen2.5" in name_lower:
-            if ":0.5b" in name_lower: return 0.5
-            if ":1.5b" in name_lower: return 1.5
-            if ":7b" in name_lower: return 7.0
-            if ":14b" in name_lower: return 14.0
-            if ":32b" in name_lower: return 32.0
-            if ":72b" in name_lower: return 72.0
+            if ":0.5b" in name_lower or "0.5b" in model_tag: return 0.5
+            if ":1.5b" in name_lower or "1.5b" in model_tag: return 1.5
+            if ":7b" in name_lower or "7b" in model_tag: return 7.0
+            if ":14b" in name_lower or "14b" in model_tag: return 14.0
+            if ":32b" in name_lower or "32b" in model_tag: return 32.0
+            if ":72b" in name_lower or "72b" in model_tag: return 72.0
             
         return None
 
@@ -559,40 +643,48 @@ Select the model that best matches the user's prompt needs."""
             if kw in prompt_lower:
                 analysis["factual"] += 0.3
 
-        # Complexity Detection
+        # Complexity Detection (Enhanced for Difficulty Prediction)
+        # Length heuristics
         if len(prompt) > 500:
-            analysis["complexity"] += 0.3
+            analysis["complexity"] += 0.2
         if len(prompt) > 1500:
-            analysis["complexity"] += 0.4
-
+            analysis["complexity"] += 0.3
+            
+        # Structure heuristics
+        if prompt.count("?") > 2:
+            analysis["complexity"] += 0.1
+        if prompt.count("\n") > 5:
+            analysis["complexity"] += 0.1
+            
+        # Keyword-based complexity
         complexity_keywords = [
             "complex", "expert", "detailed", "comprehensive", "optimized", 
             "architecture", "distributed", "performance", "scalable", "deep dive",
             "advanced", "professional", "senior", "production-ready",
             "implement", "algorithm", "data structure", "tree", "graph", "recursive",
-            "unit test", "type hint", "generics", "async", "concurrent"
+            "unit test", "type hint", "generics", "async", "concurrent",
+            "nuance", "subtle", "imply", "hidden meaning", "step-by-step", "reasoning chain"
         ]
+        
         for kw in complexity_keywords:
             if kw in prompt_lower:
-                analysis["complexity"] += 0.25
-
-        if prompt.count("?") > 2 or prompt.count("\n") > 5:
-            analysis["complexity"] += 0.2
-
+                analysis["complexity"] += 0.15 # Incremental boost
+                
         # Additional complexity for coding tasks with multiple requirements
         if analysis["coding"] > 0.5:
             # Count coding-related keywords to gauge complexity
             coding_complexity_indicators = [
                 "with", "include", "and", "also", "plus", "additionally",
                 "operations", "methods", "functions", "classes", "interface", "inheritance",
-                "generic", "template", "exception", "handle", "error"
+                "generic", "template", "exception", "handle", "error", "security", "thread"
             ]
             indicator_count = sum(1 for ind in coding_complexity_indicators if ind in prompt_lower)
             if indicator_count >= 3:
-                analysis["complexity"] += 0.4
+                analysis["complexity"] += 0.3
             elif indicator_count >= 2:
-                analysis["complexity"] += 0.2
+                analysis["complexity"] += 0.15
 
+        # Cap complexity at 1.0
         analysis["complexity"] = min(analysis["complexity"], 1.0)
 
         code_indicators = ["```", "def ", "function ", "const ", "let ", "var ", "class "]
@@ -630,11 +722,11 @@ Select the model that best matches the user's prompt needs."""
             scores = {"coding": 0.1, "reasoning": 0.1, "creativity": 0.1, "factual": 0.1}
             
             # Specialist Boosts: Only for models that explicitly mention these in their name
-            if any(kw in name_lower for kw in ["coder", "starcoder", "codegeex"]):
+            if any(kw in name_lower for kw in ["coder", "starcoder", "codegeex", "codellama", "deepseek-coder"]):
                 scores["coding"] = 0.9
                 scores["reasoning"] = 0.5 # Coders are usually good at logic too
             
-            if any(kw in name_lower for kw in ["r1", "math", "logic", "thought"]):
+            if any(kw in name_lower for kw in ["r1", "math", "logic", "thought", "reasoner"]):
                 scores["reasoning"] = 1.0
                 
             if any(kw in name_lower for kw in ["dolphin", "uncensored", "creative", "writer"]):
@@ -650,12 +742,13 @@ Select the model that best matches the user's prompt needs."""
         
         return affinity
 
-    def _log_decision(
+    def log_decision(
         self,
         prompt: str,
         selected: str,
         confidence: float,
         reasoning: str,
+        response_id: str | None = None,
     ) -> None:
         try:
             prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
@@ -666,6 +759,7 @@ Select the model that best matches the user's prompt needs."""
                     selected_model=selected,
                     confidence=confidence,
                     reasoning=reasoning,
+                    response_id=response_id,
                 )
                 session.add(decision)
                 session.commit()

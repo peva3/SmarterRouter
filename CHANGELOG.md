@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-16
+
+### Enhanced Intelligence & Feedback
+
+Implemented "Best Practice" routing strategies inspired by Hybrid LLM, RouteLLM, and GraphRouter papers.
+
+#### Added
+- **Query Difficulty Predictor**:
+  - Enhanced prompt analysis to detect complexity based on length, structure, and keywords.
+  - Automatically identifies "hard" prompts that require larger models.
+- **Cost-Quality Tuner**:
+  - New `ROUTER_QUALITY_PREFERENCE` setting (0.0 - 1.0).
+  - Allows explicit trade-off between speed (smaller models) and quality (larger/smarter models).
+- **Size-Aware Routing**:
+  - Implemented scoring bonuses for larger models (14B, 30B+) on complex tasks.
+  - Applies penalties to tiny models (<3B) when high capability is needed.
+- **Feedback Loop**:
+  - New `/v1/feedback` endpoint for submitting user ratings.
+  - Router now boosts scores of models that have received positive feedback in the past.
+  - Database schema updated with `ModelFeedback` table.
+- **Reliability Improvements**:
+  - Explicit `response_id` tracking for linking feedback to decisions.
+  - Enhanced fallback mechanism: if a model fails, the next best model is automatically tried.
+
+#### Changed
+- **Scoring Algorithm**: Major overhaul of `_calculate_combined_scores`.
+  - Now considers: Benchmark Data, Runtime Profile, Name Affinity, Complexity, Size, and User Feedback.
+  - Dynamic weighting based on `quality_preference`.
+  - Significantly improved heuristic matching for models like `codellama`.
+
+#### Testing
+- Added tests for quality preference impact.
+- Added tests for feedback scoring boost.
+- Fixed and updated existing router tests to reflect smarter heuristics.
+
+---
+
 ## [1.1.0] - 2026-02-16
 
 ### Multi-Backend Support & VRAM Management

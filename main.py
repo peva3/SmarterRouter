@@ -19,10 +19,11 @@ from router.benchmark_db import get_last_sync
 from router.benchmark_sync import sync_benchmarks
 from router.config import Settings, init_logging, settings
 from router.database import get_session, init_db
-from router.models import BenchmarkSync, ModelBenchmark, ModelProfile
+from router.models import BenchmarkSync, ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
 from router.profiler import ModelProfiler, profile_all_models
 from router.schemas import (
     ChatCompletionRequest,
+    FeedbackRequest,
     sanitize_for_logging,
     sanitize_prompt,
 )
@@ -323,10 +324,14 @@ async def chat_completions(
             status_code=400,
         )
 
+    # Generate response ID early
+    response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
     try:
         routing_result = await app_state.router_engine.select_model(prompt)
         selected_model = routing_result.selected_model
         reasoning = routing_result.reasoning
+        confidence = routing_result.confidence
         # Use sanitized logging
         logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
@@ -335,6 +340,7 @@ async def chat_completions(
         if models:
             selected_model = models[0].name
             reasoning = "Fallback to first available model"
+            confidence = 0.0
         else:
             return JSONResponse(
                 {"error": {"message": "No models available", "type": "internal_error"}},
@@ -345,8 +351,22 @@ async def chat_completions(
     messages_dict = [{"role": msg.role, "content": msg.content} for msg in messages]
 
     if stream:
+        # Proactive VRAM management for streaming - unload non-needed models before streaming
+        current = app_state.current_loaded_model
+        pinned = config.pinned_model
+        
+        if current and current != selected_model and current != pinned:
+            logger.info(f"VRAM management (streaming): unloading {current} to load {selected_model}")
+            await app_state.backend.unload_model(current)
+        
+        # Update current model state
+        app_state.current_loaded_model = selected_model
+        
+        # Log the decision now that we're committing to it
+        app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
+
         return StreamingResponse(
-            stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config),
+            stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config, response_id),
             media_type="text/event-stream",
         )
 
@@ -363,6 +383,12 @@ async def chat_completions(
     except:
         fallback_list = [selected_model]
     
+    # If cascading is enabled, we might want to ensure we don't just randomly fallback, 
+    # but that's handled by the router mostly returning the "best" model first.
+    # The simple fallback list is sufficient for reliability.
+    
+    final_model = selected_model
+
     for try_model in fallback_list:
         # Proactive VRAM management
         current = app_state.current_loaded_model
@@ -379,9 +405,14 @@ async def chat_completions(
                 messages=messages_dict,
                 stream=False,
             )
-            selected_model = try_model
-            app_state.current_loaded_model = selected_model
-            logger.info(f"Generation succeeded with model: {selected_model}")
+            final_model = try_model
+            app_state.current_loaded_model = final_model
+            logger.info(f"Generation succeeded with model: {final_model}")
+            
+            # If we fell back, update reasoning
+            if final_model != selected_model:
+                reasoning += f" (Fallback from {selected_model})"
+                
             break
         except Exception as try_error:
             last_error = try_error
@@ -395,17 +426,20 @@ async def chat_completions(
             status_code=500,
         )
 
+    # Log the final decision
+    app_state.router_engine.log_decision(prompt, final_model, confidence, reasoning, response_id)
+
     content = response.get("message", {}).get("content", "")
 
     if config.signature_enabled:
-        signature = config.signature_format.format(model=selected_model)
+        signature = config.signature_format.format(model=final_model)
         content += signature
 
     return {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "id": response_id,
         "object": "chat.completion",
         "created": datetime.now(timezone.utc).timestamp(),
-        "model": selected_model,
+        "model": final_model,
         "choices": [
             {
                 "index": 0,
@@ -431,8 +465,8 @@ async def stream_chat(
     messages: list[dict[str, str]],
     reasoning: str,
     config: Settings,
+    chunk_id: str,
 ) -> AsyncIterator[str]:
-    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = datetime.now(timezone.utc).timestamp()
 
     try:
@@ -500,8 +534,16 @@ async def stream_chat(
         yield "data: [DONE]\n\n"
 
     except Exception as e:
-        logger.error(f"Streaming failed: {e}")
-        error_data = {"error": {"message": str(e)}}
+        logger.error(f"Streaming failed: {e}", exc_info=True)
+        error_message = str(e)
+        
+        # Provide more helpful error messages for common issues
+        if "timeout" in error_message.lower():
+            error_message = f"Timeout error: The model took too long to respond. Current timeout: {config.generation_timeout}s. Try increasing ROUTER_GENERATION_TIMEOUT."
+        elif "connection" in error_message.lower():
+            error_message = "Connection error: Could not connect to the LLM backend. Please check that Ollama is running and accessible."
+        
+        error_data = {"error": {"message": error_message, "type": "internal_error"}}
         yield f"data: {json.dumps(error_data)}\n\n"
 
 
@@ -596,6 +638,54 @@ async def reprofile(
         "profiled": [r.model_name for r in results],
         "count": len(results),
     }
+
+
+@app.post("/v1/feedback")
+async def feedback(
+    request: FeedbackRequest,
+    config: Annotated[Settings, Depends(get_settings)],
+):
+    """Submit user feedback for a routing decision."""
+    if not config.feedback_enabled:
+        return JSONResponse({"error": "Feedback collection is disabled"}, status_code=403)
+
+    try:
+        with get_session() as session:
+            # Create feedback entry
+            fb = ModelFeedback(
+                model_name=request.model_name,
+                prompt_hash=None, # Will be linked if we look up the response_id
+                score=request.score,
+                comment=request.comment,
+                category=request.category,
+            )
+            
+            # If response_id provided, link to original decision
+            if request.response_id:
+                decision = session.execute(
+                    select(RoutingDecision).where(RoutingDecision.response_id == request.response_id)
+                ).scalar_one_or_none()
+                
+                if decision:
+                    fb.prompt_hash = decision.prompt_hash
+                    # Auto-fill model name if not provided
+                    if not fb.model_name:
+                        fb.model_name = decision.selected_model
+            
+            if not fb.model_name:
+                return JSONResponse(
+                    {"error": "model_name is required if response_id is not found"}, 
+                    status_code=400
+                )
+
+            session.add(fb)
+            session.commit()
+            
+            return {"status": "success", "id": fb.id}
+            
+    except Exception as e:
+        logger.error(f"Failed to save feedback: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 def main() -> None:
