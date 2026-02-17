@@ -58,11 +58,11 @@ class TestInitLogging:
         """Test that init_logging sets the correct level."""
         with patch("logging.basicConfig") as mock_basic_config:
             init_logging()
-            
+
             # Check that basicConfig was called
             mock_basic_config.assert_called_once()
             call_args = mock_basic_config.call_args
-            
+
             # Verify format includes expected fields
             assert "%(asctime)s" in call_args.kwargs["format"]
             assert "%(name)s" in call_args.kwargs["format"]
@@ -76,13 +76,13 @@ class TestInitLogging:
             ("WARNING", logging.WARNING),
             ("ERROR", logging.ERROR),
         ]
-        
+
         for level_str, level_int in test_cases:
             with patch("router.config.settings") as mock_settings:
                 mock_settings.log_level = level_str
-                
+
                 with patch("logging.basicConfig") as mock_basic_config:
                     init_logging()
-                    
+
                     call_args = mock_basic_config.call_args
                     assert call_args.kwargs["level"] == level_int

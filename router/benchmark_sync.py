@@ -22,6 +22,7 @@ async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
     # In a real app, inject settings or read from config
     # For now, default to all if not specified, or parse from env
     from router.config import settings
+
     enabled_sources = [s.strip().lower() for s in settings.benchmark_sources.split(",")]
 
     providers: list[BenchmarkProvider] = []
@@ -39,30 +40,30 @@ async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
         try:
             data = await provider.fetch_data(ollama_models)
             logger.info(f"Provider {provider.name} returned {len(data)} records")
-            
+
             for item in data:
                 name = item["ollama_name"]
                 if name not in all_data:
                     all_data[name] = {}
-                
+
                 # Merge data (non-null values overwrite)
                 for k, v in item.items():
                     if v is not None:
                         all_data[name][k] = v
-                
+
                 matched_models.add(name)
-                
+
         except Exception as e:
             logger.error(f"Provider {provider.name} failed: {e}")
 
     # Convert merged dict back to list
     final_benchmarks = list(all_data.values())
-    
+
     count = bulk_upsert_benchmarks(final_benchmarks)
 
     current_ollama_names = [name.split(":")[0].lower() for name in ollama_models]
     # Note: normalize logic duplicates slightly here, ideally centralized
-    
+
     update_sync_status("completed", count)
     logger.info(f"Benchmark sync completed: {count} models synced")
 

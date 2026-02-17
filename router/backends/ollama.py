@@ -63,7 +63,9 @@ class OllamaBackend(LLMBackend):
             "stream": stream,
         }
         payload.update(kwargs)
-        return await self._request("POST", "/api/generate", json=payload, timeout=self.generation_timeout)
+        return await self._request(
+            "POST", "/api/generate", json=payload, timeout=self.generation_timeout
+        )
 
     async def chat(
         self,
@@ -80,7 +82,9 @@ class OllamaBackend(LLMBackend):
             "keep_alive": keep_alive,
         }
         payload.update(kwargs)
-        return await self._request("POST", "/api/chat", json=payload, timeout=self.generation_timeout)
+        return await self._request(
+            "POST", "/api/chat", json=payload, timeout=self.generation_timeout
+        )
 
     async def chat_streaming(
         self,
@@ -89,7 +93,7 @@ class OllamaBackend(LLMBackend):
         keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/api/chat"
-        
+
         # Use a mutable container to track timing inside the generator
         timing = {"start": time.perf_counter(), "first_token": None}
         latency_ms = 0.0
@@ -141,10 +145,10 @@ class OllamaBackend(LLMBackend):
 
     async def load_model(self, model_name: str, keep_alive: float = -1) -> bool:
         """Explicitly load a model into VRAM with optional keep_alive duration.
-        
+
         Args:
             model_name: Name of the model to load
-            keep_alive: Duration to keep model in VRAM. -1 = forever, 0 = unload after, 
+            keep_alive: Duration to keep model in VRAM. -1 = forever, 0 = unload after,
                        positive number = seconds to keep loaded
         """
         logger.info(f"Loading model: {model_name} (keep_alive={keep_alive})")
@@ -163,32 +167,32 @@ class OllamaBackend(LLMBackend):
 
     async def ensure_model_loaded(self, model_name: str, pinned_model: str | None = None) -> bool:
         """Ensure a model is loaded in VRAM, unloading others if necessary.
-        
+
         This is the key method for proactive VRAM management:
         1. First unload any model that's NOT the target model and NOT the pinned model
         2. Then load the target model
-        
+
         Args:
             model_name: The model we want to use
             pinned_model: A model that should be kept in VRAM (e.g., a small fast model)
-        
+
         Returns:
             True if the model is ready for inference
         """
-        current = getattr(self, '_current_model', None)
-        
+        current = getattr(self, "_current_model", None)
+
         if current == model_name:
             logger.debug(f"Model {model_name} already loaded")
             return True
-        
+
         if current and current != pinned_model:
             logger.info(f"VRAM management: unloading {current} to load {model_name}")
             await self.unload_model(current)
-        
+
         if model_name != pinned_model:
             logger.info(f"VRAM management: loading {model_name}")
             await self.load_model(model_name)
-        
+
         self._current_model = model_name
         return True
 
@@ -203,4 +207,6 @@ class OllamaBackend(LLMBackend):
             "input": input_text,
         }
         payload.update(kwargs)
-        return await self._request("POST", "/api/embed", json=payload, timeout=self.generation_timeout)
+        return await self._request(
+            "POST", "/api/embed", json=payload, timeout=self.generation_timeout
+        )

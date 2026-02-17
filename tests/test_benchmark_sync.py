@@ -38,9 +38,9 @@ async def test_sync_benchmarks_single_provider():
                     with patch("router.benchmark_sync.LMSYSProvider"):
                         with patch("router.benchmark_sync.ArtificialAnalysisProvider"):
                             mock_upsert.return_value = 1
-                            
+
                             count, matched = await sync_benchmarks(["llama3"])
-                            
+
                             # Since we're mocking everything, just verify it runs
                             assert isinstance(count, int)
 
@@ -82,12 +82,12 @@ async def test_sync_benchmarks_multiple_providers():
 @pytest.mark.asyncio
 async def test_sync_benchmarks_provider_failure():
     """Test that one provider failure doesn't break others."""
-    
+
     class FailingProvider(BenchmarkProvider):
         @property
         def name(self) -> str:
             return "failing"
-        
+
         async def fetch_data(self, ollama_models: list[str]) -> list[dict]:
             raise Exception("Provider failed")
 
@@ -95,13 +95,13 @@ async def test_sync_benchmarks_provider_failure():
         @property
         def name(self) -> str:
             return "working"
-        
+
         async def fetch_data(self, ollama_models: list[str]) -> list[dict]:
             return [{"ollama_name": "llama3", "mmlu": 70.0}]
 
     # Verify that exception in one doesn't stop processing
     providers = [FailingProvider(), WorkingProvider()]
-    
+
     all_data = {}
     for provider in providers:
         try:
@@ -126,9 +126,9 @@ async def test_sync_benchmarks_empty_models():
     with patch("router.benchmark_sync.bulk_upsert_benchmarks") as mock_upsert:
         with patch("router.benchmark_sync.update_sync_status"):
             mock_upsert.return_value = 0
-            
+
             count, matched = await sync_benchmarks([])
-            
+
             # Should handle empty list gracefully
             assert isinstance(count, int)
 
@@ -136,16 +136,16 @@ async def test_sync_benchmarks_empty_models():
 @pytest.mark.asyncio
 async def test_sync_benchmarks_provider_selection():
     """Test that only enabled providers are used."""
-    
+
     with patch("router.config.settings") as mock_settings:
         # Test with huggingface only
         mock_settings.benchmark_sources = "huggingface"
-        
+
         with patch("router.benchmark_sync.HuggingFaceProvider") as mock_hf:
             with patch("router.benchmark_sync.LMSYSProvider") as mock_lmsys:
                 mock_hf.return_value = MockProvider("huggingface", [])
                 mock_lmsys.return_value = MockProvider("lmsys", [])
-                
+
                 # In the actual code, we'd verify only HuggingFace is instantiated
                 # For now, just verify the config parsing
                 sources = [s.strip().lower() for s in mock_settings.benchmark_sources.split(",")]

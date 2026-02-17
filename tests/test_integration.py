@@ -28,7 +28,7 @@ def client():
 @pytest.fixture
 def authed_client():
     """Create an authenticated test client."""
-    
+
     def get_settings_override_authed():
         return Settings(admin_api_key="test-key")
 
@@ -91,9 +91,11 @@ class TestAdminEndpoints:
 
     def test_get_profiles_unauthorized(self, client):
         """Test admin endpoint without auth when it's required (should fail)."""
+
         # We need to simulate a state where auth is required for this client
         def get_settings_override():
             return Settings(admin_api_key="a-key-is-set")
+
         app.dependency_overrides[get_settings] = get_settings_override
         response = client.get("/admin/profiles")
         assert response.status_code == 401
@@ -108,6 +110,7 @@ class TestAdminEndpoints:
     def test_get_benchmarks_unauthorized(self, client):
         def get_settings_override():
             return Settings(admin_api_key="a-key-is-set")
+
         app.dependency_overrides[get_settings] = get_settings_override
         response = client.get("/admin/benchmarks")
         assert response.status_code == 401
@@ -118,10 +121,11 @@ class TestAdminEndpoints:
             with patch("main.get_last_sync"):
                 response = authed_client.get("/admin/benchmarks")
                 assert response.status_code == 200
-    
+
     def test_reprofile_unauthorized(self, client):
         def get_settings_override():
             return Settings(admin_api_key="a-key-is-set")
+
         app.dependency_overrides[get_settings] = get_settings_override
         response = client.post("/admin/reprofile")
         assert response.status_code == 401

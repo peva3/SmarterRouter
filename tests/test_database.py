@@ -17,7 +17,7 @@ def test_db():
     engine = create_engine("sqlite:///:memory:")
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
-    
+
     # Patch the global engine and session
     with patch("router.database.engine", engine):
         with patch("router.database.SessionLocal", TestingSessionLocal):
@@ -30,12 +30,12 @@ class TestDatabaseConnection:
     def test_init_db_creates_tables(self, test_db):
         """Test that init_db creates all tables."""
         from sqlalchemy import text
-        
+
         # Tables should already exist from fixture
         with test_db.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             tables = [row[0] for row in result]
-            
+
             assert "model_profiles" in tables
             assert "routing_decisions" in tables
             assert "model_benchmarks" in tables
@@ -46,7 +46,7 @@ class TestDatabaseConnection:
         with get_session() as session:
             profile = ModelProfile(name="test_model", reasoning=0.8)
             session.add(profile)
-        
+
         # Verify it was committed
         with get_session() as session:
             result = session.query(ModelProfile).filter_by(name="test_model").first()
@@ -62,7 +62,7 @@ class TestDatabaseConnection:
                 raise ValueError("Test error")
         except ValueError:
             pass
-        
+
         # Verify it was NOT committed
         with get_session() as session:
             result = session.query(ModelProfile).filter_by(name="test_rollback").first()
@@ -87,7 +87,7 @@ class TestModelProfileCRUD:
             )
             session.add(profile)
             session.commit()
-            
+
             assert profile.id is not None
 
     def test_read_profile(self, test_db):
@@ -96,7 +96,7 @@ class TestModelProfileCRUD:
             profile = ModelProfile(name="mistral", reasoning=0.75)
             session.add(profile)
             session.commit()
-        
+
         with get_session() as session:
             result = session.query(ModelProfile).filter_by(name="mistral").first()
             assert result is not None
@@ -108,12 +108,12 @@ class TestModelProfileCRUD:
             profile = ModelProfile(name="codellama", reasoning=0.5)
             session.add(profile)
             session.commit()
-        
+
         with get_session() as session:
             profile = session.query(ModelProfile).filter_by(name="codellama").first()
             profile.reasoning = 0.95
             session.commit()
-        
+
         with get_session() as session:
             profile = session.query(ModelProfile).filter_by(name="codellama").first()
             assert profile.reasoning == 0.95
@@ -124,12 +124,12 @@ class TestModelProfileCRUD:
             profile = ModelProfile(name="temp_model", reasoning=0.5)
             session.add(profile)
             session.commit()
-        
+
         with get_session() as session:
             profile = session.query(ModelProfile).filter_by(name="temp_model").first()
             session.delete(profile)
             session.commit()
-        
+
         with get_session() as session:
             result = session.query(ModelProfile).filter_by(name="temp_model").first()
             assert result is None
@@ -140,7 +140,7 @@ class TestModelProfileCRUD:
             profile1 = ModelProfile(name="unique_model", reasoning=0.8)
             session.add(profile1)
             session.commit()
-        
+
         # Second insert should fail
         with pytest.raises(Exception):
             with get_session() as session:
@@ -161,7 +161,7 @@ class TestModelProfileCRUD:
             )
             session.add(profile)
             session.commit()
-            
+
             caps = profile.capability_dict()
             assert caps["reasoning"] == 0.8
             assert caps["coding"] == 0.7
@@ -180,7 +180,7 @@ class TestModelProfileCRUD:
             )
             session.add(profile)
             session.commit()
-            
+
             assert profile.overall_score == 0.8
 
 
@@ -204,7 +204,7 @@ class TestModelBenchmarkCRUD:
             )
             session.add(benchmark)
             session.commit()
-            
+
             assert benchmark.id is not None
 
     def test_capability_dict_with_new_metrics(self, test_db):
@@ -220,7 +220,7 @@ class TestModelBenchmarkCRUD:
             )
             session.add(benchmark)
             session.commit()
-            
+
             caps = benchmark.capability_dict()
             assert "elo" in caps
             assert "throughput" in caps
@@ -241,14 +241,14 @@ class TestRoutingDecisionCRUD:
             )
             session.add(decision)
             session.commit()
-            
+
             assert decision.id is not None
             assert decision.timestamp is not None
 
     def test_decision_timestamp_auto_set(self, test_db):
         """Test that timestamp is automatically set."""
         from datetime import datetime, timezone
-        
+
         with get_session() as session:
             decision = RoutingDecision(
                 prompt_hash="test123",
@@ -276,7 +276,7 @@ class TestBenchmarkSyncCRUD:
             )
             session.add(sync)
             session.commit()
-            
+
             assert sync.id is not None
 
     def test_default_status(self, test_db):
@@ -285,7 +285,7 @@ class TestBenchmarkSyncCRUD:
             sync = BenchmarkSync()
             session.add(sync)
             session.commit()
-            
+
             assert sync.status == "pending"
 
     def test_default_models_count(self, test_db):
@@ -294,5 +294,5 @@ class TestBenchmarkSyncCRUD:
             sync = BenchmarkSync()
             session.add(sync)
             session.commit()
-            
+
             assert sync.models_count == 0

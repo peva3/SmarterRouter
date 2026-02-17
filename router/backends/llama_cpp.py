@@ -86,7 +86,7 @@ class LlamaCppBackend(LLMBackend):
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/v1/chat/completions"
         full_model = self._full_model_name(model)
-        
+
         timing = {"start": time.perf_counter(), "first_token": None}
         latency_ms = 0.0
 
@@ -126,7 +126,7 @@ class LlamaCppBackend(LLMBackend):
                                     finish_reason = choice.get("finish_reason")
                                 yield {
                                     "message": {"content": content},
-                                    "done": finish_reason == "stop"
+                                    "done": finish_reason == "stop",
                                 }
                             except json.JSONDecodeError:
                                 continue

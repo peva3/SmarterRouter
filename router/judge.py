@@ -28,6 +28,7 @@ Please provide your evaluation in JSON format with a "score" (0.0 to 1.0) and a 
 Example: {{"score": 0.85, "reasoning": "The response was accurate and helpful, but slightly verbose."}}
 """
 
+
 class JudgeClient:
     def __init__(self):
         self.enabled = settings.judge_enabled
@@ -57,28 +58,31 @@ class JudgeClient:
                 payload = {
                     "model": self.model,
                     "messages": [
-                        {"role": "system", "content": "You are a helpful assistant that evaluates AI responses."},
-                        {"role": "user", "content": judge_prompt}
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that evaluates AI responses.",
+                        },
+                        {"role": "user", "content": judge_prompt},
                     ],
-                    "response_format": {"type": "json_object"}
+                    "response_format": {"type": "json_object"},
                 }
 
                 res = await client.post(
-                    f"{self.base_url.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers
+                    f"{self.base_url.rstrip('/')}/chat/completions", json=payload, headers=headers
                 )
                 res.raise_for_status()
                 data = res.json()
-                
+
                 content = data["choices"][0]["message"]["content"]
                 result = json.loads(content)
                 score = float(result.get("score", 0.0))
-                
+
                 # Ensure score is within bounds
                 score = max(0.0, min(1.0, score))
-                
-                logger.debug(f"Judge score for response: {score} (Reasoning: {result.get('reasoning')})")
+
+                logger.debug(
+                    f"Judge score for response: {score} (Reasoning: {result.get('reasoning')})"
+                )
                 return score
 
         except Exception as e:

@@ -26,9 +26,9 @@ class LMSYSProvider(BenchmarkProvider):
 
     async def fetch_data(self, ollama_models: list[str]) -> list[dict[str, Any]]:
         logger.info(f"Fetching data from {self.name} provider")
-        
+
         benchmarks: list[dict[str, Any]] = []
-        
+
         try:
             # Try fetching Arena Hard CSV first (easier to parse)
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -36,7 +36,7 @@ class LMSYSProvider(BenchmarkProvider):
                 if response.status_code == 200:
                     df = pd.read_csv(BytesIO(response.content))
                     return self._process_dataframe(df, ollama_models)
-                
+
                 logger.warning(f"Failed to fetch LMSYS CSV: {response.status_code}")
                 return []
 
@@ -44,7 +44,9 @@ class LMSYSProvider(BenchmarkProvider):
             logger.error(f"Failed to fetch LMSYS data: {e}")
             return []
 
-    def _process_dataframe(self, df: pd.DataFrame, ollama_models: list[str]) -> list[dict[str, Any]]:
+    def _process_dataframe(
+        self, df: pd.DataFrame, ollama_models: list[str]
+    ) -> list[dict[str, Any]]:
         benchmarks = []
         ollama_base_names = {self._normalize_name(m) for m in ollama_models}
 
@@ -60,28 +62,30 @@ class LMSYSProvider(BenchmarkProvider):
             # Extract Elo (Arena Hard often correlates or contains it)
             # If standard Elo isn't in this specific CSV, we use the score as a proxy or fetch the pickle
             elo = row.get("elo") or row.get("rating") or row.get("score")
-            
+
             if elo:
-                benchmarks.append({
-                    "ollama_name": matched_ollama,
-                    "elo_rating": float(elo)
-                })
+                benchmarks.append({"ollama_name": matched_ollama, "elo_rating": float(elo)})
 
         return benchmarks
 
     def _normalize_name(self, name: str) -> str:
         name = name.split(":")[0].lower()
         import re
+
         name = re.sub(r"[^a-z0-9]", "", name)
         return name
 
-    def _match_model(self, lmsys_name: str, ollama_models: list[str], ollama_base_names: set[str]) -> str | None:
+    def _match_model(
+        self, lmsys_name: str, ollama_models: list[str], ollama_base_names: set[str]
+    ) -> str | None:
         norm_name = self._normalize_name(lmsys_name)
-        
+
         # Strategy 1: Mapping table
         for ollama_base in ollama_base_names:
             for mapping_name, hf_variants in OLLAMA_MODEL_MAPPING.items():
-                if mapping_name in norm_name or any(v.lower().replace("-", "").replace("_", "") in norm_name for v in hf_variants):
+                if mapping_name in norm_name or any(
+                    v.lower().replace("-", "").replace("_", "") in norm_name for v in hf_variants
+                ):
                     if mapping_name in ollama_base:
                         return ollama_base
 
@@ -90,5 +94,5 @@ class LMSYSProvider(BenchmarkProvider):
             ollama_base = self._normalize_name(ollama_model)
             if norm_name in ollama_base or ollama_base in norm_name:
                 return ollama_base
-                
+
         return None

@@ -199,3 +199,52 @@ ROUTER_CACHE_RESPONSE_MAX_SIZE=200
 # Example: ROUTER_EMBED_MODEL=nomic-embed-text:latest
 # Note: Exact hash caching works without this setting
 ROUTER_EMBED_MODEL=
+
+# =============================================================================
+# VRAM MONITORING & MANAGEMENT
+# =============================================================================
+
+# Enable VRAM monitoring via nvidia-smi (default: true)
+# Provides visibility into GPU memory usage and helps prevent OOM errors
+ROUTER_VRAM_MONITOR_ENABLED=true
+
+# Interval for VRAM sampling in seconds (default: 30)
+# Lower values give more granular data but slightly more overhead
+ROUTER_VRAM_MONITOR_INTERVAL=30
+
+# Maximum VRAM (in GB) the router is allowed to allocate for models
+# Set this below your GPU's total memory to leave room for system/overhead
+# Example: For a 24GB GPU, set to 22.0 to reserve 2GB
+# If not set, will auto-detect GPU total and use 90% of it as default
+ROUTER_VRAM_MAX_TOTAL_GB=
+
+# How often to log a VRAM summary to the application log (seconds)
+ROUTER_VRAM_LOG_INTERVAL=60
+
+# VRAM Profiling - measure actual memory usage during model profiling
+ROUTER_PROFILE_MEASURE_VRAM=true
+
+# Delay after loading a model before measuring VRAM (seconds)
+# Allows memory to stabilize after initial allocation
+ROUTER_PROFILE_VRAM_SAMPLE_DELAY=2.0
+
+# Number of VRAM samples to take during profiling (averaged)
+ROUTER_PROFILE_VRAM_SAMPLES=3
+
+# Auto-unload models when VRAM pressure is high
+ROUTER_VRAM_AUTO_UNLOAD_ENABLED=true
+
+# VRAM utilization percentage threshold for warnings in /admin/vram (default: 85%)
+# When utilization meets or exceeds this value, a warning is included in the response.
+# This does not directly trigger unloads; unloads happen automatically when loading a new model if VRAM is insufficient.
+ROUTER_VRAM_UNLOAD_THRESHOLD_PCT=85.0
+
+# Strategy for selecting which models to unload
+# "lru" = least recently used (default)
+# "largest" = unload biggest models first to free most memory quickly
+ROUTER_VRAM_UNLOAD_STRATEGY=lru
+
+# Default VRAM estimate for models that haven't been profiled (GB)
+# Used for capacity planning when vram_required_gb is unknown
+ROUTER_VRAM_DEFAULT_ESTIMATE_GB=8.0
+

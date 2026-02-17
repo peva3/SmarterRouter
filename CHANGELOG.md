@@ -1,3 +1,14 @@
+## [1.9.0] - 2026-02-17
+
+### New Features: VRAM Monitoring & Measurement
+
+- **VRAM Monitoring**: Added background `VRAMMonitor` that polls `nvidia-smi` at configurable intervals. Provides real-time GPU memory tracking and logs summaries.
+- **VRAM Profiling**: Models are now profiled for actual VRAM usage during profiling. Results stored in database (`vram_required_gb`, `vram_measured_at`).
+- **Admin VRAM Endpoint**: New `/admin/vram` REST endpoint returns current VRAM metrics, history, and loaded models. Requires admin auth.
+- **Simplified Configuration**: Replaced separate `headroom_gb` setting with a single `ROUTER_VRAM_MAX_TOTAL_GB`. The router uses an internal 0.5GB fragmentation buffer automatically.
+- **Auto-Detection**: If `ROUTER_VRAM_MAX_TOTAL_GB` is not set, the router automatically detects GPU total VRAM and defaults to 90% of it.
+- **VRAM-Aware Routing**: The router now considers measured VRAM requirements when making routing decisions, improving multi-model environments.
+
 ## [1.8.0] - 2026-02-17
 
 ### Production Hardening & Critical Bug Fixes

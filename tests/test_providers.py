@@ -35,13 +35,13 @@ class TestHuggingFaceProvider:
                 {
                     "row": {
                         "model_name": "Meta-Llama-3-8B",
-                        "results": "{\"leaderboard\": {\"mmlu\": 66.0, \"humaneval\": 42.0, \"math\": 25.0}}"
+                        "results": '{"leaderboard": {"mmlu": 66.0, "humaneval": 42.0, "math": 25.0}}',
                     }
                 },
                 {
                     "row": {
                         "model_name": "Mistral-7B-v0.2",
-                        "results": "{\"leaderboard\": {\"mmlu\": 64.0, \"humaneval\": 40.0}}"
+                        "results": '{"leaderboard": {"mmlu": 64.0, "humaneval": 40.0}}',
                     }
                 },
             ]
@@ -194,7 +194,7 @@ class TestHuggingFaceProvider:
         results = {
             "leaderboard": {"mmlu": 70.0, "math": 45.0},
             "leaderboard_hellaswag": {"hellaswag": 80.0},
-            "leaderboard_mmlu_pro": {"mmlu_pro": 65.0}
+            "leaderboard_mmlu_pro": {"mmlu_pro": 65.0},
         }
         row = {"model_name": "test-model", "results": "{}"}
 
@@ -225,15 +225,15 @@ Mistral-7B-v0.2,1150
             mock_response = AsyncMock()
             mock_response.status_code = 200
             mock_response.content = csv_data.encode()
-            
+
             # Create async context manager mock
             mock_client_instance = AsyncMock()
             mock_client_instance.get = AsyncMock(return_value=mock_response)
-            
+
             mock_context_manager = AsyncMock()
             mock_context_manager.__aenter__ = AsyncMock(return_value=mock_client_instance)
             mock_context_manager.__aexit__ = AsyncMock(return_value=None)
-            
+
             mock_client_class.return_value = mock_context_manager
 
             result = await provider.fetch_data(["llama3", "mistral"])
@@ -249,7 +249,7 @@ Mistral-7B-v0.2,1150
         with patch("router.providers.lmsys.httpx.AsyncClient") as mock_client:
             mock_response = MagicMock()
             mock_response.status_code = 404
-            
+
             mock_client_instance = MagicMock()
             mock_client_instance.get = MagicMock(return_value=mock_response)
             mock_client.return_value.__aenter__ = MagicMock(return_value=mock_client_instance)
@@ -260,10 +260,12 @@ Mistral-7B-v0.2,1150
 
     def test_process_dataframe(self, provider):
         """Test DataFrame processing."""
-        df = pd.DataFrame({
-            "model": ["Meta-Llama-3-8B", "Mistral-7B-v0.2"],
-            "elo": [1200, 1150],
-        })
+        df = pd.DataFrame(
+            {
+                "model": ["Meta-Llama-3-8B", "Mistral-7B-v0.2"],
+                "elo": [1200, 1150],
+            }
+        )
 
         result = provider._process_dataframe(df, ["llama3", "mistral"])
 

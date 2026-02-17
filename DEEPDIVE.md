@@ -50,10 +50,25 @@ Model evaluation is often subjective. We moved from a basic "did it respond?" ch
 **Rationale:** Local hardware varies wildly. A model that is fast on an A100 might be unusable on a laptop. Local profiling is the only way to get an accurate "Speed" score for your specific environment.
 
 ### 2.4 Resource & VRAM Management
-Running multiple models locally is a VRAM nightmare. 
 
-- **Proactive Unloading**: Before the router tells a backend to load a new model, it can issue an unload command for the current model. This prevents "Out of Memory" errors during model switching.
-- **Pinned Models**: You can "pin" a small, efficient model (like Phi-3 mini) to VRAM. The router will prioritize this model for simple queries, providing near-instant responses for the 80% of tasks that don't need a massive model.
+Running multiple models locally requires careful VRAM management. The router now includes a comprehensive VRAM monitoring and management system to prevent out-of-memory errors and optimize model usage.
+
+**VRAM Monitoring**: A background `VRAMMonitor` task runs at configurable intervals (default 30s), sampling GPU memory using `nvidia-smi`. It maintains a rolling buffer of metrics and logs concise summaries (total, used, free, utilization) to the application log at a separate interval. The monitor can also query per-model estimated usage based on the router's allocation tracking.
+
+**VRAM Profiling**: During model profiling, the router measures the actual VRAM footprint of each model. After loading a model, a baseline reading is taken, then after running benchmark prompts, the increase in VRAM is attributed to the model. This measured value (`vram_required_gb`) is stored in the `ModelProfile` along with a timestamp (`vram_measured_at`). This provides accurate, hardware-specific memory requirements for routing decisions.
+
+**Admin VRAM Endpoint**: The `/admin/vram` endpoint provides real-time insight into GPU memory status. It returns:
+- Current total, used, and free VRAM (GB)
+- Utilization percentage
+- List of loaded models and their estimated memory allocation
+- Historical metrics (limited to recent entries) for trend analysis
+The endpoint requires admin authentication if `ROUTER_ADMIN_API_KEY` is set.
+
+**Simplified Configuration**: The router uses a single setting `ROUTER_VRAM_MAX_TOTAL_GB` to define the maximum VRAM budget for models. There is no separate `headroom_gb`; instead, the system automatically reserves a fixed 0.5GB internal fragmentation buffer to account for measurement errors and memory fragmentation. If `ROUTER_VRAM_MAX_TOTAL_GB` is not explicitly set, the router will auto-detect the GPU's total VRAM and default to 90% of that value, leaving 10% for the system and drivers.
+
+**VRAM-Aware Routing**: The `VRAMManager` tracks which models are currently loaded (or pinned) and their estimated VRAM usage. Before loading a new model, it checks if the model fits within the available budget (`max_vram - buffer - sum(loaded)`). If not, it can automatically unload models according to a configurable strategy (LRU or largest-first) to make room, respecting pinned models that should never be unloaded. This coordination happens in `RouterEngine` via `vram_manager` and integrates with backends (Ollama, llama.cpp) that support model loading/unloading.
+
+**Profiling Integration**: When profiling new models with `ROUTER_PROFILE_MEASURE_VRAM=true`, the router populates the `vram_required_gb` field automatically. If the profiler is not run, the router falls back to a default estimate (`ROUTER_VRAM_DEFAULT_ESTIMATE_GB`) for capacity planning. This ensures the router can function even without explicit measurements.
 
 ---
 

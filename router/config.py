@@ -34,7 +34,9 @@ class Settings(BaseSettings):
 
     polling_interval: int = Field(default=60)
     profile_timeout: int = Field(default=30)
-    generation_timeout: int = Field(default=120)  # Timeout for model generation (larger models need more time)
+    generation_timeout: int = Field(
+        default=120
+    )  # Timeout for model generation (larger models need more time)
     profile_prompts_per_category: int = Field(default=3)
 
     router_model: str | None = Field(default=None)
@@ -61,7 +63,7 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="sqlite:///router.db")
 
-    pinned_model: str | None = Field(default=None) # Model to keep loaded in VRAM
+    pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
 
     # Name the router presents itself as to external UIs (e.g., OpenWebUI)
     router_external_model_name: str = Field(default="hubrouter/main")
@@ -73,7 +75,9 @@ class Settings(BaseSettings):
     judge_api_key: str | None = Field(default=None)
 
     # Security settings
-    admin_api_key: str | None = Field(default=None)  # API key for admin endpoints (if not set, admin endpoints are open)
+    admin_api_key: str | None = Field(
+        default=None
+    )  # API key for admin endpoints (if not set, admin endpoints are open)
     rate_limit_enabled: bool = Field(default=False)  # Enable rate limiting
     rate_limit_requests_per_minute: int = Field(default=60)  # Requests per minute limit
     rate_limit_admin_requests_per_minute: int = Field(default=10)  # Admin endpoint rate limit
@@ -83,8 +87,31 @@ class Settings(BaseSettings):
     cache_max_size: int = Field(default=500)  # Max routing cache entries (increased from 100)
     cache_ttl_seconds: int = Field(default=3600)  # TTL for cache entries (1 hour)
     cache_similarity_threshold: float = Field(default=0.85)  # Threshold for semantic similarity
-    cache_response_max_size: int = Field(default=200)  # Max response cache entries (increased from 50)
+    cache_response_max_size: int = Field(
+        default=200
+    )  # Max response cache entries (increased from 50)
     embed_model: str | None = Field(default=None)  # Model to use for embeddings
+
+    # VRAM Monitoring & Management
+    vram_monitor_enabled: bool = Field(default=True)  # Enable VRAM monitoring via nvidia-smi
+    vram_monitor_interval: int = Field(default=30)  # Seconds between VRAM samples
+    vram_max_total_gb: float | None = Field(
+        default=None
+    )  # Max VRAM to allocate (set below GPU total)
+    vram_log_interval: int = Field(default=60)  # How often to log VRAM summary
+
+    # VRAM Profiling
+    profile_measure_vram: bool = Field(default=True)  # Measure actual VRAM during profiling
+    profile_vram_sample_delay: float = Field(default=2.0)  # Wait after model load before measuring
+    profile_vram_samples: int = Field(default=3)  # Take N samples and average
+
+    # Auto-unload policy
+    vram_auto_unload_enabled: bool = Field(default=True)
+    vram_unload_threshold_pct: float = Field(default=85.0)
+    vram_unload_strategy: str = Field(default="lru")  # "lru" or "largest"
+
+    # Fallback VRAM estimate when not profiled (in GB)
+    vram_default_estimate_gb: float = Field(default=8.0)
 
     @model_validator(mode="before")
     @classmethod

@@ -22,6 +22,7 @@ def create_backend(settings: "Settings") -> LLMBackend:
     match provider:
         case "ollama":
             from router.backends.ollama import OllamaBackend
+
             return OllamaBackend(
                 base_url=settings.ollama_url,
                 timeout=settings.profile_timeout,
@@ -30,14 +31,18 @@ def create_backend(settings: "Settings") -> LLMBackend:
 
         case "llama.cpp" | "llama-cpp" | "llamaswap" | "llama-swap":
             from router.backends.llama_cpp import LlamaCppBackend
+
             return LlamaCppBackend(
-                base_url=settings.llama_cpp_url or settings.openai_base_url or "http://localhost:8080",
+                base_url=settings.llama_cpp_url
+                or settings.openai_base_url
+                or "http://localhost:8080",
                 model_prefix=settings.model_prefix,
                 timeout=settings.generation_timeout,  # Use longer timeout for generation
             )
 
         case "openai":
             from router.backends.openai import OpenAIBackend
+
             return OpenAIBackend(
                 base_url=settings.openai_base_url or "https://api.openai.com/v1",
                 api_key=settings.openai_api_key or "EMPTY",
@@ -46,7 +51,4 @@ def create_backend(settings: "Settings") -> LLMBackend:
             )
 
         case _:
-            raise ValueError(
-                f"Unknown provider: {provider}. "
-                f"Supported: ollama, llama.cpp, openai"
-            )
+            raise ValueError(f"Unknown provider: {provider}. Supported: ollama, llama.cpp, openai")

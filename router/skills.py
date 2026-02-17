@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 
+
 @dataclass
 class Skill:
     name: str
@@ -11,6 +12,7 @@ class Skill:
 
     async def execute(self, **kwargs: Any) -> str:
         raise NotImplementedError
+
 
 class WebSearchSkill(Skill):
     async def execute(self, query: str, **kwargs: Any) -> str:
@@ -21,37 +23,41 @@ class WebSearchSkill(Skill):
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     "https://api.duckduckgo.com/",
-                    params={"q": query, "format": "json", "no_html": 1}
+                    params={"q": query, "format": "json", "no_html": 1},
                 )
                 response.raise_for_status()
                 data = response.json()
-                
+
                 # Extract relevant snippets
                 results = []
                 if data.get("AbstractText"):
                     results.append(f"Abstract: {data['AbstractText']}")
-                
+
                 for result in data.get("RelatedTopics", []):
                     if "Text" in result:
                         results.append(result["Text"])
 
                 if not results:
                     return "No results found."
-                
+
                 return "\n".join(results)
         except Exception as e:
             return f"Error performing web search: {e}"
+
 
 class CalculatorSkill(Skill):
     async def execute(self, expression: str, **kwargs: Any) -> str:
         """Safely evaluate a mathematical expression."""
         import operator
-        
+
         allowed_operators = {
-            '+': operator.add, '-': operator.sub, '*': operator.mul, '/': operator.truediv,
-            '^': operator.pow,
+            "+": operator.add,
+            "-": operator.sub,
+            "*": operator.mul,
+            "/": operator.truediv,
+            "^": operator.pow,
         }
-        
+
         try:
             # Basic shunting-yard/RPN would be safer, but for now we'll do a simple split
             # This is NOT production safe for complex expressions
@@ -91,7 +97,10 @@ class SkillsRegistry:
                 parameters={
                     "type": "object",
                     "properties": {
-                        "expression": {"type": "string", "description": "The expression to evaluate"},
+                        "expression": {
+                            "type": "string",
+                            "description": "The expression to evaluate",
+                        },
                     },
                     "required": ["expression"],
                 },
@@ -122,6 +131,7 @@ class SkillsRegistry:
         if not skill:
             return f"Error: Skill '{name}' not found."
         return await skill.execute(**kwargs)
+
 
 # Global instance
 skills_registry = SkillsRegistry()

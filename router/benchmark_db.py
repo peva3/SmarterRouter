@@ -43,11 +43,13 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
     if not model_names:
         return []
     with get_session() as session:
-        benchmarks = session.execute(
-            select(ModelBenchmark).where(
-                ModelBenchmark.ollama_name.in_(model_names)
+        benchmarks = (
+            session.execute(
+                select(ModelBenchmark).where(ModelBenchmark.ollama_name.in_(model_names))
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         # Convert to dicts to avoid detached instance issues
         return [
             {
@@ -72,11 +74,28 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
 
     # Whitelist of allowed ModelBenchmark columns to prevent SQL injection via setattr
     ALLOWED_BENCHMARK_FIELDS = {
-        "ollama_name", "full_name", "parameters", "quantization",
-        "mmlu", "humaneval", "math", "gpqa", "hellaswag", "winogrande",
-        "truthfulqa", "mmlu_pro", "reasoning_score", "coding_score",
-        "general_score", "elo_rating", "throughput", "context_window",
-        "vision", "tool_calling", "last_updated", "benchmark_source"
+        "ollama_name",
+        "full_name",
+        "parameters",
+        "quantization",
+        "mmlu",
+        "humaneval",
+        "math",
+        "gpqa",
+        "hellaswag",
+        "winogrande",
+        "truthfulqa",
+        "mmlu_pro",
+        "reasoning_score",
+        "coding_score",
+        "general_score",
+        "elo_rating",
+        "throughput",
+        "context_window",
+        "vision",
+        "tool_calling",
+        "last_updated",
+        "benchmark_source",
     }
 
     count = 0
@@ -100,9 +119,11 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
 
         with get_session() as session:
             # Try to update existing
-            existing = session.query(ModelBenchmark).filter(
-                ModelBenchmark.ollama_name == cleaned.get("ollama_name")
-            ).first()
+            existing = (
+                session.query(ModelBenchmark)
+                .filter(ModelBenchmark.ollama_name == cleaned.get("ollama_name"))
+                .first()
+            )
 
             if existing:
                 for k, v in cleaned.items():
@@ -150,16 +171,18 @@ def remove_benchmarks_not_in(model_names: list[str]) -> int:
     with get_session() as session:
         if not model_names:
             return 0
-        
+
         # Validate all model names are strings and reasonable length
         if not all(isinstance(name, str) and len(name) < 200 for name in model_names):
             logger.warning("Invalid model names provided to remove_benchmarks_not_in")
             return 0
-        
+
         # Use ORM delete instead of raw SQL for safety
-        deleted = session.query(ModelBenchmark).filter(
-            ~ModelBenchmark.ollama_name.in_(model_names)
-        ).delete(synchronize_session=False)
-        
+        deleted = (
+            session.query(ModelBenchmark)
+            .filter(~ModelBenchmark.ollama_name.in_(model_names))
+            .delete(synchronize_session=False)
+        )
+
         session.commit()
         return deleted

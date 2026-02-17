@@ -76,7 +76,11 @@ class HuggingFaceProvider(BenchmarkProvider):
                     # Parse the results JSON string
                     results_json = row.get("results", "{}")
                     try:
-                        results = json.loads(results_json) if isinstance(results_json, str) else results_json
+                        results = (
+                            json.loads(results_json)
+                            if isinstance(results_json, str)
+                            else results_json
+                        )
                     except json.JSONDecodeError:
                         logger.warning(f"Failed to parse results JSON for {hf_name}")
                         # Log the actual row structure for debugging
@@ -86,36 +90,40 @@ class HuggingFaceProvider(BenchmarkProvider):
 
                     # Extract scores from the nested structure
                     scores = self._extract_scores(results, row)
-                    
+
                     # Fallback: if nested extraction failed (all None), use top-level scores from row
                     if scores.get("mmlu") is None and row.get("mmlu"):
                         scores["mmlu"] = row.get("mmlu")
-                        logger.info(f"Fallback: using row mmlu={scores['mmlu']} for {matched_ollama}")
+                        logger.info(
+                            f"Fallback: using row mmlu={scores['mmlu']} for {matched_ollama}"
+                        )
                     if scores.get("humaneval") is None and row.get("humaneval"):
                         scores["humaneval"] = row.get("humaneval")
                     if scores.get("math") is None and row.get("math"):
                         scores["math"] = row.get("math")
                     if scores.get("gpqa") is None and row.get("gpqa"):
                         scores["gpqa"] = row.get("gpqa")
-                    
+
                     logger.info(f"Scores before calculation: {scores}")
                     capability_scores = self._calculate_scores(scores)
                     logger.info(f"Capability scores for {matched_ollama}: {capability_scores}")
 
-                    benchmarks.append({
-                        "ollama_name": matched_ollama,
-                        "full_name": hf_name,
-                        "mmlu": scores.get("mmlu"),
-                        "humaneval": scores.get("humaneval"),
-                        "math": scores.get("math"),
-                        "gpqa": scores.get("gpqa"),
-                        "hellaswag": scores.get("hellaswag"),
-                        "winogrande": scores.get("winogrande"),
-                        "truthfulqa": scores.get("truthfulqa"),
-                        "mmlu_pro": scores.get("mmlu_pro"),
-                        **capability_scores,
-                        "parameters": self._extract_parameters(hf_name),
-                    })
+                    benchmarks.append(
+                        {
+                            "ollama_name": matched_ollama,
+                            "full_name": hf_name,
+                            "mmlu": scores.get("mmlu"),
+                            "humaneval": scores.get("humaneval"),
+                            "math": scores.get("math"),
+                            "gpqa": scores.get("gpqa"),
+                            "hellaswag": scores.get("hellaswag"),
+                            "winogrande": scores.get("winogrande"),
+                            "truthfulqa": scores.get("truthfulqa"),
+                            "mmlu_pro": scores.get("mmlu_pro"),
+                            **capability_scores,
+                            "parameters": self._extract_parameters(hf_name),
+                        }
+                    )
 
                 logger.info(f"Matched {len(benchmarks)} models from HuggingFace")
                 return benchmarks
@@ -130,9 +138,11 @@ class HuggingFaceProvider(BenchmarkProvider):
             logger.error(f"Failed to fetch HuggingFace data: {e}")
             return []
 
-    def _extract_scores(self, results: dict[str, Any], row: dict[str, Any]) -> dict[str, float | None]:
+    def _extract_scores(
+        self, results: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, float | None]:
         """Extract benchmark scores from the nested results structure.
-        
+
         The Open LLM Leaderboard uses various benchmark categories with scores
         stored in 'acc_norm,none' or 'acc,none' fields.
         """
@@ -156,7 +166,14 @@ class HuggingFaceProvider(BenchmarkProvider):
                 if isinstance(val, (int, float)):
                     return float(val)
             # Try common leaderboard field names
-            for score_key in ["acc_norm,none", "acc,none", "acc_norm", "acc", "exact_match,none", "exact_match"]:
+            for score_key in [
+                "acc_norm,none",
+                "acc,none",
+                "acc_norm",
+                "acc",
+                "exact_match,none",
+                "exact_match",
+            ]:
                 if score_key in data:
                     val = data[score_key]
                     if isinstance(val, (int, float)):
@@ -204,7 +221,7 @@ class HuggingFaceProvider(BenchmarkProvider):
                     if bbh_score is None:
                         bbh_score = []
                     bbh_score.append(task_score)
-        
+
         # If we couldn't find specific scores, try to infer from available data
         if scores["mmlu"] is None and "all" in results:
             scores["mmlu"] = get_score(results["all"], "mmlu")
@@ -216,13 +233,18 @@ class HuggingFaceProvider(BenchmarkProvider):
         name = re.sub(r"[^a-z0-9]", "", name)
         return name
 
-    def _match_model(self, hf_name: str, ollama_models: list[str], ollama_base_names: set[str]) -> str | None:
+    def _match_model(
+        self, hf_name: str, ollama_models: list[str], ollama_base_names: set[str]
+    ) -> str | None:
         hf_normalized = self._normalize_name(hf_name)
 
         # Strategy 1: Mapping table
         for ollama_base in ollama_base_names:
             for mapping_name, hf_variants in OLLAMA_MODEL_MAPPING.items():
-                if mapping_name in hf_normalized or any(v.lower().replace("-", "").replace("_", "") in hf_normalized for v in hf_variants):
+                if mapping_name in hf_normalized or any(
+                    v.lower().replace("-", "").replace("_", "") in hf_normalized
+                    for v in hf_variants
+                ):
                     if mapping_name in ollama_base:
                         return ollama_base
 
@@ -236,7 +258,7 @@ class HuggingFaceProvider(BenchmarkProvider):
 
     def _calculate_scores(self, data: dict[str, Any]) -> dict[str, float]:
         logger.debug(f"_calculate_scores input: {data}")
-        
+
         reasoning = 0.0
         coding = 0.0
         general = 0.0

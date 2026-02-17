@@ -13,7 +13,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 - **Tool Use Detection**: Routes function-calling requests to optimized models.
 - **LLM-as-Judge Scoring**: Qualitative model evaluation using high-end models as judges (e.g., GPT-4o).
 - **Standardized Benchmarks**: Uses MT-Bench style prompts for rigorous performance measurement.
-- **VRAM Management**: Proactive model unloading for systems with limited GPU memory, with a "pinned model" option for speed.
+- **VRAM Monitoring & Management**: Monitors GPU usage via nvidia-smi, measures per-model VRAM during profiling, and proactively unloads models to avoid OOM. Supports pinned model for low-latency responses. Includes `/admin/vram` endpoint for real-time monitoring.
 - **Runtime Profiling**: Tests your actual models with real prompts to measure their capabilities on your hardware.
 - **Security Hardening**:
   - **SQL Injection Prevention**: All database operations use ORM with whitelist validation.
@@ -147,6 +147,7 @@ curl -X POST http://localhost:11436/v1/embeddings \
 - `/admin/profiles`: View the performance profiles of your models.
 - `/admin/benchmarks`: View the aggregated benchmark data.
 - `/admin/reprofile`: Trigger a manual reprofiling of all models.
+- `/admin/vram`: View real-time VRAM usage, history, and model memory allocation.
 
 **Example (with authentication):**
 ```bash
