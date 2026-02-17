@@ -178,19 +178,24 @@ ROUTER_DATABASE_URL=sqlite:///router.db
 ROUTER_CACHE_ENABLED=true
 
 # Maximum number of routing cache entries (default: 500)
+# Uses exact SHA-256 hash of prompt for instant cache hits
 ROUTER_CACHE_MAX_SIZE=500
 
 # Cache TTL in seconds (default: 3600 = 1 hour)
 ROUTER_CACHE_TTL_SECONDS=3600
 
 # Similarity threshold for semantic matching (0.0-1.0, default: 0.85)
+# Only used if ROUTER_EMBED_MODEL is configured
 # Higher = more strict matching, Lower = more flexible matching
 ROUTER_CACHE_SIMILARITY_THRESHOLD=0.85
 
 # Maximum number of response cache entries (default: 200)
+# Caches full model responses to avoid regeneration
 ROUTER_CACHE_RESPONSE_MAX_SIZE=200
 
 # Embedding model for semantic similarity (optional)
 # If set, enables semantic similarity matching in addition to exact hash matching
+# Allows similar prompts (not just identical) to hit the cache
 # Example: ROUTER_EMBED_MODEL=nomic-embed-text:latest
+# Note: Exact hash caching works without this setting
 ROUTER_EMBED_MODEL=

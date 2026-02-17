@@ -124,8 +124,20 @@ While often used locally, we've added features to make the router safe for multi
 The router implements a multi-layered caching system to optimize performance:
 
 ### Routing Cache (Semantic)
-- **Exact Hash Matching**: Uses SHA-256 of the prompt for instant cache hits.
-- **Semantic Similarity**: If an embedding model is configured, uses cosine similarity to find similar prompts (threshold: 0.85 by default).
+The routing cache provides two layers of lookup:
+
+1. **Exact Hash Matching** (Always active when cache enabled)
+   - Uses SHA-256 of the prompt for instant cache hits
+   - **No embedding model required** - works out of the box
+   - 100% exact matches return cached `RoutingResult` immediately
+   - This is the primary cache mechanism; identical prompts are served instantly
+
+2. **Semantic Similarity** (Optional, requires `ROUTER_EMBED_MODEL`)
+   - Computes embeddings for the prompt and compares against cached embeddings
+   - Uses cosine similarity with threshold (default: 0.85)
+   - Allows semantically similar prompts to reuse routing decisions
+   - Example: "How do I reverse a linked list?" may hit cache for "Explain linked list reversal algorithm"
+
 - **LRU Eviction**: Maintains up to 500 routing entries with 1-hour TTL.
 - **Thread-Safe Operations**: All cache access is protected by an `asyncio.Lock`, ensuring correct behavior under concurrent load.
 - **Tracks Recent Selections**: Keeps track of model selection frequency for diversity awareness and prevents model monopolization.

@@ -259,9 +259,11 @@ class RouterEngine:
     async def select_model(self, prompt: str | list[dict], request_obj: Any = None) -> RoutingResult:
         prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt, sort_keys=True)
         
-        embedding = None
-        if self.cache_enabled and self.semantic_cache and self.embed_model:
-            embedding = await self.semantic_cache._get_embedding(self.client, prompt_str)
+        # Always attempt cache lookup when enabled - exact hash works without embedding model
+        if self.cache_enabled and self.semantic_cache:
+            embedding = None
+            if self.embed_model:
+                embedding = await self.semantic_cache._get_embedding(self.client, prompt_str)
             cached = await self.semantic_cache.get(prompt_str, embedding)
             if cached:
                 return cached

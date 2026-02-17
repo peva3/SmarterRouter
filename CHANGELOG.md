@@ -7,6 +7,7 @@ This release focuses on stability, security, and performance improvements based 
 #### Critical Bug Fixes
 - **Race Condition in Rate Limiter**: Added `asyncio.Lock` to protect shared state, preventing corruption under concurrent load
 - **Duplicate Dictionary Key**: Fixed duplicate `"creativity"` key in category mapping that was causing data loss
+- **Cache Not Working Without Embedding Model**: Fixed logic that prevented exact hash cache lookup unless `ROUTER_EMBED_MODEL` was set. Cache now works by default.
 - **SQL Injection Risk**: Added whitelist validation in `bulk_upsert_benchmarks()` to prevent malicious key injection
 - **Tool Call Counter**: Fixed logic that could have allowed excessive tool iterations
 - **Judge Fallback Scoring**: Changed from always 1.0 to neutral 0.5 for non-empty responses when LLM-as-Judge is disabled
