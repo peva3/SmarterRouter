@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = Field(default=60)  # Requests per minute limit
     rate_limit_admin_requests_per_minute: int = Field(default=10)  # Admin endpoint rate limit
 
+    # Smart Cache settings
+    cache_enabled: bool = Field(default=True)  # Enable smart caching
+    cache_max_size: int = Field(default=100)  # Max routing cache entries
+    cache_ttl_seconds: int = Field(default=3600)  # TTL for cache entries (1 hour)
+    cache_similarity_threshold: float = Field(default=0.85)  # Threshold for semantic similarity
+    embed_model: str | None = Field(default=None)  # Model to use for embeddings
+
     @model_validator(mode="before")
     @classmethod
     def parse_log_level(cls, values: dict) -> dict:

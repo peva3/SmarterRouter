@@ -139,7 +139,12 @@ async def startup_event():
     if app_state.backend:
         app_state.router_engine = RouterEngine(
             client=app_state.backend,
-            dispatcher_model=settings.router_model
+            dispatcher_model=settings.router_model,
+            cache_enabled=settings.cache_enabled,
+            cache_max_size=settings.cache_max_size,
+            cache_ttl_seconds=settings.cache_ttl_seconds,
+            cache_similarity_threshold=settings.cache_similarity_threshold,
+            embed_model=settings.embed_model,
         )
 
     # Start background sync task
@@ -412,6 +417,33 @@ async def chat_completions(
     
     final_model = selected_model
 
+    # Check response cache before generation
+    cache_key_prompt = prompt
+    if app_state.router_engine and app_state.router_engine.semantic_cache:
+        cached_response = app_state.router_engine.semantic_cache.get_response(selected_model, cache_key_prompt)
+        if cached_response:
+            logger.info(f"Response cache hit for {selected_model}")
+            app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
+            return {
+                "id": response_id,
+                "object": "chat.completion",
+                "created": int(datetime.now(timezone.utc).timestamp()),
+                "model": selected_model,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": cached_response},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "router": {
+                    "reasoning": reasoning + " [cached]"
+                }
+            }
+
     for try_model in fallback_list:
         # Proactive VRAM management
         current = app_state.current_loaded_model
@@ -500,11 +532,14 @@ async def chat_completions(
 
     if config.signature_enabled:
         signature = config.signature_format.format(model=final_model)
-        # Strip any existing "Model:" signatures from the response to avoid duplicates
-        # Some models helpfully add their own signatures
         import re
         content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
         content += signature
+
+    # Cache the response (without signature) for future requests
+    if app_state.router_engine and app_state.router_engine.semantic_cache:
+        content_for_cache = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
+        app_state.router_engine.semantic_cache.set_response(final_model, prompt, content_for_cache)
 
     return {
         "id": response_id,
@@ -707,13 +742,8 @@ async def get_stats(
     
     # Get cache stats from router engine
     cache_stats = {}
-    if app_state.router_engine and hasattr(app_state.router_engine, 'semantic_cache'):
-        cache = app_state.router_engine.semantic_cache
-        cache_stats = {
-            "cache_size": len(cache.cache),
-            "cache_max": cache.max_size,
-            "recent_selections_count": len(cache.recent_selections),
-        }
+    if app_state.router_engine and app_state.router_engine.semantic_cache:
+        cache_stats = app_state.router_engine.semantic_cache.get_stats()
     
     return {
         "uptime_seconds": uptime_seconds,
@@ -745,6 +775,34 @@ async def reprofile(
     return {
         "profiled": [r.model_name for r in results],
         "count": len(results),
+    }
+
+
+@app.post("/admin/cache/invalidate")
+async def invalidate_cache(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    model: str | None = None,
+    response_cache_only: bool = False,
+):
+    """Invalidate cache entries (requires admin API key if configured)."""
+    if not app_state.router_engine or not app_state.router_engine.semantic_cache:
+        return JSONResponse({"error": "Cache not initialized"}, status_code=503)
+    
+    cache = app_state.router_engine.semantic_cache
+    invalidated = 0
+    
+    if response_cache_only or model:
+        invalidated = cache.invalidate_response(model)
+    else:
+        cache.cache.clear()
+        cache.response_cache.clear()
+        invalidated = "all"
+    
+    return {
+        "invalidated": invalidated,
+        "model": model,
+        "response_cache_only": response_cache_only,
     }
 
 

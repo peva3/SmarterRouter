@@ -118,6 +118,38 @@ While often used locally, we've added features to make the router safe for multi
 
 ---
 
+## 5.1 Smart Caching
+
+The router implements a multi-layered caching system to optimize performance:
+
+### Routing Cache (Semantic)
+- **Exact Hash Matching**: Uses SHA-256 of the prompt for instant cache hits.
+- **Semantic Similarity**: If an embedding model is configured, uses cosine similarity to find similar prompts (threshold: 0.85 by default).
+- **LRU Eviction**: Maintains up to 100 entries with 1-hour TTL.
+- **Tracks Recent Selections**: Keeps track of model selection frequency for diversity awareness.
+
+### Response Cache
+- **Full Response Caching**: Caches actual LLM responses, not just routing decisions.
+- **Model-Specific Keys**: Cache key is (model_name, prompt_hash).
+- **Separate Storage**: 50-entry cache to balance memory usage.
+- **Signature Handling**: Signatures are added after retrieving cached responses.
+
+### Cache Management
+- **Detailed Stats**: Hit rates, similarity hit rates, miss reasons tracked.
+- **Invalidation API**: `POST /admin/cache/invalidate` for manual cache clearing.
+- **Per-Model Invalidation**: Can clear cache for specific models only.
+
+**Configuration:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROUTER_CACHE_ENABLED` | true | Enable/disable caching |
+| `ROUTER_CACHE_MAX_SIZE` | 100 | Max routing cache entries |
+| `ROUTER_CACHE_TTL_SECONDS` | 3600 | Time-to-live for entries |
+| `ROUTER_CACHE_SIMILARITY_THRESHOLD` | 0.85 | Similarity threshold (0-1) |
+| `ROUTER_EMBED_MODEL` | - | Embedding model for semantic matching |
+
+---
+
 ## 6. API Reference
 
 The router implements a fully OpenAI-compatible API, allowing it to serve as a drop-in replacement for most AI applications.
@@ -139,6 +171,7 @@ The router implements a fully OpenAI-compatible API, allowing it to serve as a d
 | `/admin/profiles` | GET | View performance profiles of all profiled models. |
 | `/admin/benchmarks` | GET | View aggregated benchmark data from external sources. |
 | `/admin/reprofile` | POST | Trigger manual reprofiling of models. |
+| `/admin/cache/invalidate` | POST | Invalidate cache entries. Parameters: `model` (optional), `response_cache_only` (bool). |
 
 ### 6.3 Chat Completion Parameters
 

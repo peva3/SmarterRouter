@@ -38,64 +38,223 @@ CATEGORY_MIN_SIZES = {
 
 
 class SemanticCache:
-    """Simple LRU cache for routing decisions based on prompt hash."""
+    """Smart LRU cache for routing decisions with semantic similarity and response caching."""
     
-    def __init__(self, max_size: int = 100, ttl_seconds: int = 3600):
-        self.cache: OrderedDict[str, tuple[RoutingResult, float]] = OrderedDict()
+    def __init__(
+        self,
+        max_size: int = 100,
+        ttl_seconds: int = 3600,
+        similarity_threshold: float = 0.85,
+        embed_model: str | None = None,
+    ):
+        self.cache: OrderedDict[str, tuple[RoutingResult, float, list[float] | None]] = OrderedDict()
         self.max_size = max_size
         self.ttl = ttl_seconds
+        self.similarity_threshold = similarity_threshold
+        self.embed_model = embed_model
         self.recent_selections: list[tuple[str, float]] = []
         self.max_recent = 20
         self._lock = asyncio.Lock()
+        
+        self.response_cache: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
+        self.response_max_size = 50
+        self.response_ttl = ttl_seconds
+        
+        self.stats = {
+            "routing_hits": 0,
+            "routing_misses": 0,
+            "routing_similarity_hits": 0,
+            "response_hits": 0,
+            "response_misses": 0,
+        }
     
     def _hash_prompt(self, prompt: str) -> str:
         return hashlib.sha256(prompt.encode()).hexdigest()[:32]
     
-    def get(self, prompt: str) -> RoutingResult | None:
+    def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
+        if not a or not b:
+            return 0.0
+        dot_product = sum(x * y for x, y in zip(a, b))
+        magnitude_a = sum(x * x for x in a) ** 0.5
+        magnitude_b = sum(x * x for x in b) ** 0.5
+        if magnitude_a == 0 or magnitude_b == 0:
+            return 0.0
+        return dot_product / (magnitude_a * magnitude_b)
+    
+    async def _get_embedding(self, client: LLMBackend, text: str) -> list[float] | None:
+        if not self.embed_model:
+            return None
+        try:
+            result = await client.embed(self.embed_model, text[:8192])
+            embeddings = result.get("embeddings") or result.get("embedding")
+            if embeddings:
+                if isinstance(embeddings[0], list):
+                    return embeddings[0]
+                return embeddings[0] if embeddings else None
+        except Exception as e:
+            logger.debug(f"Embedding failed: {e}")
+        return None
+    
+    def get(self, prompt: str, embedding: list[float] | None = None) -> RoutingResult | None:
         key = self._hash_prompt(prompt)
+        current_time = time.time()
+        
         if key in self.cache:
-            result, timestamp = self.cache[key]
-            if time.time() - timestamp < self.ttl:
+            result, timestamp, _ = self.cache[key]
+            if current_time - timestamp < self.ttl:
                 self.cache.move_to_end(key)
-                logger.debug(f"Cache hit for prompt hash: {key[:8]}...")
+                self.stats["routing_hits"] += 1
+                logger.debug(f"Cache hit (exact) for prompt hash: {key[:8]}...")
                 return result
             else:
                 del self.cache[key]
+        
+        if embedding:
+            best_match = None
+            best_similarity = 0.0
+            best_key = None
+            
+            for cache_key, (result, timestamp, cache_embedding) in self.cache.items():
+                if cache_embedding and current_time - timestamp < self.ttl:
+                    similarity = self._cosine_similarity(embedding, cache_embedding)
+                    if similarity > best_similarity and similarity >= self.similarity_threshold:
+                        best_similarity = similarity
+                        best_match = result
+                        best_key = cache_key
+            
+            if best_match and best_key:
+                self.cache.move_to_end(best_key)
+                self.stats["routing_similarity_hits"] += 1
+                logger.debug(f"Cache hit (similarity={best_similarity:.2f}) for prompt hash: {best_key[:8]}...")
+                return best_match
+        
+        self.stats["routing_misses"] += 1
         return None
     
-    def set(self, prompt: str, result: RoutingResult) -> None:
+    def set(
+        self,
+        prompt: str,
+        result: RoutingResult,
+        embedding: list[float] | None = None,
+    ) -> None:
         key = self._hash_prompt(prompt)
-        self.cache[key] = (result, time.time())
+        self.cache[key] = (result, time.time(), embedding)
         self.cache.move_to_end(key)
         if len(self.cache) > self.max_size:
             self.cache.popitem(last=False)
         
-        # Track recent selections for diversity
         self.recent_selections.append((result.selected_model, time.time()))
         if len(self.recent_selections) > self.max_recent:
             self.recent_selections.pop(0)
         logger.debug(f"Cached routing decision for: {key[:8]}...")
     
+    def get_response(self, model: str, prompt: str) -> str | None:
+        key = (model, self._hash_prompt(prompt))
+        current_time = time.time()
+        
+        if key in self.response_cache:
+            response, timestamp = self.response_cache[key]
+            if current_time - timestamp < self.response_ttl:
+                self.response_cache.move_to_end(key)
+                self.stats["response_hits"] += 1
+                logger.debug(f"Response cache hit for {model}")
+                return response
+            else:
+                del self.response_cache[key]
+        
+        self.stats["response_misses"] += 1
+        return None
+    
+    def set_response(self, model: str, prompt: str, response: str) -> None:
+        key = (model, self._hash_prompt(prompt))
+        self.response_cache[key] = (response, time.time())
+        self.response_cache.move_to_end(key)
+        if len(self.response_cache) > self.response_max_size:
+            self.response_cache.popitem(last=False)
+        logger.debug(f"Cached response for {model}")
+    
+    def invalidate_response(self, model: str | None = None) -> int:
+        count = 0
+        if model is None:
+            count = len(self.response_cache)
+            self.response_cache.clear()
+        else:
+            keys_to_remove = [k for k in self.response_cache if k[0] == model]
+            count = len(keys_to_remove)
+            for k in keys_to_remove:
+                del self.response_cache[k]
+        return count
+    
     def get_model_frequency(self, model_name: str) -> float:
-        """Get frequency of a model in recent selections (0.0 to 1.0)."""
         if not self.recent_selections:
             return 0.0
         recent_count = sum(1 for m, _ in self.recent_selections if m == model_name)
         return recent_count / len(self.recent_selections)
+    
+    def get_stats(self) -> dict[str, Any]:
+        total_routing = self.stats["routing_hits"] + self.stats["routing_misses"]
+        routing_hit_rate = self.stats["routing_hits"] / total_routing if total_routing > 0 else 0.0
+        similarity_rate = self.stats["routing_similarity_hits"] / max(1, self.stats["routing_hits"] + self.stats["routing_similarity_hits"])
+        
+        total_response = self.stats["response_hits"] + self.stats["response_misses"]
+        response_hit_rate = self.stats["response_hits"] / total_response if total_response > 0 else 0.0
+        
+        return {
+            "routing": {
+                "size": len(self.cache),
+                "max_size": self.max_size,
+                "hits": self.stats["routing_hits"],
+                "similarity_hits": self.stats["routing_similarity_hits"],
+                "misses": self.stats["routing_misses"],
+                "hit_rate": round(routing_hit_rate, 3),
+                "similarity_rate": round(similarity_rate, 3),
+            },
+            "response": {
+                "size": len(self.response_cache),
+                "max_size": self.response_max_size,
+                "hits": self.stats["response_hits"],
+                "misses": self.stats["response_misses"],
+                "hit_rate": round(response_hit_rate, 3),
+            },
+            "recent_selections": len(self.recent_selections),
+        }
 
 
 class RouterEngine:
-    def __init__(self, client: LLMBackend, dispatcher_model: str | None = None):
+    def __init__(
+        self,
+        client: LLMBackend,
+        dispatcher_model: str | None = None,
+        cache_enabled: bool = True,
+        cache_max_size: int = 100,
+        cache_ttl_seconds: int = 3600,
+        cache_similarity_threshold: float = 0.85,
+        embed_model: str | None = None,
+    ):
         self.client = client
         self.dispatcher_model = dispatcher_model or settings.router_model
-        self.semantic_cache = SemanticCache(max_size=100, ttl_seconds=3600)
+        self.cache_enabled = cache_enabled
+        self.embed_model = embed_model
+        
+        if cache_enabled:
+            self.semantic_cache = SemanticCache(
+                max_size=cache_max_size,
+                ttl_seconds=cache_ttl_seconds,
+                similarity_threshold=cache_similarity_threshold,
+                embed_model=embed_model,
+            )
+        else:
+            self.semantic_cache = None
 
     async def select_model(self, prompt: str | list[dict], request_obj: Any = None) -> RoutingResult:
-        # Check semantic cache first
         prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt, sort_keys=True)
-        cached = self.semantic_cache.get(prompt_str)
-        if cached:
-            return cached
+        
+        embedding = None
+        if self.cache_enabled and self.semantic_cache and self.embed_model:
+            embedding = await self.semantic_cache._get_embedding(self.client, prompt_str)
+            cached = self.semantic_cache.get(prompt_str, embedding)
+            if cached:
+                return cached
         
         available_models = await self.client.list_models()
         if not available_models:
@@ -103,10 +262,8 @@ class RouterEngine:
 
         model_names = [m.name for m in available_models]
 
-        # Extract text prompt if multimodal
         text_prompt = prompt
         if isinstance(prompt, list):
-            # Concatenate text parts
             text_parts = []
             for msg in prompt:
                 if isinstance(msg, dict):
@@ -120,9 +277,14 @@ class RouterEngine:
             text_prompt = "\n".join(text_parts)
 
         if self.dispatcher_model:
-            return await self._llm_dispatch(text_prompt, model_names)
+            result = await self._llm_dispatch(text_prompt, model_names)
         else:
-            return await self._keyword_dispatch(text_prompt, model_names, request_obj)
+            result = await self._keyword_dispatch(text_prompt, model_names, request_obj)
+        
+        if self.cache_enabled and self.semantic_cache:
+            self.semantic_cache.set(prompt_str, result, embedding)
+        
+        return result
 
     async def _llm_dispatch(self, prompt: str, model_names: list[str]) -> RoutingResult:
         # ... existing implementation ... (no changes needed here for now as it's string based)
@@ -916,7 +1078,8 @@ Select the model that best matches the user's prompt needs."""
                 confidence=confidence,
                 reasoning=reasoning,
             )
-            self.semantic_cache.set(prompt, result)
+            if self.semantic_cache:
+                self.semantic_cache.set(prompt, result)
             
         except Exception as e:
             logger.debug(f"Failed to log routing decision: {e}")

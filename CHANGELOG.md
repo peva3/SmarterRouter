@@ -1,3 +1,34 @@
+## [1.7.0] - 2026-02-16
+
+### Smart Caching
+
+Implemented comprehensive smart caching with semantic similarity and response caching.
+
+#### Added
+- **Semantic Similarity Caching**:
+  - Uses embeddings to find similar prompts (not just exact hash matches)
+  - Configurable similarity threshold (default: 0.85)
+  - Requires embedding model for semantic matching
+  - Falls back to exact hash matching if no embedding model configured
+- **Response Caching**:
+  - Caches actual LLM responses, not just routing decisions
+  - Separate cache (50 entries) from routing cache (100 entries)
+  - Key: (model_name, prompt_hash)
+- **Cache Stats**:
+  - Detailed stats in `/admin/stats`: hits, misses, hit_rate, similarity_rate
+  - Tracks exact matches vs semantic similarity hits separately
+- **Cache Invalidation Endpoint**: `POST /admin/cache/invalidate`
+  - Parameters: `model`, `response_cache_only`
+
+#### New Environment Variables
+- `ROUTER_CACHE_ENABLED` (default: true)
+- `ROUTER_CACHE_MAX_SIZE` (default: 100)
+- `ROUTER_CACHE_TTL_SECONDS` (default: 3600)
+- `ROUTER_CACHE_SIMILARITY_THRESHOLD` (default: 0.85)
+- `ROUTER_EMBED_MODEL` (optional)
+
+---
+
 ## [1.6.0] - 2026-02-16
 
 ### Tool Execution & Feature Enhancements
