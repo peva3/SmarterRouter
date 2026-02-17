@@ -6,12 +6,12 @@ from typing import Any
 
 import httpx
 
-from router.backends.base import ModelInfo
+from router.backends.base import LLMBackend, ModelInfo
 
 logger = logging.getLogger(__name__)
 
 
-class OllamaBackend:
+class OllamaBackend(LLMBackend):
     """Ollama backend implementation."""
 
     def __init__(self, base_url: str, timeout: float = 60.0, generation_timeout: float = 120.0):

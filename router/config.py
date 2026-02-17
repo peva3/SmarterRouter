@@ -80,9 +80,10 @@ class Settings(BaseSettings):
 
     # Smart Cache settings
     cache_enabled: bool = Field(default=True)  # Enable smart caching
-    cache_max_size: int = Field(default=100)  # Max routing cache entries
+    cache_max_size: int = Field(default=500)  # Max routing cache entries (increased from 100)
     cache_ttl_seconds: int = Field(default=3600)  # TTL for cache entries (1 hour)
     cache_similarity_threshold: float = Field(default=0.85)  # Threshold for semantic similarity
+    cache_response_max_size: int = Field(default=200)  # Max response cache entries (increased from 50)
     embed_model: str | None = Field(default=None)  # Model to use for embeddings
 
     @model_validator(mode="before")

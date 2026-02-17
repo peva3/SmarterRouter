@@ -29,6 +29,7 @@ from router.schemas import (
     FeedbackRequest,
     sanitize_prompt,
     sanitize_for_logging,
+    strip_signature,
     EmbeddingsRequest,
     EmbeddingsResponse,
     EmbeddingData,
@@ -45,6 +46,7 @@ class AppState:
         self.background_tasks: set[asyncio.Task] = set()
         self.current_loaded_model: str | None = None
         self.rate_limiter: dict[str, list[float]] = {}
+        self.rate_limit_lock: asyncio.Lock = asyncio.Lock()
         
         # Health and stats tracking
         self.start_time: datetime = datetime.now(timezone.utc)
@@ -94,32 +96,34 @@ async def rate_limit_request(
     config: Settings, 
     is_admin: bool = False
 ) -> None:
-    """Simple in-memory rate limiter."""
+    """Simple in-memory rate limiter with thread-safe access."""
     if not config.rate_limit_enabled:
         return
 
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     
-    # Clean up old requests
-    if client_ip in app_state.rate_limiter:
-        app_state.rate_limiter[client_ip] = [
-            t for t in app_state.rate_limiter[client_ip] 
-            if now - t < 60
-        ]
-    
-    current_requests = len(app_state.rate_limiter.get(client_ip, []))
-    limit = config.rate_limit_admin_requests_per_minute if is_admin else config.rate_limit_requests_per_minute
-    
-    if current_requests >= limit:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded",
-        )
+    # Use lock to prevent race conditions
+    async with app_state.rate_limit_lock:
+        # Clean up old requests
+        if client_ip in app_state.rate_limiter:
+            app_state.rate_limiter[client_ip] = [
+                t for t in app_state.rate_limiter[client_ip] 
+                if now - t < 60
+            ]
         
-    if client_ip not in app_state.rate_limiter:
-        app_state.rate_limiter[client_ip] = []
-    app_state.rate_limiter[client_ip].append(now)
+        current_requests = len(app_state.rate_limiter.get(client_ip, []))
+        limit = config.rate_limit_admin_requests_per_minute if is_admin else config.rate_limit_requests_per_minute
+        
+        if current_requests >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded",
+            )
+            
+        if client_ip not in app_state.rate_limiter:
+            app_state.rate_limiter[client_ip] = []
+        app_state.rate_limiter[client_ip].append(now)
 
 
 async def startup_event():
@@ -144,6 +148,7 @@ async def startup_event():
             cache_max_size=settings.cache_max_size,
             cache_ttl_seconds=settings.cache_ttl_seconds,
             cache_similarity_threshold=settings.cache_similarity_threshold,
+            cache_response_max_size=settings.cache_response_max_size,
             embed_model=settings.embed_model,
         )
 
@@ -350,8 +355,7 @@ async def chat_completions(
         content = msg.content
         if isinstance(content, str) and msg.role == "assistant":
             # Remove any previous signatures from assistant messages
-            import re
-            content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
+            content = strip_signature(content)
         return content
     
     messages_dict = [
@@ -391,7 +395,7 @@ async def chat_completions(
         app_state.current_loaded_model = selected_model
         
         # Log the decision now that we're committing to it
-        app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
+        await app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
 
         return StreamingResponse(
             stream_chat(app_state.backend, selected_model, messages_dict, reasoning, config, response_id, **backend_kwargs),
@@ -420,10 +424,10 @@ async def chat_completions(
     # Check response cache before generation
     cache_key_prompt = prompt
     if app_state.router_engine and app_state.router_engine.semantic_cache:
-        cached_response = app_state.router_engine.semantic_cache.get_response(selected_model, cache_key_prompt)
+        cached_response = await app_state.router_engine.semantic_cache.get_response(selected_model, cache_key_prompt)
         if cached_response:
             logger.info(f"Response cache hit for {selected_model}")
-            app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
+            await app_state.router_engine.log_decision(prompt, selected_model, confidence, reasoning, response_id)
             return {
                 "id": response_id,
                 "object": "chat.completion",
@@ -489,7 +493,7 @@ async def chat_completions(
         )
 
     # Log the initial routing decision
-    app_state.router_engine.log_decision(prompt, final_model, confidence, reasoning, response_id)
+    await app_state.router_engine.log_decision(prompt, final_model, confidence, reasoning, response_id)
 
     # === TOOL EXECUTION LOOP ===
     max_tool_calls = 5
@@ -532,14 +536,14 @@ async def chat_completions(
 
     if config.signature_enabled:
         signature = config.signature_format.format(model=final_model)
-        import re
-        content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
+        # Strip any existing signature first, then add our own
+        content = strip_signature(content)
         content += signature
 
     # Cache the response (without signature) for future requests
     if app_state.router_engine and app_state.router_engine.semantic_cache:
-        content_for_cache = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE).rstrip()
-        app_state.router_engine.semantic_cache.set_response(final_model, prompt, content_for_cache)
+        content_for_cache = strip_signature(content)
+        await app_state.router_engine.semantic_cache.set_response(final_model, prompt, content_for_cache)
 
     return {
         "id": response_id,
@@ -743,7 +747,7 @@ async def get_stats(
     # Get cache stats from router engine
     cache_stats = {}
     if app_state.router_engine and app_state.router_engine.semantic_cache:
-        cache_stats = app_state.router_engine.semantic_cache.get_stats()
+        cache_stats = await app_state.router_engine.semantic_cache.get_stats()
     
     return {
         "uptime_seconds": uptime_seconds,
@@ -793,10 +797,11 @@ async def invalidate_cache(
     invalidated = 0
     
     if response_cache_only or model:
-        invalidated = cache.invalidate_response(model)
+        invalidated = await cache.invalidate_response(model)
     else:
-        cache.cache.clear()
-        cache.response_cache.clear()
+        async with cache._lock:
+            cache.cache.clear()
+            cache.response_cache.clear()
         invalidated = "all"
     
     return {

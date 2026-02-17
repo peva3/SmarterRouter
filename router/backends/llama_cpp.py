@@ -6,12 +6,12 @@ from typing import Any
 
 import httpx
 
-from router.backends.base import ModelInfo
+from router.backends.base import LLMBackend, ModelInfo
 
 logger = logging.getLogger(__name__)
 
 
-class LlamaCppBackend:
+class LlamaCppBackend(LLMBackend):
     """Llama.cpp server backend implementation.
 
     Compatible with llama.cpp server, llama-swap, and other

@@ -6,7 +6,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 
 - **Multi-Backend Support**: Works with Ollama, llama.cpp servers, and any OpenAI-compatible API.
 - **Smart Routing**: Category-first routing (coding, reasoning, creativity) and complexity-aware model selection.
-- **Smart Caching**: Semantic similarity caching with embeddings + response caching for identical prompts.
+- **Smart Caching**: Thread-safe semantic similarity caching with embeddings + response caching (500 routing + 200 response entries) for identical prompts.
 - **Category-Minimum Size**: Prevents small models from being selected for complex tasks (e.g., 0.5B for hard coding).
 - **Vector Embeddings**: Full `/v1/embeddings` endpoint for RAG and semantic search applications.
 - **Multimodal Support**: Automatically routes vision tasks to vision-capable models.
@@ -16,10 +16,14 @@ An intelligent, multi-backend AI router that sits between your application and v
 - **VRAM Management**: Proactive model unloading for systems with limited GPU memory, with a "pinned model" option for speed.
 - **Runtime Profiling**: Tests your actual models with real prompts to measure their capabilities on your hardware.
 - **Security Hardening**:
+  - **SQL Injection Prevention**: All database operations use ORM with whitelist validation.
   - **API Key Authentication**: Protects admin endpoints.
-  - **Rate Limiting**: Throttles requests to prevent abuse.
+  - **Rate Limiting**: Thread-safe request throttling to prevent abuse.
   - **Input Validation & Sanitization**: Enforces schema validation, length limits, and sanitizes prompts.
+  - **Log Sanitization**: Automatic redaction of secrets and API keys.
 - **Frontend Integration**: Presents itself as a single, configurable model name for seamless integration with UIs like OpenWebUI.
+- **Production Ready**: Comprehensive test suite (73 tests), thread-safe architecture, and extensive error handling.
+
 
 ## Quick Start
 

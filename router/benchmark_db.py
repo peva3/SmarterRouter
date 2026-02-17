@@ -70,14 +70,27 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
     if not benchmarks:
         return 0
 
+    # Whitelist of allowed ModelBenchmark columns to prevent SQL injection via setattr
+    ALLOWED_BENCHMARK_FIELDS = {
+        "ollama_name", "full_name", "parameters", "quantization",
+        "mmlu", "humaneval", "math", "gpqa", "hellaswag", "winogrande",
+        "truthfulqa", "mmlu_pro", "reasoning_score", "coding_score",
+        "general_score", "elo_rating", "throughput", "context_window",
+        "vision", "tool_calling", "last_updated", "benchmark_source"
+    }
+
     count = 0
     for data in benchmarks:
-        # Filter out None values and non-scalars
+        # Filter out None values and non-scalars, and validate keys
         cleaned = {}
         for k, v in data.items():
             if v is None:
                 continue
             if isinstance(v, (dict, list)):
+                continue
+            # Validate key against whitelist
+            if k not in ALLOWED_BENCHMARK_FIELDS:
+                logger.warning(f"Skipping unknown benchmark field: {k}")
                 continue
             cleaned[k] = v
         cleaned["last_updated"] = datetime.now(timezone.utc)
@@ -94,13 +107,18 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
             if existing:
                 for k, v in cleaned.items():
                     if k != "ollama_name":
+                        # Extra safety: ensure key is in whitelist before setattr
+                        if k not in ALLOWED_BENCHMARK_FIELDS:
+                            continue
                         # Only update if the new value is not None/0, or if existing is None/0
                         new_val = v
                         old_val = getattr(existing, k)
                         if new_val and (not old_val or new_val > old_val or k == "last_updated"):
                             setattr(existing, k, v)
             else:
-                session.add(ModelBenchmark(**cleaned))
+                # Filter dict one more time to ensure only allowed fields
+                safe_data = {k: v for k, v in cleaned.items() if k in ALLOWED_BENCHMARK_FIELDS}
+                session.add(ModelBenchmark(**safe_data))
 
             session.commit()
             count += 1

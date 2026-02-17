@@ -177,8 +177,8 @@ ROUTER_DATABASE_URL=sqlite:///router.db
 # Caches routing decisions and responses for faster processing
 ROUTER_CACHE_ENABLED=true
 
-# Maximum number of routing cache entries (default: 100)
-ROUTER_CACHE_MAX_SIZE=100
+# Maximum number of routing cache entries (default: 500)
+ROUTER_CACHE_MAX_SIZE=500
 
 # Cache TTL in seconds (default: 3600 = 1 hour)
 ROUTER_CACHE_TTL_SECONDS=3600
@@ -186,6 +186,9 @@ ROUTER_CACHE_TTL_SECONDS=3600
 # Similarity threshold for semantic matching (0.0-1.0, default: 0.85)
 # Higher = more strict matching, Lower = more flexible matching
 ROUTER_CACHE_SIMILARITY_THRESHOLD=0.85
+
+# Maximum number of response cache entries (default: 200)
+ROUTER_CACHE_RESPONSE_MAX_SIZE=200
 
 # Embedding model for semantic similarity (optional)
 # If set, enables semantic similarity matching in addition to exact hash matching

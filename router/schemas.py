@@ -209,3 +209,30 @@ def sanitize_for_logging(text: str, max_length: int = 200) -> str:
     text = text.replace('\n', ' ').replace('\r', ' ')
     
     return text
+
+
+def strip_signature(content: str, signature_format: str | None = None) -> str:
+    """
+    Remove router signature from content.
+    
+    Args:
+        content: The content that may contain a signature
+        signature_format: The signature format string (e.g., "\nModel: {model}")
+        
+    Returns:
+        Content without the signature
+    """
+    if not content:
+        return content
+    
+    # If no format provided, try common patterns
+    if not signature_format:
+        # Default pattern: "\nModel: model_name" at end
+        content = re.sub(r'\n?Model:.*$', '', content, flags=re.MULTILINE)
+    else:
+        # Escape the format string for regex
+        # Convert {model} to a capture pattern
+        pattern = re.escape(signature_format).replace(r'\{model\}', r'.*')
+        content = re.sub(pattern + r'$', '', content, flags=re.MULTILINE)
+    
+    return content.rstrip()

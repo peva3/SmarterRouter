@@ -19,11 +19,11 @@ Additionally, the router now supports **Vector Embeddings** generation, making i
 ### 2.1 Backend Abstraction Layer (`router/backends/`)
 We didn't want to build a tool that only works with Ollama. The backend layer uses a Protocol-based abstraction (similar to a Java Interface) to ensure that the core routing logic is decoupled from the specific LLM engine.
 
-- **Ollama Backend**: The primary target for local users. Supports VRAM management, model unloading, and native embeddings.
-- **llama.cpp Backend**: Designed for high-performance deployments using the standard `llama.cpp` server. Supports embeddings.
-- **OpenAI-Compatible Backend**: Allows the router to act as a bridge to external APIs (OpenAI, Anthropic, or even other instances of this router).
+- **Ollama Backend**: The primary target for local users. Supports VRAM management, model unloading, and native embeddings. Explicitly implements `LLMBackend` protocol.
+- **llama.cpp Backend**: Designed for high-performance deployments using the standard `llama.cpp` server. Supports embeddings. Protocol-compliant.
+- **OpenAI-Compatible Backend**: Allows the router to act as a bridge to external APIs (OpenAI, Anthropic, or even other instances of this router). Full protocol adherence.
 
-**Why this matters:** It future-proofs the system. If a new high-performance engine emerges tomorrow, we only need to implement one Python class to support it.
+**Why this matters:** It future-proofs the system. If a new high-performance engine emerges tomorrow, we only need to implement one Python class to support it. The explicit protocol inheritance provides compile-time checking and better IDE support.
 
 ### 2.2 The Routing Engine (`router/router.py`)
 The "Brain" of the system. It handles the scoring and selection process using a multi-weighted algorithm.
@@ -111,9 +111,10 @@ We chose **SQLite** via **SQLAlchemy** for storage.
 
 While often used locally, we've added features to make the router safe for multi-user environments:
 
-- **Rate Limiting**: Protects your GPU from being overwhelmed by too many concurrent requests.
+- **Rate Limiting**: Thread-safe request throttling protects your GPU from being overwhelmed by too many concurrent requests.
 - **Admin Keys**: Protects sensitive endpoints like `/admin/reprofile` while keeping the main chat API accessible.
 - **Sanitization**: All prompts are stripped of control characters and validated against length limits to prevent injection or memory-exhaustion attacks.
+- **SQL Injection Prevention**: All database write operations use whitelist validation and ORM-based parameterized queries. Critical paths (e.g., `bulk_upsert_benchmarks`) explicitly validate keys against known column names.
 - **Cascading Fallbacks**: If the "best" model happens to be down or fails mid-generation, the router can automatically retry with the "second best" model, improving overall system reliability.
 
 ---
@@ -125,14 +126,16 @@ The router implements a multi-layered caching system to optimize performance:
 ### Routing Cache (Semantic)
 - **Exact Hash Matching**: Uses SHA-256 of the prompt for instant cache hits.
 - **Semantic Similarity**: If an embedding model is configured, uses cosine similarity to find similar prompts (threshold: 0.85 by default).
-- **LRU Eviction**: Maintains up to 100 entries with 1-hour TTL.
-- **Tracks Recent Selections**: Keeps track of model selection frequency for diversity awareness.
+- **LRU Eviction**: Maintains up to 500 routing entries with 1-hour TTL.
+- **Thread-Safe Operations**: All cache access is protected by an `asyncio.Lock`, ensuring correct behavior under concurrent load.
+- **Tracks Recent Selections**: Keeps track of model selection frequency for diversity awareness and prevents model monopolization.
 
 ### Response Cache
 - **Full Response Caching**: Caches actual LLM responses, not just routing decisions.
 - **Model-Specific Keys**: Cache key is (model_name, prompt_hash).
-- **Separate Storage**: 50-entry cache to balance memory usage.
-- **Signature Handling**: Signatures are added after retrieving cached responses.
+- **Separate Storage**: 200-entry cache to balance memory usage and hit rate.
+- **Signature Handling**: Signatures are added after retrieving cached responses to prevent duplication.
+- **Atomic Updates**: Cache writes are synchronized to prevent race conditions.
 
 ### Cache Management
 - **Detailed Stats**: Hit rates, similarity hit rates, miss reasons tracked.
@@ -143,9 +146,10 @@ The router implements a multi-layered caching system to optimize performance:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ROUTER_CACHE_ENABLED` | true | Enable/disable caching |
-| `ROUTER_CACHE_MAX_SIZE` | 100 | Max routing cache entries |
+| `ROUTER_CACHE_MAX_SIZE` | 500 | Max routing cache entries |
 | `ROUTER_CACHE_TTL_SECONDS` | 3600 | Time-to-live for entries |
 | `ROUTER_CACHE_SIMILARITY_THRESHOLD` | 0.85 | Similarity threshold (0-1) |
+| `ROUTER_CACHE_RESPONSE_MAX_SIZE` | 200 | Max response cache entries |
 | `ROUTER_EMBED_MODEL` | - | Embedding model for semantic matching |
 
 ---

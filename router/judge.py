@@ -38,7 +38,10 @@ class JudgeClient:
     async def score_response(self, prompt: str, response: str) -> float:
         """Score a model response using the configured judge model."""
         if not self.enabled:
-            return 1.0 if len(response.strip()) > 10 else 0.0
+            # Fallback: neutral score for non-empty responses
+            if response and len(response.strip()) > 0:
+                return 0.5
+            return 0.0
 
         if not response or len(response.strip()) < 5:
             return 0.0

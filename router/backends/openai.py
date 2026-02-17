@@ -6,12 +6,12 @@ from typing import Any
 
 import httpx
 
-from router.backends.base import ModelInfo
+from router.backends.base import LLMBackend, ModelInfo
 
 logger = logging.getLogger(__name__)
 
 
-class OpenAIBackend:
+class OpenAIBackend(LLMBackend):
     """OpenAI-compatible API backend.
 
     Supports OpenAI, Anthropic (via compatibility layer), and any

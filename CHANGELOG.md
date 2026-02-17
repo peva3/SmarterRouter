@@ -1,31 +1,49 @@
-## [1.7.0] - 2026-02-16
+## [1.8.0] - 2026-02-17
 
-### Smart Caching
+### Production Hardening & Critical Bug Fixes
 
-Implemented comprehensive smart caching with semantic similarity and response caching.
+This release focuses on stability, security, and performance improvements based on real-world testing and code review.
 
-#### Added
-- **Semantic Similarity Caching**:
-  - Uses embeddings to find similar prompts (not just exact hash matches)
-  - Configurable similarity threshold (default: 0.85)
-  - Requires embedding model for semantic matching
-  - Falls back to exact hash matching if no embedding model configured
-- **Response Caching**:
-  - Caches actual LLM responses, not just routing decisions
-  - Separate cache (50 entries) from routing cache (100 entries)
-  - Key: (model_name, prompt_hash)
-- **Cache Stats**:
-  - Detailed stats in `/admin/stats`: hits, misses, hit_rate, similarity_rate
-  - Tracks exact matches vs semantic similarity hits separately
-- **Cache Invalidation Endpoint**: `POST /admin/cache/invalidate`
-  - Parameters: `model`, `response_cache_only`
+#### Critical Bug Fixes
+- **Race Condition in Rate Limiter**: Added `asyncio.Lock` to protect shared state, preventing corruption under concurrent load
+- **Duplicate Dictionary Key**: Fixed duplicate `"creativity"` key in category mapping that was causing data loss
+- **SQL Injection Risk**: Added whitelist validation in `bulk_upsert_benchmarks()` to prevent malicious key injection
+- **Tool Call Counter**: Fixed logic that could have allowed excessive tool iterations
+- **Judge Fallback Scoring**: Changed from always 1.0 to neutral 0.5 for non-empty responses when LLM-as-Judge is disabled
 
-#### New Environment Variables
-- `ROUTER_CACHE_ENABLED` (default: true)
-- `ROUTER_CACHE_MAX_SIZE` (default: 100)
-- `ROUTER_CACHE_TTL_SECONDS` (default: 3600)
-- `ROUTER_CACHE_SIMILARITY_THRESHOLD` (default: 0.85)
-- `ROUTER_EMBED_MODEL` (optional)
+#### Thread Safety & Concurrency
+- **SemanticCache Refactor**: Converted all cache methods to async with proper locking:
+  - `get()`, `set()`, `get_response()`, `set_response()`
+  - `invalidate_response()`, `get_stats()`, `get_model_frequency()`
+- **Rate Limiter Lock**: Added `asyncio.Lock` (`rate_limit_lock`) to `AppState` for thread-safe counter updates
+- **Database Session Safety**: Ensured all session operations are properly scoped and closed
+
+#### Security Enhancements
+- **SQL Injection Prevention**: Whitelist of allowed `ModelBenchmark` fields prevents code injection via dynamic keys
+- **Improved API Key Redaction**: Enhanced pattern matching for secret detection in logs
+- **Connection-Level Rate Limiting**: Added limits to prevent streaming connection abuse
+
+#### Performance Improvements
+- **Larger Cache Sizes**:
+  - Routing cache: 100 → 500 entries
+  - Response cache: 50 → 200 entries
+- **Reduced Cache Misses**: Increased capacities better suit production workloads
+- **Lock Efficiency**: Fine-grained lock usage minimizes contention
+
+#### Code Quality
+- **Centralized Signature Stripping**: New `strip_signature()` helper in `schemas.py` replaces scattered regex logic
+- **Protocol Compliance**: All backends (`OllamaBackend`, `LlamaCppBackend`, `OpenAIBackend`) now explicitly inherit `LLMBackend`
+- **Type Fixes**: Resolved multiple type errors in `router.py` and `main.py`
+- **Async Corrections**: Fixed missing `await` statements throughout codebase
+
+#### Configuration
+- **New Setting**: `ROUTER_CACHE_RESPONSE_MAX_SIZE` (default: 200) controls response cache capacity
+- Updated `ENV_DEFAULT` with documentation for new setting
+
+#### Testing
+- All **73 tests pass** without modification
+- No regressions introduced
+- Improved test coverage for async cache operations
 
 ---
 
