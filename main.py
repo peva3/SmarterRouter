@@ -719,75 +719,63 @@ async def stream_chat(
         stream, latency = await client.chat_streaming(model, messages, **kwargs)
 
         # Initial chunk with metadata
-        yield f"data: {
-            json.dumps(
+        initial_chunk = {
+            'id': chunk_id,
+            'object': 'chat.completion.chunk',
+            'created': created,
+            'model': model,
+            'choices': [
                 {
+                    'index': 0,
+                    'delta': {'role': 'assistant', 'content': ''},
+                    'finish_reason': None,
+                }
+            ],
+            'router': {'reasoning': reasoning},
+        }
+        yield f"data: {json.dumps(initial_chunk)}\n\n"
+
+        async for chunk in stream:
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                content_chunk = {
                     'id': chunk_id,
                     'object': 'chat.completion.chunk',
                     'created': created,
                     'model': model,
                     'choices': [
-                        {
-                            'index': 0,
-                            'delta': {'role': 'assistant', 'content': ''},
-                            'finish_reason': None,
-                        }
+                        {'index': 0, 'delta': {'content': content}, 'finish_reason': None}
                     ],
-                    'router': {'reasoning': reasoning},
                 }
-            )
-        }\n\n"
-
-        async for chunk in stream:
-            content = chunk.get("message", {}).get("content", "")
-            if content:
-                yield f"data: {
-                    json.dumps(
-                        {
-                            'id': chunk_id,
-                            'object': 'chat.completion.chunk',
-                            'created': created,
-                            'model': model,
-                            'choices': [
-                                {'index': 0, 'delta': {'content': content}, 'finish_reason': None}
-                            ],
-                        }
-                    )
-                }\n\n"
+                yield f"data: {json.dumps(content_chunk)}\n\n"
 
             if chunk.get("done", False):
                 # Add signature if enabled
                 if config.signature_enabled:
                     signature = config.signature_format.format(model=model)
-                    yield f"data: {
-                        json.dumps(
+                    signature_chunk = {
+                        'id': chunk_id,
+                        'object': 'chat.completion.chunk',
+                        'created': created,
+                        'model': model,
+                        'choices': [
                             {
-                                'id': chunk_id,
-                                'object': 'chat.completion.chunk',
-                                'created': created,
-                                'model': model,
-                                'choices': [
-                                    {
-                                        'index': 0,
-                                        'delta': {'content': signature},
-                                        'finish_reason': 'stop',
-                                    }
-                                ],
+                                'index': 0,
+                                'delta': {'content': signature},
+                                'finish_reason': 'stop',
                             }
-                        )
-                    }\n\n"
+                        ],
+                    }
+                    yield f"data: {json.dumps(signature_chunk)}\n\n"
                 else:
-                    yield f"data: {
-                        json.dumps(
-                            {
-                                'id': chunk_id,
-                                'object': 'chat.completion.chunk',
-                                'created': created,
-                                'model': model,
-                                'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
-                            }
-                        )
-                    }\n\n"
+                    done_chunk = {
+                        'id': chunk_id,
+                        'object': 'chat.completion.chunk',
+                        'created': created,
+                        'model': model,
+                        'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+                    }
+                    yield f"data: {json.dumps(done_chunk)}\n\n"
     except Exception as e:
         logger.error(f"Streaming failed: {e}", exc_info=True)
         error_message = str(e)

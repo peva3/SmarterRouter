@@ -1,20 +1,22 @@
 version: "3.8"
 
 services:
-  smarterrouter:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: smarterrouter
-    ports:
-      - "11436:11436"
-    env_file:
-      - .env
-    volumes:
-      - ./router.db:/app/router.db
-    restart: unless-stopped
-    networks:
-      - smarterrouter-network
+   smarterrouter:
+     build:
+       context: .
+       dockerfile: Dockerfile
+     container_name: smarterrouter
+     ports:
+       - "11436:11436"
+     env_file:
+       - .env
+     volumes:
+       - ./router.db:/app/router.db
+     restart: unless-stopped
+     networks:
+       - smarterrouter-network
+     # For GPU support, start with: docker-compose --compatibility up -d --build
+     # Or use docker run with --gpus all (see README)
 
   # === Example Ollama Service ===
   # Uncomment to run Ollama as part of this compose setup.

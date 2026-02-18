@@ -57,6 +57,46 @@ An intelligent, multi-backend AI router that sits between your application and v
 docker-compose up -d --build
 ```
 
+#### GPU Support
+
+SmarterRouter can monitor and manage VRAM using `nvidia-smi`. To enable GPU access inside the container:
+
+**Prerequisites:**
+- NVIDIA GPU with proprietary drivers installed on the host
+- Docker with NVIDIA Container Toolkit: <https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html>
+- Verify with: `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`
+
+**Method 1: Docker Run (simplest)**
+
+```bash
+docker run -d \
+  --gpus all \
+  -p 11436:11436 \
+  --env-file .env \
+  --name smarterrouter \
+  smarterrouter:latest
+```
+
+**Method 2: Docker Compose**
+
+For Docker Compose, the `--gpus` flag is supported in recent versions:
+
+```bash
+docker-compose --compatibility up -d --build
+# or with newer docker compose CLI:
+docker compose up -d --build --gpus all
+```
+
+**Verify GPU access:**
+```bash
+docker exec smarterrouter nvidia-smi
+```
+You should see GPU statistics. The router will log VRAM usage like: `VRAM: X/YGB (Z%) models=...`
+
+If `nvidia-smi` fails inside the container, the VRAM monitor will be disabled and you'll see: "VRAM monitor disabled: nvidia-smi not available". Ensure the NVIDIA Container Toolkit is properly installed and the Docker daemon is configured to allow GPU access.
+
+---
+
 ### OpenWebUI Integration
 
 OpenWebUI works seamlessly with SmarterRouter as a drop-in OpenAI-compatible backend.
