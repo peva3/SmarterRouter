@@ -174,7 +174,7 @@ All configuration is via the `.env` file (see `ENV_DEFAULT` for full list). Impo
 - `ROUTER_VRAM_MAX_TOTAL_GB`: Set to limit total VRAM usage (auto-detects 90% of GPU if unset)
 - `ROUTER_PINNED_MODEL`: Keep a specific model always loaded for fast responses
 
-The database (`router.db`) is persisted in your current directory via the volume mount.
+The database (`router.db`) is persisted in your current directory via the volume mount. This means your model profiles, routing history, and learned feedback survive container upgrades and recreations. **Back up this file regularly** to preserve your router's state.
 
 ---
 
@@ -198,6 +198,9 @@ The database (`router.db`) is persisted in your current directory via the volume
 - Check logs: `docker logs smarterrouter`
 - Common causes: invalid `.env` syntax, missing required files, port conflict.
 
+**Need to reset the database**
+- Stop the container and delete `router.db` from your current directory. It will be recreated on next startup. Warning: You will lose all model profiles and history; you'll need to re-profile your models.
+
 ---
 
 ### Updating
@@ -210,11 +213,9 @@ docker-compose down
 docker-compose up -d
 ```
 
-If you're using a local build, rebuild the image:
+**Note:** Your `router.db` file is preserved and will be reused automatically. If the new version includes database schema changes, the existing database will be automatically migrated on startup (if needed). No manual intervention required in most cases.
 
-```bash
-docker build -t smarterrouter:latest .
-```
+If you encounter database-related errors after an upgrade, you can delete `router.db` to start fresh (you will lose all profiles and history, requiring a full re-profile).
 
 ---
 
