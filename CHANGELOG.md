@@ -357,7 +357,7 @@ Added support for multiple LLM backends and proactive VRAM management for system
 
 ### Major Release - Production Ready
 
-After several iterations of development and testing, the LLM Router Proxy is now feature-complete with comprehensive test coverage and multi-provider benchmark support.
+After several iterations of development and testing, the SmarterRouter is now feature-complete with comprehensive test coverage and multi-provider benchmark support.
 
 ### What's New
 

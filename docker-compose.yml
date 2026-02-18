@@ -1,11 +1,11 @@
 version: "3.8"
 
 services:
-  llm-router:
+  smarterrouter:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: llm-router
+    container_name: smarterrouter
     ports:
       - "11436:11436"
     env_file:
@@ -14,7 +14,7 @@ services:
       - ./router.db:/app/router.db
     restart: unless-stopped
     networks:
-      - llm-router-network
+      - smarterrouter-network
 
   # === Example Ollama Service ===
   # Uncomment to run Ollama as part of this compose setup.
@@ -30,11 +30,11 @@ services:
   #     - OLLAMA_KEEP_ALIVE=-1
   #   restart: unless-stopped
   #   networks:
-  #     - llm-router-network
+  #     - smarterrouter-network
 
 volumes:
   ollama-data:
 
 networks:
-  llm-router-network:
+  smarterrouter-network:
     driver: bridge

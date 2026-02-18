@@ -35,7 +35,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 1.  **Clone the repository:**
     ```bash
     git clone <repository-url>
-    cd llm-router
+    cd SmarterRouter
     ```
 2.  **Install dependencies:**
     ```bash
@@ -56,6 +56,22 @@ An intelligent, multi-backend AI router that sits between your application and v
 ```bash
 docker-compose up -d --build
 ```
+
+### OpenWebUI Integration
+
+OpenWebUI works seamlessly with SmarterRouter as a drop-in OpenAI-compatible backend.
+
+1. **Start SmarterRouter** using one of the methods above.
+2. **Open OpenWebUI** → Settings → **Model Connections** → **Add a Model**.
+3. **Configure the connection**:
+   - **Name**: `SmarterRouter`
+   - **Base URL**: `http://localhost:11436/v1` (adjust host/port if needed)
+   - **API Key**: Leave empty (SmarterRouter does not require a key for chat)
+4. **Save** and select the model `smarterrouter/main` from the model dropdown.
+
+OpenWebUI will now route all conversations through SmarterRouter, which automatically selects the best model for each prompt from your installed Ollama/backend models.
+
+---
 
 ## How It Works
 

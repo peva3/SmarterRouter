@@ -1,4 +1,4 @@
-# LLM Router Configuration - Environment Configuration Reference
+# SmarterRouter Configuration - Environment Configuration Reference
 # Copy this file to .env and customize values for your deployment
 # All variables are optional - sensible defaults are provided
 
