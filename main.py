@@ -158,7 +158,7 @@ async def rate_limit_request(request: Request, config: Settings, is_admin: bool 
 async def startup_event():
     init_logging()
     init_db()
-    logger.info("Starting LLM Router Proxy...")
+    logger.info("Starting SmarterRouter...")
 
     # Initialize backend
     try:
@@ -230,7 +230,7 @@ async def startup_event():
 
 
 async def shutdown_event():
-    logger.info("Shutting down LLM Router Proxy...")
+    logger.info("Shutting down SmarterRouter...")
     for task in app_state.background_tasks:
         task.cancel()
 
@@ -282,7 +282,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="LLM Router Proxy",
+    title="SmarterRouter",
     description="AI-powered LLM router that intelligently selects the best model",
     version="1.0.0",
     lifespan=lifespan,
@@ -293,7 +293,7 @@ app = FastAPI(
 async def root():
     return {
         "status": "running",
-        "service": "LLM Router Proxy",
+        "service": "SmarterRouter",
         "version": "1.0.0",
     }
 

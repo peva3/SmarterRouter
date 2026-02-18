@@ -1,6 +1,6 @@
-# LLM Router Proxy: Architectural Deep Dive
+# SmarterRouter: Architectural Deep Dive
 
-This document provides a technical overview of the LLM Router Proxy, detailing the design philosophy, component interactions, and the rationale behind specific architectural choices.
+This document provides a technical overview of SmarterRouter, detailing the design philosophy, component interactions, and the rationale behind specific architectural choices.
 
 ---
 

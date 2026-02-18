@@ -1,4 +1,4 @@
-# LLM Router Proxy
+# SmarterRouter
 
 An intelligent, multi-backend AI router that sits between your application and various LLM providers. It profiles your models, aggregates benchmark data, and intelligently routes each query to the best available model for the task.
 
@@ -111,7 +111,7 @@ curl http://localhost:11436/v1/models
   "object": "list",
   "data": [
     {
-      "id": "hubrouter/main",
+      "id": "smarterrouter/main",
       "object": "model",
       "created": 1708162374.0,
       "owned_by": "local",

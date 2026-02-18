@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
 
     # Name the router presents itself as to external UIs (e.g., OpenWebUI)
-    router_external_model_name: str = Field(default="hubrouter/main")
+    router_external_model_name: str = Field(default="smarterrouter/main")
 
     # LLM-as-Judge Settings
     judge_enabled: bool = Field(default=False)

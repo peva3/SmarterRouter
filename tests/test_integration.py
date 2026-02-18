@@ -1,4 +1,4 @@
-"""Integration tests for the LLM Router system."""
+"""Integration tests for the SmarterRouter system."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch

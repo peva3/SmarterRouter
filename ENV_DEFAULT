@@ -71,8 +71,8 @@ ROUTER_PORT=11436
 # =============================================================================
 # Name the router presents itself as to external UIs (e.g., OpenWebUI)
 # This will be the single model name shown in model selection dropdowns.
-# Default: LLM Router Proxy
-ROUTER_EXTERNAL_MODEL_NAME=hubrouter/main
+# Default: SmarterRouter
+ROUTER_EXTERNAL_MODEL_NAME=smarterrouter/main
 
 # =============================================================================
 # SECURITY CONFIGURATION
