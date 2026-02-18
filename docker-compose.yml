@@ -2,9 +2,7 @@ version: "3.8"
 
 services:
   smarterrouter:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/peva3/smarterrouter:latest
     container_name: smarterrouter
     ports:
       - "11436:11436"
@@ -15,8 +13,9 @@ services:
     restart: unless-stopped
     networks:
       - smarterrouter-network
-    # NVIDIA GPU support - uncomment to enable VRAM monitoring
-    # Then start with: docker-compose --compatibility up -d --build
+    # GPU passthrough - requires NVIDIA Container Toolkit
+    # This deploy block is only used with: docker-compose --compatibility up
+    # Alternatively, use: docker compose up --gpus all
     deploy:
       resources:
         reservations:

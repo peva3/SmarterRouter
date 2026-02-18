@@ -1,0 +1,50 @@
+# Database (created at runtime)
+router.db
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+test_env/
+
+# Git
+.git/
+.gitignore
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Uploads, temp files
+tmp/
+temp/
+upload/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+AGENTS.md

@@ -53,47 +53,168 @@ An intelligent, multi-backend AI router that sits between your application and v
     ```
 
 ### Docker
-```bash
-docker-compose up -d --build
-```
 
-#### GPU Support
-
-SmarterRouter can monitor and manage VRAM using `nvidia-smi`. To enable GPU access inside the container:
+The easiest way to run SmarterRouter is with Docker Compose.
 
 **Prerequisites:**
-- NVIDIA GPU with proprietary drivers installed on the host
-- Docker with NVIDIA Container Toolkit: <https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html>
-- Verify with: `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`
+- Docker and Docker Compose installed
+- (Optional) NVIDIA GPU with drivers and NVIDIA Container Toolkit for VRAM monitoring
 
-**Method 1: Docker Run (simplest)**
+**1. Create a `.env` file**
+
+Copy the environment template and customize:
+
+```bash
+cp ENV_DEFAULT .env
+# Edit .env to set your backend URL, API keys, etc.
+```
+
+At minimum, set `ROUTER_OLLAMA_URL` if your Ollama is not on `localhost:11434`.
+
+**2. Run with Docker Compose**
+
+⚠️ **Important:** You must create a `.env` file first (see step 1).
+
+```bash
+docker-compose up -d
+```
+
+This will pull the latest image from GitHub Container Registry and start SmarterRouter on `http://localhost:11436`.
+
+**3. (Optional) Enable GPU Support**
+
+The `docker-compose.yml` includes GPU configuration in the `deploy` section. However, this is only activated when using the `--compatibility` flag (or in Docker Swarm mode). There are two ways to enable GPU:
+
+```bash
+# Method A: Use --compatibility (respects the deploy section)
+docker-compose --compatibility up -d
+
+# Method B: Use --gpus flag (newer Docker Compose)
+docker compose up -d --gpus all
+```
+
+Both achieve the same result. If you don't need GPU/VRAM monitoring, skip this step.
+
+**4. Verify it's running**
+
+```bash
+docker logs smarterrouter
+# Look for: "Uvicorn running on http://0.0.0.0:11436"
+```
+
+**docker-compose.yml reference:**
+
+```yaml
+version: "3.8"
+
+services:
+  smarterrouter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smarterrouter
+    ports:
+      - "11436:11436"
+    env_file:
+      - .env
+    volumes:
+      - ./router.db:/app/router.db
+    restart: unless-stopped
+    networks:
+      - smarterrouter-network
+    # Uncomment for GPU support (requires NVIDIA Container Toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+networks:
+  smarterrouter-network:
+    driver: bridge
+```
+
+**docker run** (no compose):
 
 ```bash
 docker run -d \
-  --gpus all \
+  --name smarterrouter \
   -p 11436:11436 \
   --env-file .env \
-  --name smarterrouter \
+  -v $(pwd)/router.db:/app/router.db \
   smarterrouter:latest
 ```
 
-**Method 2: Docker Compose**
+Add `--gpus all` for GPU support.
 
-For Docker Compose, the `--gpus` flag is supported in recent versions:
+**Note:** The Dockerfile includes labels pointing to the upstream repository. If you fork and publish your own images, consider updating the `org.opencontainers.image.url` and `org.opencontainers.image.source` labels to point to your fork.
+
+---
+
+### GPU Support Details
+
+SmarterRouter uses `nvidia-smi` inside the container to monitor VRAM. This requires:
+
+- NVIDIA GPU with proprietary drivers installed on the host
+- NVIDIA Container Toolkit: <https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html>
+- Verify installation: `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`
+
+If `nvidia-smi` is not available, the VRAM monitor will be disabled and you'll see a warning in the logs. The router will still function but won't measure or manage VRAM.
+
+---
+
+### Configuration
+
+All configuration is via the `.env` file (see `ENV_DEFAULT` for full list). Important settings:
+
+- `ROUTER_OLLAMA_URL`: URL of your Ollama/backend (default: `http://localhost:11434`)
+- `ROUTER_PROVIDER`: `ollama`, `llama.cpp`, or `openai`
+- `ROUTER_VRAM_MAX_TOTAL_GB`: Set to limit total VRAM usage (auto-detects 90% of GPU if unset)
+- `ROUTER_PINNED_MODEL`: Keep a specific model always loaded for fast responses
+
+The database (`router.db`) is persisted in your current directory via the volume mount.
+
+---
+
+### Troubleshooting
+
+**"Failed to list models: All connection attempts failed"**
+- SmarterRouter cannot reach your backend (Ollama/llama.cpp). Check `ROUTER_OLLAMA_URL` and ensure the backend is running and accessible from the container.
+
+**Port already in use**
+- Change the host port mapping (`"11436:11436"`) or stop the existing container.
+
+**GPU not working / nvidia-smi not found**
+- Install NVIDIA Container Toolkit and restart Docker daemon.
+- Use `--gpus all` flag or enable `deploy.resources` in compose.
+- Test with: `docker exec smarterrouter nvidia-smi`
+
+**Permissions errors on router.db**
+- Ensure the host directory is writable by the Docker user (UID 1000). The container runs as root by default.
+
+**Container exits immediately**
+- Check logs: `docker logs smarterrouter`
+- Common causes: invalid `.env` syntax, missing required files, port conflict.
+
+---
+
+### Updating
+
+Pull the latest image and recreate:
 
 ```bash
-docker compose --compatibility up -d --build
-# or with newer docker compose CLI:
-docker compose up -d --build --gpus all
+docker pull ghcr.io/<YOUR_USERNAME>/smarterrouter:latest
+docker-compose down
+docker-compose up -d
 ```
 
-**Verify GPU access:**
+If you're using a local build, rebuild the image:
+
 ```bash
-docker exec -ti smarterrouter nvidia-smi
+docker build -t smarterrouter:latest .
 ```
-You should see GPU statistics. The router will log VRAM usage like: `VRAM: X/YGB (Z%) models=...`
-
-If `nvidia-smi` fails inside the container, the VRAM monitor will be disabled and you'll see: "VRAM monitor disabled: nvidia-smi not available". Ensure the NVIDIA Container Toolkit is properly installed and the Docker daemon is configured to allow GPU access.
 
 ---
 
