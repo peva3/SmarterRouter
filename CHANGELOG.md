@@ -1,5 +1,22 @@
 ## [Unreleased] - Pending
 
+### Backend Provider Fixes & Improvements
+
+- **Removed `generate()` from Protocol**: The unused `generate()` method was removed from `LLMBackend` protocol. All backends now consistently use `chat()` for all generation tasks.
+- **Response Format Normalization**: `LlamaCppBackend` and `OpenAIBackend` now transform OpenAI-format responses to Ollama format internally. All backends now return consistent `{"message": {"content": ...}, "prompt_eval_count": ..., "eval_count": ...}` structure.
+- **Model Prefix Support**: All backends now support `model_prefix` parameter:
+  - `OllamaBackend`: Added `model_prefix` support (was previously missing)
+  - `LlamaCppBackend`: Already supported, now consistent
+  - `OpenAIBackend`: Already supported, now consistent
+- **Trailing Slash Handling**: All backends now consistently strip trailing slashes from `base_url` in `__init__`.
+- **Path Normalization**: Fixed `OpenAIBackend` to avoid duplicate `/v1` in URLs when base_url already includes it.
+- **VRAM Management**: Added `supports_unload()` helper function to check if backend supports model loading/unloading. Only Ollama supports this; other backends return `False`.
+- **Comprehensive Backend Testing**: Added 80+ new tests across four test files:
+  - `tests/test_ollama_backend.py` - 15 tests for OllamaBackend
+  - `tests/test_llama_cpp_backend.py` - 13 tests for LlamaCppBackend
+  - `tests/test_openai_backend.py` - 14 tests for OpenAIBackend
+  - `tests/test_backend_contract.py` - Contract tests ensuring all backends behave consistently
+
 ### Security & Production Hardening
 
 - **Production Security Warnings**: Added startup warning if `ROUTER_ADMIN_API_KEY` is not set

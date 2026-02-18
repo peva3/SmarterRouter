@@ -26,7 +26,7 @@ class VRAMManager:
     """
 
     # Internal safety buffer for fragmentation/measurement errors (not user-configurable)
-    FRAGMENTATION_BUFFER_GB = 0.5
+    FRAGMENTATION_BUFFER_GB = 1.5  # Increased from 0.5 for more headroom
 
     def __init__(
         self,
@@ -242,14 +242,17 @@ class VRAMManager:
         """Return dict of model -> estimated VRAM usage (GB)."""
         return dict(self.loaded_models)
 
-    def should_trigger_unload(self) -> bool:
+    def should_trigger_unload(self, threshold_pct: float = 85.0) -> bool:
         """
         Check if current VRAM utilization exceeds unload threshold.
         Used for proactive unload before loading new models.
+
+        Args:
+            threshold_pct: Utilization percentage threshold (default 85%)
+
+        Returns:
+            True if utilization exceeds threshold and auto_unload is enabled
         """
         if not self.auto_unload:
             return False
-        util_pct = self.get_utilization_pct()
-        # Check against configured threshold (need to get from settings)
-        # This will be called from RouterEngine which has access to settings
-        return False  # Placeholder - actual check uses settings
+        return self.get_utilization_pct() >= threshold_pct

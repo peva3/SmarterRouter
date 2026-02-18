@@ -358,11 +358,54 @@ curl http://localhost:11436/admin/profiles \
 
 ## Supported Backends
 
+SmarterRouter supports multiple LLM backends through a unified interface:
+
 | Backend | Use Case | Features |
 |---|---|---|
-| Ollama | Local inference | Full support, including VRAM management. |
-| llama.cpp | Self-hosted `llama.cpp` | OpenAI-compatible endpoints. |
-| OpenAI | External APIs | API key authentication. |
+| **Ollama** | Local inference | Full support, VRAM management, model loading/unloading |
+| **llama.cpp** | Self-hosted servers | OpenAI-compatible, works with llama-swap |
+| **OpenAI** | External APIs | API key auth, works with any OpenAI-compatible service (vLLM, TGI, etc.) |
+
+### Backend Configuration
+
+All backends support the `ROUTER_MODEL_PREFIX` setting to prepend a string to model names:
+
+```bash
+# Useful for organizational naming or API gateways
+ROUTER_MODEL_PREFIX=myorg/
+# "llama3" becomes "myorg/llama3"
+```
+
+### Backend-Specific Notes
+
+**Ollama (Default)**
+- Best for local development and production
+- Supports full VRAM management and model loading/unloading
+- Recommended for most users
+
+**llama.cpp**
+- Compatible with llama.cpp server, llama-swap, and other OpenAI-compatible servers
+- Does not support explicit model unloading (returns `False` gracefully)
+- Good for custom deployments
+
+**OpenAI-Compatible**
+- Works with OpenAI, Anthropic (via compatibility layers), vLLM, Text Generation Inference, LiteLLM, and any OpenAI-compatible API
+- Does not support model unloading (returns `False` gracefully)
+- Requires `ROUTER_OPENAI_API_KEY` for authentication
+
+### Testing Backend Compatibility
+
+All backends have comprehensive test suites:
+
+```bash
+# Run backend-specific tests
+pytest tests/test_ollama_backend.py tests/test_llama_cpp_backend.py tests/test_openai_backend.py -v
+
+# Run contract tests (ensures all backends behave consistently)
+pytest tests/test_backend_contract.py -v
+```
+
+The contract tests verify that all backends return consistent response formats, handle errors gracefully, and implement the `LLMBackend` protocol correctly.
 
 ## Scoring Algorithm
 

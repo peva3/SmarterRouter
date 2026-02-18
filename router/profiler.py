@@ -100,18 +100,13 @@ class ModelProfiler:
             try:
                 start = time.perf_counter()
                 result = await asyncio.wait_for(
-                    self.client.generate(model, prompt),
+                    self.client.chat(model, [{"role": "user", "content": prompt}]),
                     timeout=self.timeout,
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
-                response_text = (
-                    result.response
-                    if hasattr(result, "response")
-                    else result.get("response", "")
-                    if isinstance(result, dict)
-                    else str(result)
-                )
+                # Extract response text from chat format (normalized to Ollama format)
+                response_text = result.get("message", {}).get("content", "")
 
                 # Use Judge if enabled
                 score = await self.judge.score_response(prompt, response_text)

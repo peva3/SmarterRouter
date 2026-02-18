@@ -7,10 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from fastapi import Depends
 
-# Import after test client setup
 from main import app, app_state, get_settings
 from router.config import Settings
-from fastapi import Depends
 
 
 @pytest.fixture

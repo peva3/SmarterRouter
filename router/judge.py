@@ -13,7 +13,7 @@ Your goal is to provide a quality score between 0.0 and 1.0, where 1.0 is a perf
 
 Consider the following criteria:
 1. Accuracy: Is the information correct?
-2. Helpfuless: Does it directly answer the user's request?
+2. Helpfulness: Does it directly answer the user's request?
 3. Clarity: Is it easy to understand and well-structured?
 4. Conciseness: Is it free of unnecessary filler?
 5. Instruction Following: Did it follow all specific constraints in the prompt?
@@ -87,4 +87,7 @@ class JudgeClient:
 
         except Exception as e:
             logger.warning(f"Judge scoring failed: {e}. Falling back to basic check.")
-            return 1.0 if len(response.strip()) > 10 else 0.0
+            # Fallback: neutral score for non-empty responses (same as when judge disabled)
+            if response and len(response.strip()) > 0:
+                return 0.5
+            return 0.0

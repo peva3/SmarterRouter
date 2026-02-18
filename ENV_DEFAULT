@@ -17,6 +17,12 @@ ROUTER_PROVIDER=ollama
 # If you're running both in Docker Compose, use the service name (e.g., http://ollama:11434).
 ROUTER_OLLAMA_URL=http://172.17.0.1:11434
 
+# Model prefix for Ollama (optional)
+# Prepends a string to all model names sent to Ollama
+# Example: ROUTER_MODEL_PREFIX=myorg/ would make "llama3" become "myorg/llama3"
+# Useful for organizational naming or when using a model registry
+ROUTER_MODEL_PREFIX=
+
 # Model to keep permanently loaded in VRAM (optional)
 # Useful for keeping a small/fast model ready for simple queries
 # Example: ROUTER_PINNED_MODEL=phi3:mini
@@ -27,11 +33,20 @@ ROUTER_PINNED_MODEL=
 # ROUTER_PROVIDER=llama.cpp
 # ROUTER_LLAMA_CPP_URL=http://localhost:8080
 
+# Model prefix for llama.cpp (optional)
+# Prepends a string to all model names sent to the server
+# Example: ROUTER_MODEL_PREFIX=custom/ would make "llama3" become "custom/llama3"
+# ROUTER_MODEL_PREFIX=
+
 # === OpenAI-Compatible API Settings ===
 # Uncomment to use external OpenAI-compatible API
 # ROUTER_PROVIDER=openai
 # ROUTER_OPENAI_BASE_URL=https://api.openai.com/v1
 # ROUTER_OPENAI_API_KEY=your-api-key-here
+
+# Model prefix for OpenAI-compatible APIs (optional)
+# Prepends a string to all model names sent to the API
+# Example: ROUTER_MODEL_PREFIX=azure/ would make "gpt-4" become "azure/gpt-4"
 # ROUTER_MODEL_PREFIX=
 
 # =============================================================================

@@ -362,7 +362,6 @@ Select the model that best matches the user's prompt needs."""
             result = self._parse_llm_response(content, model_names)
 
             if result:
-                # self._log_decision(prompt, result["model"], 0.9, result["reasoning"]) # Moved to explicit call
                 return RoutingResult(
                     selected_model=result["model"],
                     confidence=0.9,
@@ -674,7 +673,6 @@ Select the model that best matches the user's prompt needs."""
             profile = profile_map.get(model_name)
             benchmark = normalized_benchmark_map.get(model_name)
             affinity = model_category_affinity.get(model_name, {})
-            # print(f"DEBUG {model_name} affinity: {affinity} dominant={dominant_category}")
 
             base_score = 0.0
 

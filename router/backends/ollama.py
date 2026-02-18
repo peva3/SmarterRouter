@@ -14,10 +14,23 @@ logger = logging.getLogger(__name__)
 class OllamaBackend(LLMBackend):
     """Ollama backend implementation."""
 
-    def __init__(self, base_url: str, timeout: float = 60.0, generation_timeout: float = 120.0):
-        self.base_url = base_url
+    def __init__(
+        self,
+        base_url: str,
+        model_prefix: str = "",
+        timeout: float = 60.0,
+        generation_timeout: float = 120.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model_prefix = model_prefix
         self.timeout = timeout  # Short timeout for quick operations (list, etc)
         self.generation_timeout = generation_timeout  # Longer timeout for generation
+
+    def _full_model_name(self, model: str) -> str:
+        """Apply model prefix if configured."""
+        if self.model_prefix and not model.startswith(self.model_prefix):
+            return f"{self.model_prefix}{model}"
+        return model
 
     async def _request(
         self,
@@ -50,23 +63,6 @@ class OllamaBackend(LLMBackend):
             logger.error(f"Failed to list models: {e}")
             return []
 
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": stream,
-        }
-        payload.update(kwargs)
-        return await self._request(
-            "POST", "/api/generate", json=payload, timeout=self.generation_timeout
-        )
-
     async def chat(
         self,
         model: str,
@@ -75,8 +71,9 @@ class OllamaBackend(LLMBackend):
         keep_alive: float = -1,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        full_model = self._full_model_name(model)
         payload: dict[str, Any] = {
-            "model": model,
+            "model": full_model,
             "messages": messages,
             "stream": stream,
             "keep_alive": keep_alive,
@@ -93,8 +90,8 @@ class OllamaBackend(LLMBackend):
         keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/api/chat"
+        full_model = self._full_model_name(model)
 
-        # Use a mutable container to track timing inside the generator
         timing = {"start": time.perf_counter(), "first_token": None}
         latency_ms = 0.0
 
@@ -105,7 +102,7 @@ class OllamaBackend(LLMBackend):
                     "POST",
                     url,
                     json={
-                        "model": model,
+                        "model": full_model,
                         "messages": messages,
                         "stream": True,
                         "keep_alive": keep_alive,
@@ -128,8 +125,8 @@ class OllamaBackend(LLMBackend):
         try:
             await self._request(
                 "POST",
-                "/api/generate",
-                json={"model": model_name, "prompt": "", "keep_alive": 0},
+                "/api/chat",  # Use chat endpoint for unloading (keeps context clean)
+                json={"model": model_name, "messages": [], "keep_alive": 0},
             )
             logger.info(f"Sent unload request for {model_name}")
             return True
@@ -155,8 +152,8 @@ class OllamaBackend(LLMBackend):
         try:
             await self._request(
                 "POST",
-                "/api/generate",
-                json={"model": model_name, "prompt": "", "keep_alive": keep_alive},
+                "/api/chat",
+                json={"model": model_name, "messages": [{"role": "user", "content": ""}], "keep_alive": keep_alive},
                 timeout=self.generation_timeout,
             )
             logger.info(f"Model {model_name} loaded successfully")
@@ -165,45 +162,15 @@ class OllamaBackend(LLMBackend):
             logger.error(f"Failed to load model {model_name}: {e}")
             return False
 
-    async def ensure_model_loaded(self, model_name: str, pinned_model: str | None = None) -> bool:
-        """Ensure a model is loaded in VRAM, unloading others if necessary.
-
-        This is the key method for proactive VRAM management:
-        1. First unload any model that's NOT the target model and NOT the pinned model
-        2. Then load the target model
-
-        Args:
-            model_name: The model we want to use
-            pinned_model: A model that should be kept in VRAM (e.g., a small fast model)
-
-        Returns:
-            True if the model is ready for inference
-        """
-        current = getattr(self, "_current_model", None)
-
-        if current == model_name:
-            logger.debug(f"Model {model_name} already loaded")
-            return True
-
-        if current and current != pinned_model:
-            logger.info(f"VRAM management: unloading {current} to load {model_name}")
-            await self.unload_model(current)
-
-        if model_name != pinned_model:
-            logger.info(f"VRAM management: loading {model_name}")
-            await self.load_model(model_name)
-
-        self._current_model = model_name
-        return True
-
     async def embed(
         self,
         model: str,
         input_text: str | list[str],
         **kwargs: Any,
     ) -> dict[str, Any]:
+        full_model = self._full_model_name(model)
         payload: dict[str, Any] = {
-            "model": model,
+            "model": full_model,
             "input": input_text,
         }
         payload.update(kwargs)

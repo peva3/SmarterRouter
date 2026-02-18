@@ -38,10 +38,12 @@ class LlamaCppBackend(LLMBackend):
         self,
         method: str,
         path: str,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        effective_timeout = timeout if timeout is not None else self.timeout
+        async with httpx.AsyncClient(timeout=effective_timeout) as client:
             response = await client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
@@ -68,6 +70,7 @@ class LlamaCppBackend(LLMBackend):
         model: str,
         messages: list[dict[str, str]],
         stream: bool = False,
+        keep_alive: float = -1,
         **kwargs: Any,
     ) -> dict[str, Any]:
         full_model = self._full_model_name(model)
@@ -77,12 +80,26 @@ class LlamaCppBackend(LLMBackend):
             "stream": stream,
         }
         payload.update(kwargs)
-        return await self._request("POST", "/v1/chat/completions", json=payload)
+        response = await self._request("POST", "/v1/chat/completions", json=payload)
+        
+        # Transform OpenAI format to Ollama format for consistency
+        choices = response.get("choices", [])
+        if choices:
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+            usage = response.get("usage", {})
+            return {
+                "message": {"content": content},
+                "prompt_eval_count": usage.get("prompt_tokens", 0),
+                "eval_count": usage.get("completion_tokens", 0),
+            }
+        return {"message": {"content": ""}}
 
     async def chat_streaming(
         self,
         model: str,
         messages: list[dict[str, str]],
+        keep_alive: float = -1,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/v1/chat/completions"
         full_model = self._full_model_name(model)
@@ -117,7 +134,7 @@ class LlamaCppBackend(LLMBackend):
                                 if timing["first_token"] is None:
                                     timing["first_token"] = time.perf_counter()
                                     latency_ms = (timing["first_token"] - timing["start"]) * 1000
-                                # Normalize to Ollama format
+                                # Normalize to Ollama format (already done in stream)
                                 content = ""
                                 finish_reason = None
                                 if "choices" in data and len(data["choices"]) > 0:
@@ -132,22 +149,6 @@ class LlamaCppBackend(LLMBackend):
                                 continue
 
         return stream_generator(), latency_ms
-
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        full_model = self._full_model_name(model)
-        payload: dict[str, Any] = {
-            "model": full_model,
-            "prompt": prompt,
-            "stream": stream,
-        }
-        payload.update(kwargs)
-        return await self._request("POST", "/v1/completions", json=payload)
 
     async def unload_model(self, model_name: str) -> bool:
         """Llama.cpp doesn't support explicit unloading via API."""

@@ -10,14 +10,13 @@ from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 
 
 from router.backends import create_backend
-from router.backends.base import LLMBackend
+from router.backends.base import LLMBackend, supports_unload
 from router.benchmark_db import get_last_sync
 from router.benchmark_sync import sync_benchmarks
 from router.config import Settings, init_logging, settings
@@ -70,8 +69,8 @@ def get_model_vram_estimate(model_name: str) -> float:
             profile = session.query(ModelProfile).filter_by(name=model_name).first()
             if profile and profile.vram_required_gb:
                 return profile.vram_required_gb
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not fetch VRAM estimate for {model_name}: {e}")
     return settings.vram_default_estimate_gb
 
 
@@ -115,7 +114,6 @@ async def verify_admin_token(
     config: Annotated[Settings, Depends(get_settings)],
 ) -> bool:
     """Verify admin API key if configured."""
-    # print(f"DEBUG: admin_key={config.admin_api_key}, creds={credentials.credentials if credentials else 'None'}")
     if not config.admin_api_key:
         return True
 
@@ -259,7 +257,8 @@ async def shutdown_event():
 
     # Unload model if pinned
     if settings.pinned_model and app_state.backend:
-        await app_state.backend.unload_model(settings.pinned_model)
+        if supports_unload(app_state.backend):
+            await app_state.backend.unload_model(settings.pinned_model)
 
 
 async def background_sync_task():
@@ -550,7 +549,8 @@ async def chat_completions(
             logger.info(
                 f"VRAM management (streaming): unloading {current} to load {selected_model}"
             )
-            await app_state.backend.unload_model(current)
+            if supports_unload(app_state.backend):
+                await app_state.backend.unload_model(current)
 
         # Load model via VRAM manager if enabled
         if app_state.vram_manager:
@@ -560,10 +560,11 @@ async def chat_completions(
             # Traditional: unload current model if different and not pinned
             current = app_state.current_loaded_model
             pinned = config.pinned_model
-            if current and current != selected_model and current != pinned:
-                logger.info(
-                    f"VRAM management (streaming): unloading {current} to load {selected_model}"
-                )
+        if current and current != selected_model and current != pinned:
+            logger.info(
+                f"VRAM management (streaming): unloading {current} to load {selected_model}"
+            )
+            if supports_unload(app_state.backend):
                 await app_state.backend.unload_model(current)
 
         # Update current model state
@@ -666,7 +667,8 @@ async def chat_completions(
                 pinned = config.pinned_model
                 if current and current != try_model and current != pinned:
                     logger.info(f"VRAM management: unloading {current} to load {try_model}")
-                    await app_state.backend.unload_model(current)
+                    if supports_unload(app_state.backend):
+                        await app_state.backend.unload_model(current)
                     app_state.current_loaded_model = None
 
             # Generate response

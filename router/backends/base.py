@@ -40,16 +40,6 @@ class LLMBackend(Protocol):
         """Send a streaming chat request. Returns (iterator, latency_ms)."""
         ...
 
-    async def generate(
-        self,
-        model: str,
-        prompt: str,
-        stream: bool = False,
-        **kwargs: object,
-    ) -> dict:
-        """Send a generate request (non-chat)."""
-        ...
-
     async def unload_model(self, model_name: str) -> bool:
         """Unload model from VRAM. Return False if not supported."""
         return False
@@ -70,4 +60,5 @@ class LLMBackend(Protocol):
 
 def supports_unload(backend: LLMBackend) -> bool:
     """Check if backend supports model unloading."""
-    return hasattr(backend, "unload_model") and backend.unload_model != LLMBackend.unload_model
+    from router.backends.ollama import OllamaBackend
+    return isinstance(backend, OllamaBackend)

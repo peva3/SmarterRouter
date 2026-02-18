@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     signature_format: str = Field(default="\nModel: {model}")
 
     polling_interval: int = Field(default=60)
-    profile_timeout: int = Field(default=30)
+    profile_timeout: int = Field(default=60)  # Increased from 30s for slower models
     generation_timeout: int = Field(
         default=120
     )  # Timeout for model generation (larger models need more time)
