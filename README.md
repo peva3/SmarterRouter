@@ -82,14 +82,14 @@ docker run -d \
 For Docker Compose, the `--gpus` flag is supported in recent versions:
 
 ```bash
-docker-compose --compatibility up -d --build
+docker compose --compatibility up -d --build
 # or with newer docker compose CLI:
 docker compose up -d --build --gpus all
 ```
 
 **Verify GPU access:**
 ```bash
-docker exec smarterrouter nvidia-smi
+docker exec -ti smarterrouter nvidia-smi
 ```
 You should see GPU statistics. The router will log VRAM usage like: `VRAM: X/YGB (Z%) models=...`
 
@@ -102,12 +102,12 @@ If `nvidia-smi` fails inside the container, the VRAM monitor will be disabled an
 OpenWebUI works seamlessly with SmarterRouter as a drop-in OpenAI-compatible backend.
 
 1. **Start SmarterRouter** using one of the methods above.
-2. **Open OpenWebUI** → Settings → **Model Connections** → **Add a Model**.
+2. **Open OpenWebUI** → Admin Settings → **Connections** → **Add a Connection**.
 3. **Configure the connection**:
    - **Name**: `SmarterRouter`
    - **Base URL**: `http://localhost:11436/v1` (adjust host/port if needed)
    - **API Key**: Leave empty (SmarterRouter does not require a key for chat)
-4. **Save** and select the model `smarterrouter/main` from the model dropdown.
+4. **Save** and select the model `smarterrouter/main` from the model dropdown, it should be enabled by default in the admin settings models page.
 
 OpenWebUI will now route all conversations through SmarterRouter, which automatically selects the best model for each prompt from your installed Ollama/backend models.
 

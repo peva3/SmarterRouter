@@ -1,22 +1,29 @@
 version: "3.8"
 
 services:
-   smarterrouter:
-     build:
-       context: .
-       dockerfile: Dockerfile
-     container_name: smarterrouter
-     ports:
-       - "11436:11436"
-     env_file:
-       - .env
-     volumes:
-       - ./router.db:/app/router.db
-     restart: unless-stopped
-     networks:
-       - smarterrouter-network
-     # For GPU support, start with: docker-compose --compatibility up -d --build
-     # Or use docker run with --gpus all (see README)
+  smarterrouter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smarterrouter
+    ports:
+      - "11436:11436"
+    env_file:
+      - .env
+    volumes:
+      - ./router.db:/app/router.db
+    restart: unless-stopped
+    networks:
+      - smarterrouter-network
+    # NVIDIA GPU support - uncomment to enable VRAM monitoring
+    # Then start with: docker-compose --compatibility up -d --build
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # === Example Ollama Service ===
   # Uncomment to run Ollama as part of this compose setup.
@@ -33,9 +40,6 @@ services:
   #   restart: unless-stopped
   #   networks:
   #     - smarterrouter-network
-
-volumes:
-  ollama-data:
 
 networks:
   smarterrouter-network:
