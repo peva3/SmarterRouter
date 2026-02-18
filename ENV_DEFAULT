@@ -11,7 +11,11 @@ ROUTER_PROVIDER=ollama
 
 # === Ollama Backend Settings ===
 # URL of your Ollama instance
-ROUTER_OLLAMA_URL=http://localhost:11434
+# IMPORTANT: When running SmarterRouter in Docker and Ollama on the host,
+# use http://172.17.0.1:11434 instead of http://localhost:11434 because
+# localhost inside the container refers to the container itself, not the host.
+# If you're running both in Docker Compose, use the service name (e.g., http://ollama:11434).
+ROUTER_OLLAMA_URL=http://172.17.0.1:11434
 
 # Model to keep permanently loaded in VRAM (optional)
 # Useful for keeping a small/fast model ready for simple queries

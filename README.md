@@ -238,8 +238,9 @@ OpenWebUI will now route all conversations through SmarterRouter, which automati
 
 ### First Run (One-Time Setup)
 When you start the router for the first time:
+
 1.  **Discovery**: Fetches all models from your configured backend.
-2.  **Profiling**: Tests each new model with prompts across multiple categories (reasoning, coding, etc.) to measure its performance on your hardware.
+2.  **Profiling**: Tests each model with prompts across multiple categories (reasoning, coding, etc.) to measure its performance on your hardware. This is a one-time process. For ~18 models, expect about 1.5 hours of profiling time. Subsequent runs only profile *new* models added to your backend.
 3.  **Benchmark Sync**: Downloads benchmark scores from HuggingFace and LMSYS. This process can take a while but only happens once per model.
 
 ### Normal Operation
