@@ -82,9 +82,17 @@ ROUTER_EXTERNAL_MODEL_NAME=smarterrouter/main
 # SECURITY CONFIGURATION
 # =============================================================================
 
-# Admin API key for protecting admin endpoints (optional but recommended)
-# When set, admin endpoints (/admin/*) require Bearer token authentication
-# Example: ROUTER_ADMIN_API_KEY=your-secret-key-change-this-in-production
+# Admin API key for protecting admin endpoints (REQUIRED FOR PRODUCTION)
+# ⚠️  SECURITY WARNING: Leaving this empty makes admin endpoints (/admin/*) publicly accessible!
+# In production, you MUST set this to a secure random string.
+# 
+# Admin endpoints provide:
+# - Full model profiles and performance data
+# - VRAM monitoring and management
+# - Cache invalidation
+# - Reprofiling controls
+# 
+# Example: ROUTER_ADMIN_API_KEY=sk-smarterrouter-$(openssl rand -hex 32)
 ROUTER_ADMIN_API_KEY=
 
 # Enable rate limiting (default: false)
@@ -164,6 +172,9 @@ ROUTER_POLLING_INTERVAL=60
 
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
 ROUTER_LOG_LEVEL=INFO
+
+# Log format: "text" (human-readable) or "json" (structured for log aggregation)
+ROUTER_LOG_FORMAT=text
 
 # =============================================================================
 # DATABASE CONFIGURATION

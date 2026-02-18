@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     benchmark_sources: str = Field(default="huggingface,lmsys")
 
     log_level: str = Field(default="INFO")
+    log_format: str = Field(default="text")  # "text" or "json"
 
     database_url: str = Field(default="sqlite:///router.db")
 
@@ -126,13 +127,31 @@ class Settings(BaseSettings):
                     break
         return values
 
+    @model_validator(mode="after")
+    def validate_backend_urls(self) -> "Settings":
+        """Validate that backend URLs use http(s):// scheme."""
+        url_fields = {
+            "ollama_url": self.ollama_url,
+            "llama_cpp_url": self.llama_cpp_url,
+            "openai_base_url": self.openai_base_url,
+            "judge_base_url": self.judge_base_url,
+        }
+        
+        for field_name, url in url_fields.items():
+            if url and not url.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"{field_name} must start with http:// or https:// (got: {url})"
+                )
+        
+        return self
+
 
 settings = Settings()
 
 
 def init_logging() -> None:
+    """Initialize logging with structured formatting."""
+    from .logging_config import setup_logging
+
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    setup_logging(level=level, log_format=settings.log_format)

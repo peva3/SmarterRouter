@@ -264,6 +264,21 @@ All configuration is managed via environment variables (or the `.env` file). See
 - `ROUTER_CASCADING_ENABLED`: Enable automatic fallback to other models on failure (default: true).
 - `ROUTER_FEEDBACK_ENABLED`: Enable feedback collection to improve routing (default: true).
 - `ROUTER_OLLAMA_URL`: The URL for your chosen backend.
+- `ROUTER_LOG_FORMAT`: `text` (human-readable) or `json` (structured logging with correlation IDs).
+
+## Observability
+
+SmarterRouter includes built-in monitoring:
+
+- **Prometheus metrics** at `/metrics` - scrape with Prometheus or Grafana Cloud.
+  - Request rates, durations, error counts by endpoint
+  - Cache hit/miss rates
+  - Model selection distribution
+  - VRAM usage (total, used, per-GPU)
+
+- **Structured logging** - enable `ROUTER_LOG_FORMAT=json` for JSON log output. Each request gets a unique `X-Request-ID` for tracing across services.
+
+- **VRAM monitoring** - see `/admin/vram` for real-time GPU memory status.
 
 ## API Usage
 
@@ -348,6 +363,252 @@ curl http://localhost:11436/admin/profiles \
 | Ollama | Local inference | Full support, including VRAM management. |
 | llama.cpp | Self-hosted `llama.cpp` | OpenAI-compatible endpoints. |
 | OpenAI | External APIs | API key authentication. |
+
+## Scoring Algorithm
+
+SmarterRouter uses a multi-factor scoring system to select the best model for each prompt:
+
+### Category-Based Routing
+
+1. **Category Detection**: Analyzes prompts to determine the primary category:
+   - **Coding**: Programming tasks, debugging, algorithms
+   - **Reasoning**: Logic puzzles, math, analysis
+   - **Creativity**: Writing, brainstorming, storytelling
+   - **General**: Default fallback
+
+2. **Complexity Assessment**: Determines task complexity (simple/medium/hard) based on:
+   - Prompt length and structure
+   - Keywords indicating difficulty
+   - Context depth
+
+3. **Model Capability Scores**: Each model is scored 0.0-1.0 on:
+   - `reasoning`: Logical reasoning ability
+   - `coding`: Programming proficiency
+   - `creativity`: Creative writing quality
+   - `speed`: Response time (normalized)
+   - `vram_required_gb`: Memory footprint
+
+### Minimum Size Requirements
+
+To prevent selecting undersized models for complex tasks:
+
+| Category | Simple | Medium | Hard |
+|----------|--------|--------|------|
+| Coding | 0B+ | 4B+ | 8B+ |
+| Reasoning | 0B+ | 4B+ | 8B+ |
+| Creativity | 0B+ | 1B+ | 4B+ |
+| General | 0B+ | 1B+ | 4B+ |
+
+Models below the minimum get a -10×deficit penalty.
+
+### Scoring Formula
+
+```
+final_score = (
+    capability_score × 0.4 +
+    benchmark_score × 0.3 +
+    speed_score × 0.2 +
+    recency_penalty × 0.1
+) × quality_preference_multiplier
+```
+
+Where:
+- **Capability Score**: Model's score in the detected category
+- **Benchmark Score**: Aggregated external benchmark data (MMLU, HumanEval, etc.)
+- **Speed Score**: Normalized response time (faster = higher)
+- **Recency Penalty**: Small penalty to avoid overusing the same model
+- **Quality Preference**: Controlled by `ROUTER_QUALITY_PREFERENCE` (0.0-1.0)
+
+### VRAM-Aware Routing
+
+The router considers GPU memory constraints:
+1. Checks available VRAM before selecting a model
+2. Triggers auto-unload of unused models if needed
+3. Respects pinned model (never unloads)
+4. Falls back to smaller models if VRAM exhausted
+
+## Troubleshooting Guide
+
+### "Why wasn't my model selected?"
+
+**Check 1: Model Profiling**
+```bash
+curl http://localhost:11436/admin/profiles
+```
+- Verify your model appears in the list
+- Check that scores are not all 0.0 (indicates profiling failure)
+- If 0.0 scores, trigger reprofiling: `POST /admin/reprofile?force=true`
+
+**Check 2: VRAM Constraints**
+```bash
+curl http://localhost:11436/admin/vram
+```
+- Check if VRAM is near capacity
+- Look for `warnings` array
+- If VRAM is full, the router will prefer smaller models
+
+**Check 3: Category Mismatch**
+- Use the explain endpoint to see why a model was selected:
+```bash
+curl "http://localhost:11436/admin/explain?prompt=Your prompt here"
+```
+
+**Check 4: Minimum Size Requirements**
+- Check if your prompt complexity exceeds the model's minimum size
+- Use `/admin/explain` to see complexity detection
+
+**Check 5: Cache Issues**
+- Routing decisions are cached; old decisions may persist
+- Clear cache: `POST /admin/cache/invalidate`
+
+### Common Issues
+
+**"All models failed" Error**
+- Check backend connectivity: `curl http://localhost:11436/health`
+- Verify Ollama/other backend is running
+- Check logs: `docker logs smarterrouter`
+- Look for VRAM issues or model loading errors
+
+**"Service not ready" Error**
+- The router is still initializing
+- Wait for profiling to complete (first startup can take 10-30 minutes)
+- Check logs for initialization progress
+
+**Slow Response Times**
+- First request may be slow (model loading)
+- Enable response caching: `ROUTER_CACHE_ENABLED=true`
+- Consider pinning a small model: `ROUTER_PINNED_MODEL=phi3:mini`
+- Check VRAM: high utilization causes swapping
+
+**Out of Memory Errors**
+- Reduce `ROUTER_VRAM_MAX_TOTAL_GB` to below your GPU total
+- Enable aggressive unloading: `ROUTER_VRAM_AUTO_UNLOAD_ENABLED=true`
+- Lower the unload threshold: `ROUTER_VRAM_UNLOAD_THRESHOLD_PCT=75`
+
+### Debug Mode
+
+Enable detailed logging:
+```bash
+ROUTER_LOG_LEVEL=DEBUG
+ROUTER_LOG_FORMAT=json  # For structured logging
+```
+
+Check logs with request correlation:
+```bash
+# Make request with tracking ID
+curl -H "X-Request-ID: debug-123" http://localhost:11436/v1/models
+
+# Search logs for that request
+docker logs smarterrouter | grep "debug-123"
+```
+
+## Performance Tuning
+
+### For Low Latency
+
+1. **Pin a Small Model**
+   ```bash
+   ROUTER_PINNED_MODEL=phi3:mini  # or llama3.2:1b
+   ```
+   Keeps a fast model always loaded for simple queries.
+
+2. **Reduce Profiling**
+   ```bash
+   ROUTER_PROFILE_PROMPTS_PER_CATEGORY=1  # Default is 3
+   ```
+   Faster startup, less accurate scores.
+
+3. **Disable Judge**
+   ```bash
+   ROUTER_JUDGE_ENABLED=false
+   ```
+   Uses simple response length heuristics instead of LLM evaluation.
+
+4. **Tune Quality Preference**
+   ```bash
+   ROUTER_QUALITY_PREFERENCE=0.3  # Prefer speed over quality
+   ```
+
+### For High Quality
+
+1. **Enable LLM-as-Judge**
+   ```bash
+   ROUTER_JUDGE_ENABLED=true
+   ROUTER_JUDGE_MODEL=gpt-4o
+   ```
+   Better quality scoring during profiling.
+
+2. **Maximize Quality Preference**
+   ```bash
+   ROUTER_QUALITY_PREFERENCE=1.0  # Always pick best quality
+   ```
+
+3. **Increase Cache Size**
+   ```bash
+   ROUTER_CACHE_MAX_SIZE=1000
+   ROUTER_CACHE_RESPONSE_MAX_SIZE=500
+   ```
+
+### For High Throughput
+
+1. **Optimize Caching**
+   ```bash
+   ROUTER_CACHE_ENABLED=true
+   ROUTER_CACHE_MAX_SIZE=1000
+   ROUTER_CACHE_TTL_SECONDS=7200  # 2 hours
+   ```
+
+2. **Semantic Similarity**
+   ```bash
+   ROUTER_EMBED_MODEL=nomic-embed-text:latest
+   ROUTER_CACHE_SIMILARITY_THRESHOLD=0.80  # More permissive
+   ```
+
+3. **Disable Cascading**
+   ```bash
+   ROUTER_CASCADING_ENABLED=false
+   ```
+   Prevents retry loops, returns errors faster.
+
+4. **Rate Limiting**
+   ```bash
+   ROUTER_RATE_LIMIT_ENABLED=true
+   ROUTER_RATE_LIMIT_REQUESTS_PER_MINUTE=120
+   ```
+
+### Database Optimization
+
+**Important**: The SQLite database (`router.db`) contains all model profiles and is critical for operation.
+
+- **Backup regularly**: `cp router.db router.db.backup`
+- **Adding new models**: Requires re-profiling but preserves old data
+- **Migration**: Simply copy the database file to new instances
+- **Reset**: Delete `router.db` to start fresh (will re-profile all models)
+
+### Production Deployment
+
+1. **Set Admin API Key**
+   ```bash
+   ROUTER_ADMIN_API_KEY=your-secure-random-key
+   ```
+   Never leave admin endpoints open in production.
+
+2. **Enable Security**
+   ```bash
+   ROUTER_RATE_LIMIT_ENABLED=true
+   ```
+
+3. **Docker Security**
+   The included `docker-compose.yml` has production-ready settings:
+   - `read_only: true` - Immutable root filesystem
+   - `security_opt: no-new-privileges:true` - Prevents privilege escalation
+   - `restart: unless-stopped` - Auto-recovery
+   - Health checks for monitoring
+
+4. **Monitoring**
+   - Prometheus metrics: `GET /metrics`
+   - VRAM monitoring: `GET /admin/vram`
+   - Health check: `GET /health`
 
 ## License
 

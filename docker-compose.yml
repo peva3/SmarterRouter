@@ -9,13 +9,21 @@ services:
     env_file:
       - .env
     volumes:
-      - ./router.db:/app/router.db
+      # Database persistence
+      - ./router.db:/app/router.db:rw
+      # Optional: mount tmpfs for temporary files if needed
+      - type: tmpfs
+        target: /tmp
     restart: unless-stopped
     networks:
       - smarterrouter-network
-    # GPU passthrough - requires NVIDIA Container Toolkit
-    # This deploy block is only used with: docker-compose --compatibility up
-    # Alternatively, use: docker compose up --gpus all
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11436/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         reservations:
@@ -23,22 +31,6 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-  # === Example Ollama Service ===
-  # Uncomment to run Ollama as part of this compose setup.
-  # Make sure ROUTER_OLLAMA_URL is set to http://ollama:11434 in your .env file.
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: ollama
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   environment:
-  #     - OLLAMA_KEEP_ALIVE=-1
-  #   restart: unless-stopped
-  #   networks:
-  #     - smarterrouter-network
 
 networks:
   smarterrouter-network:

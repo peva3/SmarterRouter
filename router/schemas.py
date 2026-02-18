@@ -181,34 +181,7 @@ def sanitize_prompt(prompt: str | list[dict] | None, max_length: int = 10000) ->
     return prompt.strip()
 
 
-def sanitize_for_logging(text: str, max_length: int = 200) -> str:
-    """
-    Sanitize text for safe logging.
-
-    Args:
-        text: The text to sanitize
-        max_length: Maximum length before truncation
-
-    Returns:
-        Sanitized text safe for logging
-    """
-    if not text:
-        return ""
-
-    # Truncate
-    if len(text) > max_length:
-        text = text[:max_length] + "..."
-
-    # Redact potential API keys (OpenAI format: sk-...)
-    text = re.sub(r"sk-[a-zA-Z0-9]{20,}", "[API_KEY_REDACTED]", text)
-
-    # Redact other common secret patterns
-    text = re.sub(r"[a-zA-Z0-9]{32,}", "[POTENTIAL_SECRET]", text)
-
-    # Remove newlines for single-line logging
-    text = text.replace("\n", " ").replace("\r", " ")
-
-    return text
+from .logging_config import sanitize_for_logging
 
 
 def strip_signature(content: str, signature_format: str | None = None) -> str:

@@ -1,3 +1,68 @@
+## [Unreleased] - Pending
+
+### Security & Production Hardening
+
+- **Production Security Warnings**: Added startup warning if `ROUTER_ADMIN_API_KEY` is not set
+- **Enhanced Admin Key Documentation**: Updated `ENV_DEFAULT` with strong security warnings and examples
+- **Docker Security**: Production-ready Docker Compose with:
+  - `read_only: true` immutable root filesystem
+  - `security_opt: no-new-privileges:true` privilege escalation prevention
+  - Health checks for container monitoring
+  - Tmpfs mount for temporary files
+
+### Performance & Scalability
+
+- **N+1 Query Fix**: Eliminated database query per model in fallback loop by pre-fetching VRAM estimates
+- **VRAMManager Thread Safety**: Added `asyncio.Lock` to prevent race conditions in concurrent model loading/unloading
+- **Response Cache Granularity**: Cache keys now include generation parameters (`temperature`, `top_p`, `max_tokens`, `seed`, etc.) to prevent incorrect cache hits
+- **Request Size Limits**: Added 10MB request body limit to prevent memory exhaustion attacks
+
+### API & Features
+
+- **Rate Limited Chat Endpoint**: `/v1/chat/completions` now respects rate limits (configurable separately from admin endpoints)
+- **Explain Routing Endpoint**: New `GET /admin/explain?prompt=...` returns detailed routing breakdown without generating response
+  - Shows selected model with confidence score
+  - Displays reasoning for selection
+  - Lists all model scores from database
+  - Useful for debugging routing decisions
+- **Backend URL Validation**: Pydantic validators ensure URLs start with `http://` or `https://`
+
+### Observability
+
+- **Enhanced Error Context**: Improved exception logging includes:
+  - Model name being attempted
+  - Sanitized prompt preview (first 100 chars)
+  - Response ID for request correlation
+  - Current VRAM state (available/total GB)
+  - Full stack traces with `exc_info=True`
+
+### Documentation
+
+- **Comprehensive README Updates**:
+  - **Scoring Algorithm** section explaining category-based routing, complexity assessment, and scoring formula
+  - **Troubleshooting Guide** with "Why wasn't my model selected?" checklist and common issues
+  - **Performance Tuning** guide for low latency, high quality, and high throughput scenarios
+  - Database persistence warnings and backup procedures
+- **RELEASE.md**: New release checklist document with:
+  - Pre-release testing procedures
+  - Version bumping steps
+  - Docker image build/push instructions
+  - Security release procedures
+  - Rollback plans
+
+### Testing
+
+- **Extended Integration Tests**: New `tests/test_integration_extended.py` with comprehensive test coverage:
+  - Full chat flow with mock backend
+  - Streaming response handling
+  - Error handling and fallback behavior
+  - Caching behavior verification
+  - Rate limiting enforcement
+  - Request validation and sanitization
+  - Docker health check verification
+
+---
+
 ## [1.9.0] - 2026-02-17
 
 ### New Features: VRAM Monitoring & Measurement
@@ -8,6 +73,14 @@
 - **Simplified Configuration**: Replaced separate `headroom_gb` setting with a single `ROUTER_VRAM_MAX_TOTAL_GB`. The router uses an internal 0.5GB fragmentation buffer automatically.
 - **Auto-Detection**: If `ROUTER_VRAM_MAX_TOTAL_GB` is not set, the router automatically detects GPU total VRAM and defaults to 90% of it.
 - **VRAM-Aware Routing**: The router now considers measured VRAM requirements when making routing decisions, improving multi-model environments.
+
+### Observability & Operations
+
+- **Structured Logging**: Added `ROUTER_LOG_FORMAT` setting (`text` or `json`). JSON mode includes correlation IDs and sanitized fields for log aggregation.
+- **Request Correlation**: Each request gets a unique `X-Request-ID` that propagates to logs for tracing.
+- **Prometheus Metrics**: New `/metrics` endpoint exposes request rates, error counts, cache hit/miss ratios, model selection distribution, and VRAM usage.
+- **Multi-GPU Support**: VRAM monitoring now aggregates across all GPUs and provides per-GPU breakdowns in `/admin/vram` and metrics.
+- **Enhanced Sanitization**: Improved secret redaction in logs to cover more patterns (JWT, database URLs, long base64).
 
 ## [1.8.0] - 2026-02-17
 

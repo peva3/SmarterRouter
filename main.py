@@ -10,9 +10,11 @@ from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware import Middleware
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
+
 
 from router.backends import create_backend
 from router.backends.base import LLMBackend
@@ -20,6 +22,19 @@ from router.benchmark_db import get_last_sync
 from router.benchmark_sync import sync_benchmarks
 from router.config import Settings, init_logging, settings
 from router.database import get_session, init_db
+from router.logging_config import get_request_id, sanitize_for_logging, set_request_id
+from router.metrics import (
+    CACHE_HITS_TOTAL,
+    CACHE_MISSES_TOTAL,
+    ERRORS_TOTAL,
+    MODEL_SELECTIONS_TOTAL,
+    REQUEST_DURATION,
+    REQUESTS_TOTAL,
+    VRAM_TOTAL_GB,
+    VRAM_USED_GB,
+    VRAM_UTILIZATION_PCT,
+    gpu_metrics,
+)
 from router.models import (
     BenchmarkSync,
     ModelBenchmark,
@@ -160,6 +175,14 @@ async def startup_event():
     init_db()
     logger.info("Starting SmarterRouter...")
 
+    # Security warning for production
+    if not settings.admin_api_key:
+        logger.warning(
+            "⚠️  SECURITY: ROUTER_ADMIN_API_KEY is not set! "
+            "Admin endpoints are publicly accessible. "
+            "Set this in production to protect sensitive data."
+        )
+
     # Initialize backend
     try:
         app_state.backend = create_backend(settings)
@@ -289,6 +312,50 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def request_size_middleware(request: Request, call_next):
+    """Limit request body size to prevent memory exhaustion (10MB default)."""
+    MAX_SIZE = 10 * 1024 * 1024  # 10MB
+    
+    if request.method in ("POST", "PUT", "PATCH"):
+        body = await request.body()
+        if len(body) > MAX_SIZE:
+            return JSONResponse(
+                {"error": {"message": "Request body too large (max 10MB)", "type": "invalid_request_error"}},
+                status_code=413
+            )
+        # Re-create request with body for next middleware
+        async def receive():
+            return {"type": "http.request", "body": body}
+        request = Request(request.scope, receive, request._send)
+    
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    set_request_id(request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    endpoint = request.url.path
+    method = request.method
+    REQUESTS_TOTAL.labels(endpoint=endpoint, method=method).inc()
+    duration = time.time() - start_time
+    REQUEST_DURATION.labels(endpoint=endpoint).observe(duration)
+    status = response.status_code
+    if status >= 400:
+        ERRORS_TOTAL.labels(endpoint=endpoint, error_type=str(status)).inc()
+    return response
+
+
 @app.get("/")
 async def root():
     return {
@@ -301,6 +368,14 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    from router.metrics import generate_metrics
+
+    return Response(content=generate_metrics(), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/v1/models")
@@ -327,6 +402,9 @@ async def chat_completions(
     request: Request,
     config: Annotated[Settings, Depends(get_settings)],
 ):
+    # Rate limit check for chat endpoint
+    await rate_limit_request(request, config, is_admin=False)
+
     if not app_state.backend or not app_state.router_engine:
         return JSONResponse(
             {"error": {"message": "Service not ready", "type": "service_unavailable"}},
@@ -522,17 +600,33 @@ async def chat_completions(
     except Exception:
         fallback_list = [selected_model]
 
+    # Pre-fetch VRAM estimates for all fallback models to avoid N+1 queries
+    vram_estimate_map: dict[str, float] = {}
+    if app_state.vram_manager:
+        with get_session() as session:
+            profiles = session.query(ModelProfile).filter(
+                ModelProfile.name.in_(fallback_list)
+            ).all()
+            vram_estimate_map = {
+                p.name: (
+                    p.vram_required_gb
+                    if p.vram_required_gb is not None
+                    else config.vram_default_estimate_gb
+                )
+                for p in profiles
+            }
+
     # If cascading is enabled, we might want to ensure we don't just randomly fallback,
     # but that's handled by the router mostly returning the "best" model first.
     # The simple fallback list is sufficient for reliability.
 
     final_model = selected_model
 
-    # Check response cache before generation
+    # Check response cache before generation (include generation params in key)
     cache_key_prompt = prompt
     if app_state.router_engine and app_state.router_engine.semantic_cache:
         cached_response = await app_state.router_engine.semantic_cache.get_response(
-            selected_model, cache_key_prompt
+            selected_model, cache_key_prompt, params=backend_kwargs
         )
         if cached_response:
             logger.info(f"Response cache hit for {selected_model}")
@@ -563,14 +657,8 @@ async def chat_completions(
         try:
             # Load model via VRAM manager if enabled, else fallback to traditional unload
             if app_state.vram_manager:
-                # Get VRAM estimate for this model (from profile or default)
-                with get_session() as session:
-                    profile = session.query(ModelProfile).filter_by(name=try_model).first()
-                    vram_gb = (
-                        profile.vram_required_gb
-                        if profile and profile.vram_required_gb
-                        else config.vram_default_estimate_gb
-                    )
+                # Use pre-fetched VRAM estimate
+                vram_gb = vram_estimate_map.get(try_model, config.vram_default_estimate_gb)
                 await app_state.vram_manager.load_model(try_model, vram_gb)
             else:
                 # Traditional: unload current model if different and not pinned before loading new
@@ -605,7 +693,23 @@ async def chat_completions(
             if app_state.vram_manager and app_state.vram_manager.is_loaded(try_model):
                 await app_state.vram_manager.unload_model(try_model)
             last_error = try_error
-            logger.warning(f"Model {try_model} failed, trying next: {try_error}")
+            
+            # Get VRAM state for error context
+            vram_context = ""
+            if app_state.vram_manager:
+                try:
+                    available_vram = app_state.vram_manager.get_available_vram()
+                    max_vram = app_state.vram_manager.max_vram
+                    vram_context = f" | VRAM: {available_vram:.1f}GB/{max_vram:.1f}GB free"
+                except Exception:
+                    vram_context = " | VRAM: unknown"
+            
+            logger.warning(
+                f"Model {try_model} failed, trying next: {try_error} | "
+                f"Prompt: {sanitize_for_logging(prompt)[:100]}... | "
+                f"Response ID: {response_id}{vram_context}",
+                exc_info=True
+            )
             continue
 
     if response is None:
@@ -674,11 +778,11 @@ async def chat_completions(
         content = strip_signature(content)
         content += signature
 
-    # Cache the response (without signature) for future requests
+    # Cache the response (without signature) for future requests (include generation params)
     if app_state.router_engine and app_state.router_engine.semantic_cache:
         content_for_cache = strip_signature(content)
         await app_state.router_engine.semantic_cache.set_response(
-            final_model, prompt, content_for_cache
+            final_model, prompt, content_for_cache, params=backend_kwargs
         )
 
     return {
@@ -1024,6 +1128,124 @@ async def get_vram_status(
     ]
 
     return response
+
+
+@app.get("/admin/explain")
+async def explain_routing(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    prompt: str,
+    model_override: str | None = None,
+):
+    """
+    Explain why a specific model would be selected for a prompt.
+    Returns scoring breakdown without generating a response.
+    Useful for debugging routing decisions.
+    """
+    if not app_state.backend or not app_state.router_engine:
+        return JSONResponse(
+            {"error": {"message": "Service not ready", "type": "service_unavailable"}},
+            status_code=503,
+        )
+
+    try:
+        # Get available models
+        available_models = await app_state.backend.list_models()
+        if not available_models:
+            return JSONResponse(
+                {"error": {"message": "No models available", "type": "internal_error"}},
+                status_code=500,
+            )
+
+        # If model override provided, explain that specific model
+        if model_override:
+            model_names = [m.name for m in available_models]
+            selected_model = None
+            for name in model_names:
+                if name == model_override or model_override.lower() in name.lower():
+                    selected_model = name
+                    break
+            
+            if not selected_model:
+                return JSONResponse(
+                    {"error": {"message": f"Model '{model_override}' not found", "type": "invalid_request_error"}},
+                    status_code=400,
+                )
+            
+            return {
+                "prompt": prompt,
+                "selected_model": selected_model,
+                "override": True,
+                "reasoning": f"Model override specified: {model_override}",
+                "confidence": 1.0,
+                "scores": None,
+            }
+
+        # Otherwise, run the full routing logic to get scoring breakdown
+        model_list = [m.name for m in available_models]
+        
+        # Check routing cache first
+        cached_result = None
+        if app_state.router_engine.semantic_cache:
+            cached_result = await app_state.router_engine.semantic_cache.get(prompt)
+        
+        if cached_result:
+            return {
+                "prompt": prompt,
+                "selected_model": cached_result.selected_model,
+                "cached": True,
+                "reasoning": cached_result.reasoning,
+                "confidence": cached_result.confidence,
+                "scores": None,
+            }
+
+        # Get routing decision
+        result = await app_state.router_engine.select_model(prompt, model_list)
+        
+        if result is None:
+            return JSONResponse(
+                {"error": {"message": "Could not select model", "type": "internal_error"}},
+                status_code=500,
+            )
+
+        selected_model = result.selected_model
+        confidence = result.confidence
+        reasoning = result.reasoning
+        
+        # Get all model scores
+        with get_session() as session:
+            profiles = session.query(ModelProfile).filter(
+                ModelProfile.name.in_(model_list)
+            ).all()
+            
+            model_scores = []
+            for profile in profiles:
+                model_scores.append({
+                    "name": profile.name,
+                    "reasoning": profile.reasoning,
+                    "coding": profile.coding,
+                    "creativity": profile.creativity,
+                    "speed": profile.speed,
+                    "vram_gb": profile.vram_required_gb,
+                })
+
+        return {
+            "prompt": prompt,
+            "prompt_preview": sanitize_for_logging(prompt)[:100] + "..." if len(prompt) > 100 else prompt,
+            "selected_model": selected_model,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "cached": False,
+            "available_models": len(model_list),
+            "model_scores": sorted(model_scores, key=lambda x: x["name"]),
+        }
+
+    except Exception as e:
+        logger.error(f"Explain routing failed: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": {"message": f"Explain routing failed: {str(e)}", "type": "internal_error"}},
+            status_code=500,
+        )
 
 
 @app.get("/v1/skills")

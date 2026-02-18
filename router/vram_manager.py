@@ -53,6 +53,9 @@ class VRAMManager:
         self.loaded_models: Dict[str, float] = {}  # model_name -> estimated_vram_gb
         self.pinned_model: Optional[str] = None
         self._backend_ref: Optional[Any] = None  # LLMBackend instance, set by RouterEngine
+        
+        # Concurrency control
+        self._lock = asyncio.Lock()
 
     def set_backend(self, backend: Any):
         """Called by RouterEngine to provide backend for load/unload operations."""
@@ -66,6 +69,8 @@ class VRAMManager:
         where effective_budget = max_vram - FRAGMENTATION_BUFFER_GB
 
         This does NOT query nvidia-smi; it's based on our allocation tracking.
+        
+        Note: This is a read-only operation; lock acquired by callers when needed.
         """
         effective_budget = self.max_vram - self.FRAGMENTATION_BUFFER_GB
         allocated = sum(self.loaded_models.values())
@@ -103,48 +108,49 @@ class VRAMManager:
         Raises:
             VRAMExceededError: If model cannot be loaded even after unloads
         """
-        if model_name in self.loaded_models:
-            logger.debug(f"Model {model_name} already loaded")
-            return
+        async with self._lock:
+            if model_name in self.loaded_models:
+                logger.debug(f"Model {model_name} already loaded")
+                return
 
-        if not self._backend_ref:
-            raise RuntimeError("VRAMManager: backend not set. Call set_backend() first.")
+            if not self._backend_ref:
+                raise RuntimeError("VRAMManager: backend not set. Call set_backend() first.")
 
-        # Check if fits
-        if not self.can_load(model_name, vram_estimate_gb):
-            needed = vram_estimate_gb - self.get_available_vram()
-            logger.info(f"VRAM: Need {needed:.1f}GB more for {model_name}, triggering unload...")
-            if self.auto_unload:
-                await self._free_vram(needed)
-            else:
-                raise VRAMExceededError(
-                    f"Insufficient VRAM for {model_name} (need {vram_estimate_gb:.1f}GB, "
-                    f"available {self.get_available_vram():.1f}GB) and auto_unload disabled"
-                )
-
-            # Re-check after unload attempts
+            # Check if fits
             if not self.can_load(model_name, vram_estimate_gb):
-                raise VRAMExceededError(
-                    f"Still cannot load {model_name} after unload attempts. "
-                    f"Need {vram_estimate_gb:.1f}GB, available {self.get_available_vram():.1f}GB"
-                )
+                needed = vram_estimate_gb - self.get_available_vram()
+                logger.info(f"VRAM: Need {needed:.1f}GB more for {model_name}, triggering unload...")
+                if self.auto_unload:
+                    await self._free_vram(needed)
+                else:
+                    raise VRAMExceededError(
+                        f"Insufficient VRAM for {model_name} (need {vram_estimate_gb:.1f}GB, "
+                        f"available {self.get_available_vram():.1f}GB) and auto_unload disabled"
+                    )
 
-        # Load the model via backend
-        logger.info(f"Loading model {model_name} (~{vram_estimate_gb:.1f}GB)")
-        try:
-            await self._backend_ref.load_model(model_name)
-        except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
-            raise
+                # Re-check after unload attempts
+                if not self.can_load(model_name, vram_estimate_gb):
+                    raise VRAMExceededError(
+                        f"Still cannot load {model_name} after unload attempts. "
+                        f"Need {vram_estimate_gb:.1f}GB, available {self.get_available_vram():.1f}GB"
+                    )
 
-        self.loaded_models[model_name] = vram_estimate_gb
+            # Load the model via backend
+            logger.info(f"Loading model {model_name} (~{vram_estimate_gb:.1f}GB)")
+            try:
+                await self._backend_ref.load_model(model_name)
+            except Exception as e:
+                logger.error(f"Failed to load model {model_name}: {e}")
+                raise
 
-        if pin:
-            self.pinned_model = model_name
-            logger.info(f"Pinned model {model_name} (will not auto-unload)")
+            self.loaded_models[model_name] = vram_estimate_gb
 
-    async def unload_model(self, model_name: str):
-        """Unload a specific model."""
+            if pin:
+                self.pinned_model = model_name
+                logger.info(f"Pinned model {model_name} (will not auto-unload)")
+
+    async def _unload_model_internal(self, model_name: str):
+        """Internal version of unload_model - caller must hold self._lock."""
         if model_name not in self.loaded_models:
             return
 
@@ -161,14 +167,22 @@ class VRAMManager:
         except Exception as e:
             logger.error(f"Failed to unload model {model_name}: {e}")
             # Still remove from tracking even if unload failed
+        
+        # Remove from tracking
+        if model_name in self.loaded_models:
             del self.loaded_models[model_name]
-            raise
 
-        del self.loaded_models[model_name]
+    async def unload_model(self, model_name: str):
+        """Unload a specific model (public API - acquires lock)."""
+        async with self._lock:
+            await self._unload_model_internal(model_name)
 
     async def _free_vram(self, needed_gb: float):
         """
         Free VRAM by unloading models according to strategy.
+        
+        Note: This method assumes the caller holds self._lock to prevent race conditions.
+        It is called from load_model() which already acquires the lock.
 
         Args:
             needed_gb: Amount of VRAM to free (in GB)
@@ -199,7 +213,8 @@ class VRAMManager:
             if freed >= needed_gb:
                 break
             try:
-                await self.unload_model(model_name)
+                # Call the internal version to avoid re-acquiring lock
+                await self._unload_model_internal(model_name)
                 freed += vram
                 unloaded_models.append(model_name)
             except Exception as e:

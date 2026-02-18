@@ -155,8 +155,20 @@ class SemanticCache:
                 self.recent_selections.pop(0)
         logger.debug(f"Cached routing decision for: {key[:8]}...")
 
-    async def get_response(self, model: str, prompt: str) -> str | None:
-        key = (model, self._hash_prompt(prompt))
+    def _make_response_key(self, model: str, prompt: str, params: dict | None = None) -> tuple:
+        """Create cache key including model, prompt, and generation parameters."""
+        prompt_hash = self._hash_prompt(prompt)
+        if params:
+            # Include relevant generation parameters that affect output
+            param_tuple = tuple(sorted([
+                (k, v) for k, v in params.items()
+                if v is not None and k in ('temperature', 'top_p', 'max_tokens', 'seed', 'presence_penalty', 'frequency_penalty')
+            ]))
+            return (model, prompt_hash, param_tuple)
+        return (model, prompt_hash)
+
+    async def get_response(self, model: str, prompt: str, params: dict | None = None) -> str | None:
+        key = self._make_response_key(model, prompt, params)
         current_time = time.time()
 
         async with self._lock:
@@ -173,8 +185,8 @@ class SemanticCache:
             self.stats["response_misses"] += 1
             return None
 
-    async def set_response(self, model: str, prompt: str, response: str) -> None:
-        key = (model, self._hash_prompt(prompt))
+    async def set_response(self, model: str, prompt: str, response: str, params: dict | None = None) -> None:
+        key = self._make_response_key(model, prompt, params)
         async with self._lock:
             self.response_cache[key] = (response, time.time())
             self.response_cache.move_to_end(key)

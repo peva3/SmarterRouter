@@ -1,14 +1,25 @@
 """VRAM monitoring and management for GPU memory."""
 
-import subprocess
-import re
+import asyncio
 import logging
+import re
+import subprocess
 from dataclasses import dataclass
 from typing import Any, List, Optional
-import asyncio
 import time
 
+from .metrics import VRAM_TOTAL_GB, VRAM_USED_GB, VRAM_UTILIZATION_PCT, gpu_metrics
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GPUMemory:
+    """Memory information for a single GPU."""
+    index: int
+    total_gb: float
+    used_gb: float
+    free_gb: float
 
 
 @dataclass
@@ -22,13 +33,20 @@ class VRAMMetrics:
     utilization_pct: float
     models_loaded: List[str]  # From our tracking
     per_model_vram_gb: dict[str, float]  # Estimated per-model usage
+    gpus: List[GPUMemory]  # Per-GPU breakdown
 
     def to_log_string(self) -> str:
         """Format for concise application log."""
         if not self.per_model_vram_gb:
-            return f"VRAM: {self.used_gb:.1f}/{self.total_gb:.1f}GB ({self.utilization_pct:.1f}%)"
-        models_str = ", ".join(f"{m}:{v:.1f}GB" for m, v in self.per_model_vram_gb.items())
-        return f"VRAM: {self.used_gb:.1f}/{self.total_gb:.1f}GB ({self.utilization_pct:.1f}%) models=[{models_str}]"
+            base = f"VRAM: {self.used_gb:.1f}/{self.total_gb:.1f}GB ({self.utilization_pct:.1f}%)"
+        else:
+            models_str = ", ".join(f"{m}:{v:.1f}GB" for m, v in self.per_model_vram_gb.items())
+            base = f"VRAM: {self.used_gb:.1f}/{self.total_gb:.1f}GB ({self.utilization_pct:.1f}%) models=[{models_str}]"
+        # Add per-GPU info if multiple
+        if len(self.gpus) > 1:
+            gpu_details = ", ".join(f"GPU{i}: {g.used_gb:.1f}/{g.total_gb:.1f}GB" for i, g in enumerate(self.gpus))
+            return f"{base} ({gpu_details})"
+        return base
 
 
 class VRAMMonitor:
@@ -127,6 +145,17 @@ class VRAMMonitor:
                     elif metrics.utilization_pct >= 85:
                         logger.warning(f"VRAM high: {metrics.utilization_pct:.1f}% used")
 
+                # Update Prometheus metrics
+                VRAM_TOTAL_GB.set(metrics.total_gb)
+                VRAM_USED_GB.set(metrics.used_gb)
+                VRAM_UTILIZATION_PCT.set(metrics.utilization_pct)
+                # Update per-GPU metrics
+                for gpu in metrics.gpus:
+                    idx_str = str(gpu.index)
+                    gpu_metrics["total"].labels(gpu_index=idx_str).set(gpu.total_gb)
+                    gpu_metrics["used"].labels(gpu_index=idx_str).set(gpu.used_gb)
+                    gpu_metrics["free"].labels(gpu_index=idx_str).set(gpu.free_gb)
+
             except Exception as e:
                 logger.error(f"VRAM monitor error: {e}", exc_info=True)
 
@@ -136,7 +165,7 @@ class VRAMMonitor:
         """Take a single VRAM snapshot."""
         loop = asyncio.get_event_loop()
         stdout = await loop.run_in_executor(None, self._run_nvidia_smi)
-        total_mb, used_mb, free_mb = self._parse_output(stdout)
+        total_mb, used_mb, free_mb, gpus = self._parse_output(stdout)
 
         # Auto-detect total on first sample if not configured
         if self.total_vram_gb is None:
@@ -168,34 +197,57 @@ class VRAMMonitor:
             utilization_pct=util_pct,
             models_loaded=models_loaded,
             per_model_vram_gb=per_model_vram,
+            gpus=gpus,
         )
 
     def _run_nvidia_smi(self) -> str:
         """Execute nvidia-smi query (blocking)."""
         cmd = [
             "nvidia-smi",
-            "--query-gpu=memory.total,memory.used,memory.free",
+            "--query-gpu=index,memory.total,memory.used,memory.free",
             "--format=csv,noheader,nounits",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         result.check_returncode()
         return result.stdout
 
-    def _parse_output(self, output: str) -> tuple[int, int, int]:
+    def _parse_output(self, output: str) -> tuple[int, int, int, List[GPUMemory]]:
         """
-        Parse nvidia-smi CSV output.
-        Example: "24576 MiB, 12845 MiB, 11731 MiB"
-        Returns: (total_mb, used_mb, free_mb)
+        Parse nvidia-smi CSV output for multiple GPUs.
+        Example line: "0, 24576 MiB, 12845 MiB, 11731 MiB"
+        Returns: (total_mb, used_mb, free_mb, gpus)
         """
-        line = output.strip().split("\n")[0]
-        values = []
-        for part in line.split(","):
-            match = re.search(r"(\d+)", part.strip())
-            if match:
-                values.append(int(match.group(1)))
-        if len(values) >= 3:
-            return values[0], values[1], values[2]
-        raise ValueError(f"Failed to parse nvidia-smi: {line}")
+        lines = output.strip().split("\n")
+        total_mb = 0
+        used_mb = 0
+        free_mb = 0
+        gpus: List[GPUMemory] = []
+
+        for line in lines:
+            parts = line.split(",")
+            if len(parts) >= 4:
+                idx = int(parts[0].strip())
+                # Extract numbers from memory fields (they include "MiB")
+                total_match = re.search(r"(\d+)", parts[1].strip())
+                used_match = re.search(r"(\d+)", parts[2].strip())
+                free_match = re.search(r"(\d+)", parts[3].strip())
+                if total_match and used_match and free_match:
+                    gpu_total = int(total_match.group(1))
+                    gpu_used = int(used_match.group(1))
+                    gpu_free = int(free_match.group(1))
+                    total_mb += gpu_total
+                    used_mb += gpu_used
+                    free_mb += gpu_free
+                    gpus.append(GPUMemory(
+                        index=idx,
+                        total_gb=gpu_total / 1024.0,
+                        used_gb=gpu_used / 1024.0,
+                        free_gb=gpu_free / 1024.0
+                    ))
+
+        if total_mb == 0:
+            raise ValueError("No valid GPU data parsed")
+        return total_mb, used_mb, free_mb, gpus
 
     # Public accessors
     def get_current(self) -> Optional[VRAMMetrics]:

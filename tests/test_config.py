@@ -56,17 +56,16 @@ class TestInitLogging:
 
     def test_init_logging_sets_level(self):
         """Test that init_logging sets the correct level."""
-        with patch("logging.basicConfig") as mock_basic_config:
+        with patch("router.logging_config.setup_logging") as mock_setup:
             init_logging()
 
-            # Check that basicConfig was called
-            mock_basic_config.assert_called_once()
-            call_args = mock_basic_config.call_args
+            # Check that setup_logging was called
+            mock_setup.assert_called_once()
+            call_args = mock_setup.call_args
 
-            # Verify format includes expected fields
-            assert "%(asctime)s" in call_args.kwargs["format"]
-            assert "%(name)s" in call_args.kwargs["format"]
-            assert "%(levelname)s" in call_args.kwargs["format"]
+            # Verify level and format match settings
+            assert call_args.kwargs["level"] == logging.INFO
+            assert call_args.kwargs["log_format"] == "text"
 
     def test_init_logging_with_different_levels(self):
         """Test logging with different levels."""
@@ -80,9 +79,11 @@ class TestInitLogging:
         for level_str, level_int in test_cases:
             with patch("router.config.settings") as mock_settings:
                 mock_settings.log_level = level_str
+                mock_settings.log_format = "text"
 
-                with patch("logging.basicConfig") as mock_basic_config:
+                with patch("router.logging_config.setup_logging") as mock_setup:
                     init_logging()
 
-                    call_args = mock_basic_config.call_args
+                    call_args = mock_setup.call_args
                     assert call_args.kwargs["level"] == level_int
+                    assert call_args.kwargs["log_format"] == "text"

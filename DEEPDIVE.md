@@ -70,6 +70,8 @@ The endpoint requires admin authentication if `ROUTER_ADMIN_API_KEY` is set.
 
 **Profiling Integration**: When profiling new models with `ROUTER_PROFILE_MEASURE_VRAM=true`, the router populates the `vram_required_gb` field automatically. If the profiler is not run, the router falls back to a default estimate (`ROUTER_VRAM_DEFAULT_ESTIMATE_GB`) for capacity planning. This ensures the router can function even without explicit measurements.
 
+**Multi-GPU Support**: The VRAM monitor automatically detects all NVIDIA GPUs and aggregates their memory. The `total_vram_gb` used by the manager is the sum of all GPU memory. The `/admin/vram` endpoint also reports per‑GPU breakdowns, allowing you to see utilization on each device. The router does not currently pin models to specific GPUs; it relies on the backend's default device placement.
+
 ---
 
 ## 3. Data Flow: Anatomy of a Request
@@ -134,7 +136,32 @@ While often used locally, we've added features to make the router safe for multi
 
 ---
 
-## 5.1 Smart Caching
+## 5.1 Observability
+
+SmarterRouter includes built-in observability features to help operators monitor and debug the system:
+
+- **Structured Logging**: Set `ROUTER_LOG_FORMAT=json` to emit logs in JSON format. Each log entry includes a timestamp, level, logger name, message, and any extra context fields. A unique `request_id` is automatically added to all logs within the scope of a single HTTP request, enabling end-to-end tracing.
+
+- **Request Correlation**: The `X-Request-ID` response header (and request header if provided) propagates a unique identifier across logs. This is invaluable for debugging complex multi-service interactions.
+
+- **Prometheus Metrics**: The `/metrics` endpoint exposes a comprehensive set of counters and gauges:
+  - `smarterrouter_requests_total` (labels: endpoint, method)
+  - `smarterrouter_request_duration_seconds` (labels: endpoint)
+  - `smarterrouter_errors_total` (labels: endpoint, error_type)
+  - `smarterrouter_model_selections_total` (labels: selected_model, category)
+  - `smarterrouter_cache_hits_total` / `smarterrouter_cache_misses_total` (labels: cache_type)
+  - `smarterrouter_vram_total_gb`, `smarterrouter_vram_used_gb`, `smarterrouter_vram_utilization_pct`
+  - `smarterrouter_gpu_total_gb`, `smarterrouter_gpu_used_gb`, `smarterrouter_gpu_free_gb` (labels: gpu_index) for multi‑GPU systems
+
+- **VRAM Dashboard**: The `/admin/vram` endpoint provides a JSON snapshot of current GPU memory, loaded models with estimates, and recent history. Useful for ad‑hoc inspection or building custom dashboards.
+
+- **Health Checks**: `/health` indicates the process is alive. Consider also implementing your own external checks that verify backend connectivity and VRAM thresholds.
+
+These features make it easy to integrate SmarterRouter into production monitoring stacks (Grafana, Datadog, etc.) without requiring external agents.
+
+---
+
+## 5.2 Smart Caching
 
 The router implements a multi-layered caching system to optimize performance:
 
