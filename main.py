@@ -500,8 +500,11 @@ async def chat_completions(
             logger.info(f"Model override: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
         else:
             # Pass full request object for capability detection
+            last_content = messages[-1].content
+            if last_content is None:
+                last_content = ""
             routing_result = await app_state.router_engine.select_model(
-                messages[-1].content, validated_request
+                last_content, validated_request
             )
             selected_model = routing_result.selected_model
             reasoning = routing_result.reasoning

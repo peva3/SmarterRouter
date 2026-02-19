@@ -494,18 +494,25 @@ class ModelProfiler:
         results = await asyncio.gather(*category_tasks, return_exceptions=True)
         
         # Unpack results with error handling
-        category_scores = {}
-        category_times = {}
+        category_scores: dict[str, float] = {}
+        category_times: dict[str, float] = {}
         
-        for i, (cat, result) in enumerate(zip(categories, results)):
+        for i, cat in enumerate(categories):
+            result = results[i]
             if isinstance(result, Exception):
                 logger.error(f"Category {cat} failed for {model}: {result}")
                 category_scores[cat] = 0.0
                 category_times[cat] = self.timeout * 1000
             else:
-                score, time_ms = result
-                category_scores[cat] = score
-                category_times[cat] = time_ms
+                # At this point, result should be tuple[float, float]
+                try:
+                    score, time_ms = result  # type: ignore[misc]
+                    category_scores[cat] = score
+                    category_times[cat] = time_ms
+                except (TypeError, ValueError) as e:
+                    logger.error(f"Unexpected result format for {cat}: {result}, error: {e}")
+                    category_scores[cat] = 0.0
+                    category_times[cat] = self.timeout * 1000
         
         # Early termination check: if first category (reasoning) is terrible, note it
         if category_scores.get("reasoning", 0) < 0.1:

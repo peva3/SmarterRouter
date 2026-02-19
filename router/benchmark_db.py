@@ -58,7 +58,6 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
                 "coding_score": b.coding_score,
                 "general_score": b.general_score,
                 "elo_rating": b.elo_rating,
-                "benchmark_source": b.benchmark_source,
             }
             for b in benchmarks
         ]
@@ -95,7 +94,6 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         "vision",
         "tool_calling",
         "last_updated",
-        "benchmark_source",
     }
 
     count = 0

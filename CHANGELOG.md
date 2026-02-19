@@ -1,5 +1,27 @@
 ## [Unreleased] - Pending
 
+### QA Deep Dive Fixes
+
+- **Critical Bug Fix**: Removed unused `benchmark_source` field from `benchmark_db.py`. The field was in the whitelist but never existed in `ModelBenchmark` model, causing potential crashes in `get_benchmarks_for_models()`.
+- **Type Safety Improvements**:
+  - Fixed tuple unpacking in `profiler.py` after `asyncio.gather(return_exceptions=True)` to properly handle both exceptions and successful results
+  - Added explicit type annotations for `semantic_cache` field in `RouterEngine`
+  - Fixed `embedding` variable scope issue in `select_model()` method
+  - Added type annotations for `model_scores` and `model_counts` in `_get_model_feedback_scores()`
+- **Edge Case Handling**:
+  - Fixed potential crash in `_calculate_combined_scores()` when `analysis` dict is empty by adding guard for `max()` on empty sequence
+  - Properly exclude meta-categories (complexity, vision, tools) from dominant category detection
+  - Added None check for `messages[-1].content` in request handling
+- **Comprehensive Test Coverage**: Added 30 new edge case tests in `tests/test_edge_cases.py` covering:
+  - SemanticCache: empty cache, cosine similarity edge cases, LRU eviction, model frequency
+  - RouterEngine: empty prompts, very long prompts, special characters, unicode, parameter extraction, complexity buckets
+  - Benchmark DB: empty model lists, bulk upsert edge cases
+  - Config: quality preference extremes, URL validation, benchmark sources
+  - Profiler: timeout calculations, token rate initialization
+  - Logging sanitization: empty strings, None values, nested dicts, long strings
+  - Routing decisions: reasoning string generation with various score combinations
+- **Test Count**: Increased from 258 to 288 tests (30 new edge case tests)
+
 ### Routing Algorithm Improvements
 
 - **Profile Scores in Combined Score**: Added profile scores as Signal 4 in the routing algorithm. Previously, profile scores were only used in bonus calculations. Now they directly influence the combined category score with weight `0.8 * quality_weight`, making runtime profiling data more impactful.

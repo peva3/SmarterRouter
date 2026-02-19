@@ -268,6 +268,7 @@ class RouterEngine:
         self.cache_enabled = cache_enabled
         self.embed_model = embed_model
         self.vram_manager = vram_manager
+        self.semantic_cache: SemanticCache | None
 
         if cache_enabled:
             self.semantic_cache = SemanticCache(
@@ -286,8 +287,8 @@ class RouterEngine:
         prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt, sort_keys=True)
 
         # Always attempt cache lookup when enabled - exact hash works without embedding model
+        embedding: list[float] | None = None
         if self.cache_enabled and self.semantic_cache:
-            embedding = None
             if self.embed_model:
                 embedding = await self.semantic_cache._get_embedding(self.client, prompt_str)
             cached = await self.semantic_cache.get(prompt_str, embedding)
@@ -300,9 +301,11 @@ class RouterEngine:
 
         model_names = [m.name for m in available_models]
 
-        text_prompt = prompt
-        if isinstance(prompt, list):
-            text_parts = []
+        # Convert prompt to string for analysis
+        if isinstance(prompt, str):
+            text_prompt = prompt
+        else:
+            text_parts: list[str] = []
             for msg in prompt:
                 if isinstance(msg, dict):
                     content = msg.get("content")
@@ -425,8 +428,8 @@ Select the model that best matches the user's prompt needs."""
                 # In real prod, use proper aggregation query: SELECT model_name, AVG(score) ...
                 feedbacks = session.execute(select(ModelFeedback)).scalars().all()
 
-                model_scores = {}
-                model_counts = {}
+                model_scores: dict[str, float] = {}
+                model_counts: dict[str, int] = {}
 
                 for f in feedbacks:
                     model_scores[f.model_name] = model_scores.get(f.model_name, 0.0) + f.score
@@ -665,9 +668,13 @@ Select the model that best matches the user's prompt needs."""
             model_names, normalized_benchmark_map
         )
 
-        # Determine dominant category
-        top_category = max(analysis.items(), key=lambda x: x[1])
-        dominant_category = top_category[0] if top_category[1] > 0.5 else None
+        # Determine dominant category (exclude complexity which is a meta-category)
+        task_categories = {k: v for k, v in analysis.items() if k not in ("complexity", "vision", "tools")}
+        if task_categories:
+            top_category = max(task_categories.items(), key=lambda x: x[1])
+            dominant_category = top_category[0] if top_category[1] > 0.5 else None
+        else:
+            dominant_category = None
 
         for model_name in model_names:
             profile = profile_map.get(model_name)
