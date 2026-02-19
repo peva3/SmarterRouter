@@ -37,6 +37,10 @@ class ModelProfile(Base):
     )
     vram_quantization: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Profiling metadata
+    adaptive_timeout_used: Mapped[float | None] = mapped_column(Float, nullable=True)
+    profiling_token_rate: Mapped[float | None] = mapped_column(Float, nullable=True)  # tokens/sec
+
     def capability_dict(self) -> dict[str, float]:
         return {
             "reasoning": self.reasoning,

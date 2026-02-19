@@ -29,14 +29,27 @@ class ProfileResult:
 
 
 class ModelProfiler:
-    def __init__(self, client: LLMBackend, total_models: int = 0, current_model_num: int = 0, model_name: str = ""):
+    def __init__(
+        self,
+        client: LLMBackend,
+        total_models: int = 0,
+        current_model_num: int = 0,
+        model_name: str = "",
+        model_size_bytes: int | None = None,
+    ):
         self.client = client
         self.judge = JudgeClient()
         self.base_timeout = settings.profile_timeout
         self.timeout = self._calculate_timeout(model_name)
+        self.model_size_bytes = model_size_bytes
         self.total_models = total_models
         self.current_model_num = current_model_num
         self.start_time = time.perf_counter()
+        # Adaptive timeout tracking
+        self.adaptive_timeout: float | None = None
+        self.screening_token_rate: float | None = None
+        self.screening_max_time_ms: float = 0.0
+        self.screening_total_tokens: int = 0
     
     def _calculate_timeout(self, model_name: str) -> float:
         """Calculate appropriate timeout based on model size.
@@ -155,13 +168,156 @@ class ModelProfiler:
         
         return None
 
+    def _calculate_warmup_timeout(self) -> float:
+        """Calculate a generous timeout for model warmup/loading based on disk size.
+        
+        Uses configurable disk read speed assumption to ensure even slow HDDs
+        have enough time to load large models.
+        
+        Formula: (size_gb / disk_speed_gbps) + 30s buffer
+        - 1.5GB model: ~60 seconds
+        - 14GB model: ~5 minutes
+        - 40GB model: ~13+ minutes
+        """
+        if self.model_size_bytes is None:
+            # Fallback to generous default if size unknown
+            return 600.0  # 10 minutes
+        
+        size_gb = self.model_size_bytes / (1024 ** 3)
+        # Get disk speed config (convert MB/s to GB/s)
+        disk_speed_mbps = settings.profile_warmup_disk_speed_mbps
+        disk_speed_gbps = disk_speed_mbps / 1024.0
+        
+        # Calculate load time
+        load_seconds = size_gb / disk_speed_gbps if disk_speed_gbps > 0 else float('inf')
+        buffer_seconds = 30.0
+        warmup_timeout = load_seconds + buffer_seconds
+        
+        # Cap at configured maximum to avoid infinite waits for truly broken models
+        return min(warmup_timeout, settings.profile_warmup_max_timeout)
+
+    async def _warmup_model(self, model: str) -> bool:
+        """Explicitly load the model into memory before benchmarking.
+        
+        This separates the slow I/O-bound loading phase from the compute-bound
+        benchmarking phase, preventing timeouts caused by slow disk reads.
+        
+        Returns:
+            True if model loaded successfully, False otherwise
+        """
+        warmup_timeout = self._calculate_warmup_timeout()
+        size_str = f"{self.model_size_bytes/(1024**3):.1f}GB" if self.model_size_bytes else "unknown"
+        logger.info(
+            f"Warming up model {model} (size={size_str}, timeout={warmup_timeout:.0f}s)"
+        )
+        
+        try:
+            success = await asyncio.wait_for(
+                self.client.load_model(model, keep_alive=-1),
+                timeout=warmup_timeout,
+            )
+            if success:
+                logger.info(f"Model {model} warmed up successfully")
+            else:
+                logger.warning(f"Model {model} warmup returned False (backend may not support explicit loading)")
+            return success
+        except asyncio.TimeoutError:
+            logger.error(f"Model {model} warmup timed out after {warmup_timeout:.0f}s")
+            return False
+        except Exception as e:
+            logger.error(f"Model {model} warmup failed: {e}")
+            return False
+
+    def _calculate_adaptive_timeout(
+        self,
+        screening_total_time_ms: float,
+        screening_max_time_ms: float,
+        screening_total_tokens: int,
+        model_name: str = "",
+    ) -> float:
+        """Calculate adaptive timeout based on measured screening performance.
+        
+        Uses two methods and takes the maximum:
+        1. Method A (Conservative): max_prompt_time × safety_factor
+        2. Method B (Token-based): projected total time based on token rate
+        
+        Args:
+            screening_total_time_ms: Total time for all screening prompts
+            screening_max_time_ms: Longest single screening prompt time
+            screening_total_tokens: Total tokens generated during screening
+            model_name: Name of the model to check for reasoning capabilities
+            
+        Returns:
+            Calculated timeout in seconds, bounded by min/max config
+        """
+        prompts_per_category = settings.profile_prompts_per_category
+        total_benchmark_prompts = 3 * prompts_per_category
+        screening_prompts = 3
+        
+        # Determine safety factor
+        safety_factor = settings.profile_adaptive_safety_factor
+        
+        # Reasoning models (like DeepSeek R1) are non-linear; they take MUCH longer
+        # on complex benchmarks than simple screening prompts.
+        name_lower = model_name.lower()
+        if any(x in name_lower for x in ["r1", "reasoning", "thought", "cot"]):
+            safety_factor *= 2.0  # Double safety for reasoning models (e.g. 2.0 -> 4.0)
+            logger.debug(f"Detected reasoning model {model_name}, bumping safety factor to {safety_factor}")
+
+        # Method A: Conservative - use max prompt time × safety factor
+        timeout_a = (screening_max_time_ms / 1000.0) * safety_factor
+        
+        # Method B: Token-based projection
+        timeout_b = timeout_a  # fallback to A
+        if screening_total_time_ms > 0 and screening_total_tokens > 0:
+            token_rate = screening_total_tokens / (screening_total_time_ms / 1000.0)
+            self.screening_token_rate = token_rate
+            
+            # Project remaining tokens needed
+            avg_tokens_per_prompt = screening_total_tokens / screening_prompts
+            remaining_prompts = total_benchmark_prompts - screening_prompts
+            remaining_tokens = avg_tokens_per_prompt * remaining_prompts
+            
+            # Project total time including screening
+            projected_remaining_time = remaining_tokens / token_rate if token_rate > 0 else 0
+            projected_total_time = (screening_total_time_ms / 1000.0) + projected_remaining_time
+            
+            # Per-prompt timeout with safety factor
+            timeout_b = (projected_total_time / total_benchmark_prompts) * settings.profile_adaptive_safety_factor
+        
+        # Use the more conservative (higher) timeout
+        calculated_timeout = max(timeout_a, timeout_b)
+        
+        # PRO-TIP: Use the size-based timeout as a FLOOR.
+        # We should never give a model LESS time than our size-based guess,
+        # only MORE if the screening shows it's particularly slow.
+        floor_timeout = self.timeout
+        
+        # Apply min/max and floor
+        final_timeout = max(
+            floor_timeout,
+            settings.profile_adaptive_timeout_min,
+            min(calculated_timeout, settings.profile_adaptive_timeout_max)
+        )
+        
+        logger.info(
+            f"Adaptive timeout calculated: {final_timeout:.0f}s "
+            f"(floor={floor_timeout:.0f}s, method_a={timeout_a:.0f}s, method_b={timeout_b:.0f}s, "
+            f"token_rate={self.screening_token_rate:.1f} tok/s)"
+        )
+        
+        return final_timeout
+
     async def _test_category(
         self,
         model: str,
         category: str,
         prompts: list[str],
+        timeout_override: float | None = None,
     ) -> tuple[float, float]:
         """Process all prompts in a category concurrently with semaphore control."""
+        effective_timeout = timeout_override if timeout_override is not None else self.timeout
+        
         # Limit concurrent prompts to avoid overwhelming the model
         semaphore = asyncio.Semaphore(3)
         
@@ -174,7 +330,7 @@ class ModelProfiler:
                     start = time.perf_counter()
                     result = await asyncio.wait_for(
                         self.client.chat(model, [{"role": "user", "content": prompt}]),
-                        timeout=self.timeout,
+                        timeout=effective_timeout,
                     )
                     elapsed_ms = (time.perf_counter() - start) * 1000
                     response_text = result.get("message", {}).get("content", "")
@@ -183,7 +339,7 @@ class ModelProfiler:
                     
                 except asyncio.TimeoutError:
                     logger.warning(f"Profile timeout for {model} on {category} prompt {prompt_idx + 1}")
-                    return float(self.timeout * 1000), "", prompt
+                    return float(effective_timeout * 1000), "", prompt
                 except Exception as e:
                     logger.error(f"Profile error for {model}: {e}")
                     return 0.0, "", prompt
@@ -220,9 +376,11 @@ class ModelProfiler:
         avg_time = sum(times) / len(times) if times else 0.0
         return avg_score, avg_time
 
-    async def _screen_model(self, model: str) -> tuple[bool, float]:
+    async def _screen_model(self, model: str) -> tuple[bool, float, float, float, int]:
         """Quick screen with 3 prompts to identify obviously bad models.
-        Returns (should_continue, estimated_quality_score).
+        
+        Returns:
+            tuple of (should_continue, avg_score, total_time_ms, max_time_ms, total_tokens)
         """
         # Select one prompt from each category
         screen_prompts = [
@@ -231,7 +389,7 @@ class ModelProfiler:
             ("creativity", BENCHMARK_PROMPTS["creativity"][0]),
         ]
         
-        async def test_single(item: tuple[str, str]) -> tuple[float, float]:
+        async def test_single(item: tuple[str, str]) -> tuple[float, float, int]:
             category, prompt = item
             try:
                 start = time.perf_counter()
@@ -241,39 +399,63 @@ class ModelProfiler:
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 response_text = result.get("message", {}).get("content", "")
+                # Get token count from response if available
+                token_count = result.get("eval_count", 0)
+                # Fallback: estimate from response length
+                if token_count == 0 and response_text:
+                    token_count = int(len(response_text.split()) * 1.3)
                 
                 # Quick heuristic: very short responses are likely failures
                 if len(response_text.strip()) < 50:
-                    return 0.1, elapsed_ms
-                return 0.5, elapsed_ms
+                    return 0.1, elapsed_ms, token_count
+                return 0.5, elapsed_ms, token_count
             except Exception:
-                return 0.0, self.timeout * 1000
+                return 0.0, self.timeout * 1000, 0
         
         # Run screening prompts concurrently
         results = await asyncio.gather(*[test_single(item) for item in screen_prompts])
         scores = [r[0] for r in results]
         times = [r[1] for r in results]
+        tokens = [r[2] for r in results]
         
         avg_score = sum(scores) / len(scores)
-        avg_time = sum(times) / len(times)
+        total_time = sum(times)
+        max_time = max(times)
+        total_tokens = sum(tokens)
         
         # If model fails basic screening, skip full profiling
-        if avg_score < 0.2 or avg_time > self.timeout * 1000 * 0.9:
+        if avg_score < 0.2 or max_time > self.timeout * 1000 * 0.95:
             logger.warning(
-                f"Model {model} failed screening (score={avg_score:.2f}, time={avg_time:.0f}ms). "
+                f"Model {model} failed screening (score={avg_score:.2f}, max_time={max_time:.0f}ms). "
                 f"Skipping full profile to save tokens."
             )
-            return False, avg_score
+            return False, avg_score, total_time, max_time, total_tokens
         
-        return True, avg_score
+        return True, avg_score, total_time, max_time, total_tokens
 
     async def profile_model(self, model: str) -> ProfileResult | None:
         logger.info(
             f"PROGRESS [{self.current_model_num}/{self.total_models}] Starting profiling: {model}"
         )
 
+        # Phase 0: Warm up the model (load into memory with generous timeout)
+        # This prevents timeouts due to slow disk I/O during actual benchmarking
+        warmup_success = await self._warmup_model(model)
+        if not warmup_success:
+            logger.warning(
+                f"Model {model} warmup failed. Profiling may be inaccurate or time out. "
+                "Continuing anyway to attempt profiling..."
+            )
+            # Don't completely fail - some backends may not support explicit loading
+            # or the model might already be loaded. Continue to screening.
+
         # Phase 1: Quick screening (saves judge tokens on bad models)
-        should_continue, screen_score = await self._screen_model(model)
+        # Also captures performance metrics for adaptive timeout calculation
+        should_continue, screen_score, screen_total_ms, screen_max_ms, screen_tokens = await self._screen_model(model)
+        
+        # Store screening metrics
+        self.screening_max_time_ms = screen_max_ms
+        self.screening_total_tokens = screen_tokens
         
         if not should_continue:
             # Return minimal profile for failed models
@@ -283,20 +465,29 @@ class ModelProfiler:
                 coding=screen_score * 0.3,
                 creativity=screen_score * 0.3,
                 speed=0.3,
-                avg_response_time_ms=self.timeout * 1000,
+                avg_response_time_ms=screen_max_ms,
                 vision=self._detect_vision_capability(model),
                 tool_calling=self._detect_tool_capability(model),
             )
             self._save_profile(result, vram_gb=None)
             return result
 
+        # Phase 2: Calculate adaptive timeout based on screening performance
+        self.adaptive_timeout = self._calculate_adaptive_timeout(
+            screening_total_time_ms=screen_total_ms,
+            screening_max_time_ms=screen_max_ms,
+            screening_total_tokens=screen_tokens,
+            model_name=model,
+        )
+        logger.info(f"Using adaptive timeout of {self.adaptive_timeout:.0f}s for {model}")
+
         # VRAM measurement: Use Ollama API if available, fallback to nvidia-smi delta
         measured_vram_gb: float | None = None
         
-        # Run all categories concurrently for speed
+        # Run all categories concurrently for speed with adaptive timeout
         categories = ["reasoning", "coding", "creativity"]
         category_tasks = [
-            self._test_category(model, cat, BENCHMARK_PROMPTS[cat])
+            self._test_category(model, cat, BENCHMARK_PROMPTS[cat], timeout_override=self.adaptive_timeout)
             for cat in categories
         ]
         
@@ -368,7 +559,12 @@ class ModelProfiler:
             tool_calling=tool_capable,
         )
 
-        self._save_profile(result, vram_gb=measured_vram_gb)
+        self._save_profile(
+            result,
+            vram_gb=measured_vram_gb,
+            adaptive_timeout=self.adaptive_timeout,
+            token_rate=self.screening_token_rate,
+        )
 
         total_score = result.reasoning + result.coding + result.creativity + result.speed
         elapsed_total = time.perf_counter() - self.start_time
@@ -380,6 +576,7 @@ class ModelProfiler:
             f"speed={result.speed:.2f}, vision={result.vision}, tools={result.tool_calling}, "
             f"total={total_score:.2f}, time={elapsed_total:.1f}s"
             + (f", vram={measured_vram_gb:.2f}GB" if measured_vram_gb else "")
+            + (f", timeout={self.adaptive_timeout:.0f}s" if self.adaptive_timeout else "")
         )
 
         return result
@@ -415,7 +612,13 @@ class ModelProfiler:
         ]
         return any(kw in name for kw in tool_keywords)
 
-    def _save_profile(self, result: ProfileResult, vram_gb: float | None = None) -> None:
+    def _save_profile(
+        self,
+        result: ProfileResult,
+        vram_gb: float | None = None,
+        adaptive_timeout: float | None = None,
+        token_rate: float | None = None,
+    ) -> None:
         try:
             with get_session() as session:
                 profile = session.query(ModelProfile).filter_by(name=result.model_name).first()
@@ -433,6 +636,11 @@ class ModelProfiler:
                     if vram_gb is not None:
                         profile.vram_required_gb = vram_gb
                         profile.vram_measured_at = datetime.now(timezone.utc)
+                    # Update adaptive timeout metrics
+                    if adaptive_timeout is not None:
+                        profile.adaptive_timeout_used = adaptive_timeout
+                    if token_rate is not None:
+                        profile.profiling_token_rate = token_rate
                 else:
                     profile = ModelProfile(
                         name=result.model_name,
@@ -448,12 +656,15 @@ class ModelProfiler:
                         vram_measured_at=datetime.now(timezone.utc)
                         if vram_gb is not None
                         else None,
+                        adaptive_timeout_used=adaptive_timeout,
+                        profiling_token_rate=token_rate,
                     )
                 session.add(profile)
                 session.commit()
                 logger.debug(
                     f"Saved profile for {result.model_name}"
                     + (f" with VRAM {vram_gb:.2f}GB" if vram_gb else "")
+                    + (f", timeout={adaptive_timeout:.0f}s" if adaptive_timeout else "")
                 )
         except Exception as e:
             logger.error(f"Failed to save profile for {result.model_name}: {e}")
@@ -482,7 +693,13 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
     results: list[ProfileResult] = []
     for i, model_info in enumerate(new_models, 1):
         try:
-            profiler = ModelProfiler(client, total_models=len(new_models), current_model_num=i, model_name=model_info.name)
+            profiler = ModelProfiler(
+                client,
+                total_models=len(new_models),
+                current_model_num=i,
+                model_name=model_info.name,
+                model_size_bytes=model_info.size,
+            )
             result = await profiler.profile_model(model_info.name)
             if result:
                 results.append(result)

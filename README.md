@@ -173,7 +173,9 @@ All configuration is via the `.env` file (see `ENV_DEFAULT` for full list). Impo
 - `ROUTER_PROVIDER`: `ollama`, `llama.cpp`, or `openai`
 - `ROUTER_VRAM_MAX_TOTAL_GB`: Set to limit total VRAM usage (auto-detects 90% of GPU if unset)
 - `ROUTER_PINNED_MODEL`: Keep a specific model always loaded for fast responses
-- `ROUTER_PROFILE_TIMEOUT`: Timeout per profiling prompt in seconds (default: 90s, increase for very large models)
+- `ROUTER_PROFILE_TIMEOUT`: Base timeout per profiling prompt (default: 90s, adaptive overrides this)
+- `ROUTER_PROFILE_ADAPTIVE_SAFETY_FACTOR`: Safety buffer for adaptive timeouts (default: 2.0)
+- `ROUTER_PROFILE_WARMUP_DISK_SPEED_MBPS`: Assumed disk speed for warmup (default: 50)
 
 The database (`data/router.db`) is persisted in your current directory via the volume mount. This means your model profiles, routing history, and learned feedback survive container upgrades and recreations. **Back up this directory regularly** to preserve your router's state.
 
@@ -599,16 +601,44 @@ docker logs smarterrouter | grep "debug-123"
 ### For High Throughput
 
 1. **Optimize Caching**
-   ```bash
-   ROUTER_CACHE_ENABLED=true
-   ROUTER_CACHE_MAX_SIZE=1000
-   ROUTER_CACHE_TTL_SECONDS=7200  # 2 hours
-   ```
+    ```bash
+    ROUTER_CACHE_ENABLED=true
+    ROUTER_CACHE_MAX_SIZE=1000
+    ROUTER_CACHE_TTL_SECONDS=7200  # 2 hours
+    ```
 
 2. **Semantic Similarity**
-   ```bash
-   ROUTER_EMBED_MODEL=nomic-embed-text:latest
-   ROUTER_CACHE_SIMILARITY_THRESHOLD=0.80  # More permissive
+    ```bash
+    ROUTER_EMBED_MODEL=nomic-embed-text:latest
+    ROUTER_CACHE_SIMILARITY_THRESHOLD=0.80  # More permissive
+    ```
+
+### Profiling Warmup & Timeout Management
+
+SmarterRouter uses a **three-phase profiling** approach to eliminate cold-start timeouts and adapt to any hardware:
+
+**Phase 1: Warmup** - The model is explicitly loaded into memory *before* benchmarking.
+- Timeout is calculated based on model size: `(size_gb / disk_speed_gbps) + 30s buffer`
+- Default assumes 50 MB/s disk speed, ensuring even slow HDDs have enough time.
+- 14GB model → ~5 minutes; 70GB model → ~25 minutes.
+- Configurable via `ROUTER_PROFILE_WARMUP_DISK_SPEED_MBPS` and `ROUTER_PROFILE_WARMUP_MAX_TIMEOUT`.
+
+**Phase 2: Screening & Adaptive Timeout Calculation** - Run 3 prompts to measure actual performance.
+- Measures **token generation rate** (tokens/second) for the specific model on your hardware
+- Calculates a **data-driven timeout** based on measured speed
+- Fast models get short timeouts (30-60s); slow reasoning models get long timeouts (300-600s)
+- Configurable via `ROUTER_PROFILE_ADAPTIVE_SAFETY_FACTOR` (default: 2.0x conservative)
+
+**Phase 3: Benchmarking** - Once loaded and timed out correctly, run the full test suite.
+- Uses the calculated adaptive timeout for each prompt
+- Since the model is already in memory and timeout is data-driven, timeouts are now rare
+- Stores timeout and token rate in database for debugging/auditing
+
+**Why this matters:** 
+- No manual tuning needed regardless of model mix or hardware
+- Slow reasoning models (DeepSeek R1) automatically get appropriate timeouts
+- Fast models (Llama 3.2 1B) don't waste time with overly-long timeouts
+- Truly broken models still fail fast (capped at 30 minutes)
    ```
 
 3. **Disable Cascading**

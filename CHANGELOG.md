@@ -44,6 +44,24 @@
   - Extracts parameter count from model names (e.g., "llama3:70b", "phi3:1b")
 - **Increased Default Profiling Timeout**: Changed default `ROUTER_PROFILE_TIMEOUT` from 60s to 90s to better accommodate larger models like qwen-14b, deepseek-r1:14b, etc.
 - **Async VRAM Measurement**: Added `_measure_vram_gb_async()` to avoid blocking the event loop during VRAM sampling
+- **Intelligent Warmup Phase**: Added a two-phase profiling approach to eliminate cold-start timeouts:
+  - Phase 1: Explicitly loads model into memory with a **size-based timeout** before benchmarking
+  - Timeout calculated as `(size_gb / disk_speed_gbps) + 30s` (default assumes 50 MB/s disk)
+  - Example: 14GB model gets ~5 minutes to load; 70GB model gets ~25 minutes
+  - Prevents timeouts caused by slow disk I/O rather than model performance
+  - Configurable via `ROUTER_PROFILE_WARMUP_DISK_SPEED_MBPS` and `ROUTER_PROFILE_WARMUP_MAX_TIMEOUT`
+  - If warmup fails, profiling continues anyway (backward compatible)
+- **Adaptive Timeouts**: Dynamic per-model timeout calculation based on actual performance:
+  - Measures token generation rate during 3-prompt screening phase
+  - Calculates timeout using two methods (conservative max-time and token-projection)
+  - **Robust Fallback**: Always uses the size-based guess as a **Minimum Floor**, ensuring fast screening doesn't result in overly aggressive timeouts later
+  - **Reasoning Awareness**: Automatically doubles safety factors for models like `deepseek-r1` or those with "reasoning" in their name
+  - Uses the higher of the calculated timeouts with safety factor (default 2.0x)
+  - Fast models (phi3:mini, llama3.2:1b) get 30-60s timeouts
+  - Slow reasoning models (deepseek-r1:7b) get 300-600s timeouts automatically
+  - Eliminates manual timeout tuning regardless of hardware or model mix
+  - Configurable via `ROUTER_PROFILE_ADAPTIVE_TIMEOUT_MIN`, `ROUTER_PROFILE_ADAPTIVE_TIMEOUT_MAX`, `ROUTER_PROFILE_ADAPTIVE_SAFETY_FACTOR`
+  - Calculated timeout and token rate stored in database for debugging
 
 ### Database Reliability Improvements
 

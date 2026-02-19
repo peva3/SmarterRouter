@@ -44,7 +44,12 @@ class LLMBackend(Protocol):
         """Unload model from VRAM. Return False if not supported."""
         return False
 
-    async def load_model(self, model_name: str, keep_alive: float = -1) -> bool:
+    async def load_model(
+        self,
+        model_name: str,
+        keep_alive: float = -1,
+        timeout: float | None = None,
+    ) -> bool:
         """Explicitly load a model into VRAM. Return False if not supported."""
         return False
 

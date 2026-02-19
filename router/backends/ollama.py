@@ -140,22 +140,35 @@ class OllamaBackend(LLMBackend):
             logger.error(f"Error during unload model {model_name}: {e}")
             return False
 
-    async def load_model(self, model_name: str, keep_alive: float = -1) -> bool:
+    async def load_model(
+        self,
+        model_name: str,
+        keep_alive: float = -1,
+        timeout: float | None = None,
+    ) -> bool:
         """Explicitly load a model into VRAM with optional keep_alive duration.
 
         Args:
             model_name: Name of the model to load
             keep_alive: Duration to keep model in VRAM. -1 = forever, 0 = unload after,
                        positive number = seconds to keep loaded
+            timeout: Optional custom timeout for loading (defaults to generation_timeout)
         """
-        logger.info(f"Loading model: {model_name} (keep_alive={keep_alive})")
+        logger.info(f"Loading model: {model_name} (keep_alive={keep_alive}, timeout={timeout})")
         try:
-            await self._request(
-                "POST",
-                "/api/chat",
-                json={"model": model_name, "messages": [{"role": "user", "content": ""}], "keep_alive": keep_alive},
-                timeout=self.generation_timeout,
-            )
+            effective_timeout = timeout if timeout is not None else self.generation_timeout
+            # Explicitly disable streaming to get a single JSON response
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": ""}],
+                "keep_alive": keep_alive,
+                "stream": False,
+            }
+            async with httpx.AsyncClient(timeout=effective_timeout) as client:
+                url = f"{self.base_url}/api/chat"
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                # We don't need to parse the response; just checking for 200 OK is enough
             logger.info(f"Model {model_name} loaded successfully")
             return True
         except Exception as e:

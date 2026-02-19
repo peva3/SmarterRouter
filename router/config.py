@@ -113,6 +113,21 @@ class Settings(BaseSettings):
     profile_vram_sample_delay: float = Field(default=2.0)  # Wait after model load before measuring
     profile_vram_samples: int = Field(default=3)  # Take N samples and average
 
+    # Profiling Warmup & Loading
+    # Assumed disk read speed (MB/s) for warmup timeout calculation
+    # Conservative default (50 MB/s) works for HDDs and SSDs
+    profile_warmup_disk_speed_mbps: float = Field(default=50.0)
+    # Maximum warmup timeout in seconds (default: 1800 = 30 minutes)
+    profile_warmup_max_timeout: float = Field(default=1800.0)
+
+    # Adaptive Profiling Timeouts
+    # Minimum adaptive timeout in seconds (default: 30s)
+    profile_adaptive_timeout_min: float = Field(default=30.0)
+    # Maximum adaptive timeout in seconds (default: 1800 = 30 minutes)
+    profile_adaptive_timeout_max: float = Field(default=1800.0)
+    # Safety factor for adaptive timeout calculation (default: 2.0 = conservative)
+    profile_adaptive_safety_factor: float = Field(default=2.0)
+
     # Auto-unload policy
     vram_auto_unload_enabled: bool = Field(default=True)
     vram_unload_threshold_pct: float = Field(default=85.0)

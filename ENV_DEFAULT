@@ -177,6 +177,43 @@ ROUTER_GENERATION_TIMEOUT=120
 ROUTER_PROFILE_PROMPTS_PER_CATEGORY=3
 
 # =============================================================================
+# PROFILING WARMUP & LOADING
+# =============================================================================
+
+# Warmup timeout calculation: assumes conservative disk read speed (MB/s)
+# Used to calculate generous timeouts for the initial model load phase
+# Larger models need more time to load from disk into memory
+# Default: 50 MB/s (covers slow HDDs and fast SSDs alike)
+#ROUTER_PROFILE_WARMUP_DISK_SPEED_MBPS=50
+
+# Maximum warmup timeout in seconds (default: 1800 = 30 minutes)
+# Caps the warmup wait time to prevent indefinite hangs on broken models
+#ROUTER_PROFILE_WARMUP_MAX_TIMEOUT=1800
+
+# =============================================================================
+# ADAPTIVE PROFILING TIMEOUTS
+# =============================================================================
+
+# Adaptive timeout automatically adjusts per-model timeouts based on actual
+# performance measured during the screening phase. This ensures that:
+# - Fast models (phi3:mini, llama3.2:1b) get short timeouts (~30-60s)
+# - Slow models (deepseek-r1:7b, reasoning models) get long timeouts (~300-600s)
+# - No manual tuning needed regardless of hardware or model mix
+
+# Minimum adaptive timeout in seconds (default: 30s)
+# Prevents over-aggressive timeouts that would fail fast models
+#ROUTER_PROFILE_ADAPTIVE_TIMEOUT_MIN=30
+
+# Maximum adaptive timeout in seconds (default: 1800 = 30 minutes)
+# Caps timeout to prevent indefinite hangs on truly broken models
+#ROUTER_PROFILE_ADAPTIVE_TIMEOUT_MAX=1800
+
+# Safety factor for adaptive timeout calculation (default: 2.0 = conservative)
+# Higher = more buffer, Lower = more aggressive
+# Formula: timeout = max_prompt_time × safety_factor
+#ROUTER_PROFILE_ADAPTIVE_SAFETY_FACTOR=2.0
+
+# =============================================================================
 # BENCHMARK CONFIGURATION
 # =============================================================================
 
