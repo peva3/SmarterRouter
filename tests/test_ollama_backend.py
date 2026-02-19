@@ -204,3 +204,87 @@ class TestOllamaBackend:
             request = mock_http.calls.last.request
             body = json.loads(request.content)
             assert body["keep_alive"] == 300
+
+    @pytest.mark.asyncio
+    async def test_get_running_models(self):
+        """Test getting running models with VRAM info."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.get("http://localhost:11434/api/ps").mock(
+                return_value=httpx.Response(200, json={
+                    "models": [
+                        {
+                            "name": "llama3.2:1b",
+                            "model": "llama3.2:1b",
+                            "size": 1500000000,
+                            "size_vram": 1200000000,
+                            "digest": "abc123"
+                        }
+                    ]
+                })
+            )
+            result = await backend.get_running_models()
+            assert "llama3.2:1b" in result
+            assert result["llama3.2:1b"]["vram_bytes"] == 1200000000
+            assert result["llama3.2:1b"]["size_bytes"] == 1500000000
+
+    @pytest.mark.asyncio
+    async def test_get_model_vram_usage(self):
+        """Test getting VRAM usage for a specific model."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.get("http://localhost:11434/api/ps").mock(
+                return_value=httpx.Response(200, json={
+                    "models": [
+                        {
+                            "name": "llama3.2:1b",
+                            "model": "llama3.2:1b",
+                            "size": 1500000000,
+                            "size_vram": 1200000000,
+                            "digest": "abc123"
+                        }
+                    ]
+                })
+            )
+            # Test exact match
+            vram = await backend.get_model_vram_usage("llama3.2:1b")
+            assert vram is not None
+            assert abs(vram - 1.12) < 0.01  # 1200000000 / (1024**3) ≈ 1.12 GB
+
+    @pytest.mark.asyncio
+    async def test_get_model_vram_usage_not_loaded(self):
+        """Test getting VRAM for a model that's not loaded."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.get("http://localhost:11434/api/ps").mock(
+                return_value=httpx.Response(200, json={"models": []})
+            )
+            vram = await backend.get_model_vram_usage("nonexistent-model")
+            assert vram is None
+
+    @pytest.mark.asyncio
+    async def test_get_model_vram_usage_with_prefix(self):
+        """Test getting VRAM with model prefix."""
+        backend = OllamaBackend("http://localhost:11434", model_prefix="custom-")
+
+        with respx.mock() as mock_http:
+            mock_http.get("http://localhost:11434/api/ps").mock(
+                return_value=httpx.Response(200, json={
+                    "models": [
+                        {
+                            "name": "custom-llama3",
+                            "model": "custom-llama3",
+                            "size": 4000000000,
+                            "size_vram": 3500000000,
+                            "digest": "abc123"
+                        }
+                    ]
+                })
+            )
+            # Should match with prefix applied
+            vram = await backend.get_model_vram_usage("llama3")
+            assert vram is not None
+            assert abs(vram - 3.26) < 0.01  # 3500000000 / (1024**3) ≈ 3.26 GB

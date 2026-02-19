@@ -57,6 +57,10 @@ class LLMBackend(Protocol):
         """Generate embeddings for the given input."""
         ...
 
+    async def get_model_vram_usage(self, model_name: str) -> float | None:
+        """Get VRAM usage for a specific model in GB. Return None if not supported."""
+        return None
+
 
 def supports_unload(backend: LLMBackend) -> bool:
     """Check if backend supports model unloading."""

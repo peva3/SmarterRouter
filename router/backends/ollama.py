@@ -177,3 +177,53 @@ class OllamaBackend(LLMBackend):
         return await self._request(
             "POST", "/api/embed", json=payload, timeout=self.generation_timeout
         )
+
+    async def get_running_models(self) -> dict[str, dict[str, Any]]:
+        """Get currently loaded models with their VRAM usage from Ollama.
+        
+        Returns:
+            Dict mapping model names to their info including:
+            - vram_bytes: VRAM usage in bytes
+            - size_bytes: Model size in bytes
+            - digest: Model digest
+        """
+        try:
+            data = await self._request("GET", "/api/ps")
+            models = {}
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if name:
+                    models[name] = {
+                        "vram_bytes": m.get("size_vram", 0),
+                        "size_bytes": m.get("size", 0),
+                        "digest": m.get("digest", ""),
+                    }
+            return models
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to get running models: {e}")
+            return {}
+
+    async def get_model_vram_usage(self, model_name: str) -> float | None:
+        """Get VRAM usage for a specific model in GB.
+        
+        Args:
+            model_name: Name of the model to check
+            
+        Returns:
+            VRAM usage in GB, or None if model not loaded or error
+        """
+        running = await self.get_running_models()
+        # Try exact match first
+        if model_name in running:
+            vram_bytes = running[model_name].get("vram_bytes", 0)
+            if vram_bytes > 0:
+                return vram_bytes / (1024 ** 3)  # Convert bytes to GB
+        
+        # Try with prefix if configured
+        full_name = self._full_model_name(model_name)
+        if full_name in running:
+            vram_bytes = running[full_name].get("vram_bytes", 0)
+            if vram_bytes > 0:
+                return vram_bytes / (1024 ** 3)
+        
+        return None

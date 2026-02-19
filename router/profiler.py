@@ -290,16 +290,9 @@ class ModelProfiler:
             self._save_profile(result, vram_gb=None)
             return result
 
-        # VRAM measurement: baseline before any generation (async)
-        baseline_vram_gb: float | None = None
+        # VRAM measurement: Use Ollama API if available, fallback to nvidia-smi delta
         measured_vram_gb: float | None = None
-        if settings.profile_measure_vram:
-            baseline_vram_gb = await self._measure_vram_gb_async()
-            if baseline_vram_gb is not None:
-                logger.debug(
-                    f"VRAM baseline for {model}: {baseline_vram_gb:.2f}GB (before generation)"
-                )
-
+        
         # Run all categories concurrently for speed
         categories = ["reasoning", "coding", "creativity"]
         category_tasks = [
@@ -329,18 +322,32 @@ class ModelProfiler:
                 f"Model {model} has very poor reasoning score ({category_scores['reasoning']:.2f})"
             )
 
-        # VRAM measurement: after all categories (async)
-        if settings.profile_measure_vram and baseline_vram_gb is not None:
-            after_vram_gb = await self._measure_vram_gb_async()
-            if after_vram_gb is not None:
-                delta = after_vram_gb - baseline_vram_gb
-                if delta > 0:
-                    measured_vram_gb = delta
-                    logger.info(f"VRAM measured for {model}: {measured_vram_gb:.2f}GB")
-                else:
-                    logger.warning(
-                        f"VRAM measurement invalid for {model}: after={after_vram_gb:.2f}, baseline={baseline_vram_gb:.2f}"
-                    )
+        # VRAM measurement: Try Ollama API first, then fallback to nvidia-smi
+        if settings.profile_measure_vram:
+            # Method 1: Query Ollama directly for per-model VRAM (most accurate)
+            try:
+                ollama_vram = await self.client.get_model_vram_usage(model)
+                if ollama_vram is not None and ollama_vram > 0:
+                    measured_vram_gb = ollama_vram
+                    logger.info(f"VRAM measured via Ollama API for {model}: {measured_vram_gb:.2f}GB")
+            except Exception as e:
+                logger.debug(f"Ollama VRAM query failed for {model}: {e}")
+            
+            # Method 2: Fallback to nvidia-smi delta measurement
+            if measured_vram_gb is None:
+                baseline_vram_gb = await self._measure_vram_gb_async()
+                if baseline_vram_gb is not None:
+                    logger.debug(f"VRAM baseline for {model}: {baseline_vram_gb:.2f}GB")
+                    # Small delay to let VRAM stabilize
+                    await asyncio.sleep(0.5)
+                    after_vram_gb = await self._measure_vram_gb_async()
+                    if after_vram_gb is not None:
+                        delta = after_vram_gb - baseline_vram_gb
+                        if delta > 0.1:  # Only accept if delta is meaningful (>100MB)
+                            measured_vram_gb = delta
+                            logger.info(f"VRAM measured via nvidia-smi for {model}: {measured_vram_gb:.2f}GB")
+                        else:
+                            logger.debug(f"VRAM delta too small for {model}: {delta:.2f}GB (model may have unloaded)")
 
         all_times = list(category_times.values())
         avg_time = sum(all_times) / len(all_times)
