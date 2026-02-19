@@ -173,8 +173,11 @@ All configuration is via the `.env` file (see `ENV_DEFAULT` for full list). Impo
 - `ROUTER_PROVIDER`: `ollama`, `llama.cpp`, or `openai`
 - `ROUTER_VRAM_MAX_TOTAL_GB`: Set to limit total VRAM usage (auto-detects 90% of GPU if unset)
 - `ROUTER_PINNED_MODEL`: Keep a specific model always loaded for fast responses
+- `ROUTER_PROFILE_TIMEOUT`: Timeout per profiling prompt in seconds (default: 90s, increase for very large models)
 
-The database (`router.db`) is persisted in your current directory via the volume mount. This means your model profiles, routing history, and learned feedback survive container upgrades and recreations. **Back up this file regularly** to preserve your router's state.
+The database (`data/router.db`) is persisted in your current directory via the volume mount. This means your model profiles, routing history, and learned feedback survive container upgrades and recreations. **Back up this directory regularly** to preserve your router's state.
+
+**Note on Database Initialization**: The application automatically creates the database file and any necessary parent directories (like `data/`) on startup if they don't exist. This prevents "unable to open database file" errors, especially on fresh Docker deployments.
 
 ---
 
@@ -191,8 +194,9 @@ The database (`router.db`) is persisted in your current directory via the volume
 - Use `--gpus all` flag or enable `deploy.resources` in compose.
 - Test with: `docker exec smarterrouter nvidia-smi`
 
-**Permissions errors on router.db**
-- Ensure the host directory is writable by the Docker user (UID 1000). The container runs as root by default.
+**Database path is a directory (Common Docker issue)**
+- If you see a "CRITICAL: Database path is a directory" error, it means Docker created a directory named `router.db` (or `data`) on the host because it didn't exist. 
+- **Fix**: Delete the empty `router.db` directory on your host and ensure `ROUTER_DATABASE_URL` points to a file, not a folder. It's recommended to mount the `data/` folder as shown in the default `docker-compose.yml`.
 
 **Container exits immediately**
 - Check logs: `docker logs smarterrouter`
@@ -241,7 +245,7 @@ OpenWebUI will now route all conversations through SmarterRouter, which automati
 When you start the router for the first time:
 
 1.  **Discovery**: Fetches all models from your configured backend.
-2.  **Profiling**: Tests each model with prompts across multiple categories (reasoning, coding, etc.) to measure its performance on your hardware. This is a one-time process. For ~18 models, expect about 1.5 hours of profiling time. Subsequent runs only profile *new* models added to your backend.
+2.  **Profiling**: Tests each model with prompts across multiple categories (reasoning, coding, etc.) using parallel processing to measure performance on your hardware. This is a one-time process. For ~18 models, expect about 30-60 minutes of profiling time (depending on your hardware). Subsequent runs only profile *new* models added to your backend.
 3.  **Benchmark Sync**: Downloads benchmark scores from HuggingFace and LMSYS. This process can take a while but only happens once per model.
 
 ### Normal Operation

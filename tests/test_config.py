@@ -20,7 +20,7 @@ class TestSettings:
             assert default_settings.port == 11436
             assert default_settings.signature_enabled is True
             assert default_settings.polling_interval == 60
-            assert default_settings.profile_timeout == 60
+            assert default_settings.profile_timeout == 90
 
     def test_benchmark_sources_default(self):
         """Test default benchmark sources."""

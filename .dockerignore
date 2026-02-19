@@ -1,4 +1,5 @@
 # Database (created at runtime)
+data/
 router.db
 
 # Environment files (contain secrets)

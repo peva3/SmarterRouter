@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     signature_format: str = Field(default="\nModel: {model}")
 
     polling_interval: int = Field(default=60)
-    profile_timeout: int = Field(default=60)  # Increased from 30s for slower models
+    profile_timeout: int = Field(default=90)  # Increased to 90s for larger models like 14B+
     generation_timeout: int = Field(
         default=120
     )  # Timeout for model generation (larger models need more time)
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="text")  # "text" or "json"
 
-    database_url: str = Field(default="sqlite:///router.db")
+    database_url: str = Field(default="sqlite:///data/router.db")
 
     pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
 
@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     judge_model: str = Field(default="gpt-4o")
     judge_base_url: str = Field(default="https://api.openai.com/v1")
     judge_api_key: str | None = Field(default=None)
+    # Optional headers for providers like OpenRouter (HTTP-Referer, X-Title)
+    judge_http_referer: str | None = Field(default=None)
+    judge_x_title: str | None = Field(default=None)
+    
+    # Retry configuration for transient errors
+    judge_max_retries: int = Field(default=3)  # Max retry attempts for 429/5xx errors
+    judge_retry_base_delay: float = Field(default=1.0)  # Initial delay in seconds (doubles each retry)
 
     # Security settings
     admin_api_key: str | None = Field(

@@ -19,8 +19,9 @@ def profiler(mock_client):
 
 @pytest.mark.asyncio
 async def test_profile_model_success(profiler, mock_client):
-    mock_client.generate = AsyncMock(
-        return_value=MagicMock(response="This is a test response", done=True)
+    # Mock the chat method to return Ollama-format response
+    mock_client.chat = AsyncMock(
+        return_value={"message": {"content": "This is a test response"}}
     )
 
     result = await profiler.profile_model("llama3")
@@ -39,9 +40,9 @@ async def test_profile_model_timeout(profiler, mock_client):
 
     async def timeout_response(*args, **kwargs):
         await asyncio.sleep(10)
-        return MagicMock(response="", done=True)
+        return {"message": {"content": ""}}
 
-    mock_client.generate = AsyncMock(side_effect=TimeoutError())
+    mock_client.chat = AsyncMock(side_effect=asyncio.TimeoutError())
 
     result = await profiler.profile_model("llama3")
 
@@ -62,13 +63,15 @@ def test_category_prompts_exist():
 async def test_test_category_multiple_prompts(profiler, mock_client):
     prompts = ["prompt1", "prompt2", "prompt3"]
 
-    mock_client.generate = AsyncMock(
-        return_value=MagicMock(response="Response text here", done=True)
+    # Mock chat method with Ollama-format response
+    mock_client.chat = AsyncMock(
+        return_value={"message": {"content": "Response text here"}}
     )
 
     score, avg_time = await profiler._test_category("llama3", "coding", prompts)
 
-    assert mock_client.generate.call_count == 3
+    # Now using parallel processing, so we check chat was called 3 times total
+    assert mock_client.chat.call_count == 3
     assert score > 0
 
 
@@ -76,8 +79,48 @@ async def test_test_category_multiple_prompts(profiler, mock_client):
 async def test_test_category_all_empty_responses(profiler, mock_client):
     prompts = ["prompt1", "prompt2"]
 
-    mock_client.generate = AsyncMock(return_value=MagicMock(response="", done=True))
+    mock_client.chat = AsyncMock(return_value={"message": {"content": ""}})
 
     score, avg_time = await profiler._test_category("llama3", "coding", prompts)
 
     assert score == 0.0
+
+
+@pytest.mark.asyncio
+async def test_adaptive_timeout_small_model(profiler, mock_client):
+    """Test that small models get shorter timeouts."""
+    # 1B model should get 0.8x timeout
+    small_profiler = ModelProfiler(mock_client, model_name="phi3:1b")
+    assert small_profiler.timeout == small_profiler.base_timeout * 0.8
+
+
+@pytest.mark.asyncio
+async def test_adaptive_timeout_medium_model(profiler, mock_client):
+    """Test that medium models (7B) get moderate timeouts."""
+    # 7B model should get 1.1x timeout
+    medium_profiler = ModelProfiler(mock_client, model_name="llama3.1:8b")
+    assert medium_profiler.timeout == medium_profiler.base_timeout * 1.1
+
+
+@pytest.mark.asyncio
+async def test_adaptive_timeout_medium_large_model(profiler, mock_client):
+    """Test that medium-large models (14B) get longer timeouts."""
+    # 14B model should get 1.4x timeout
+    medium_large_profiler = ModelProfiler(mock_client, model_name="qwen:14b")
+    assert medium_large_profiler.timeout == medium_large_profiler.base_timeout * 1.4
+
+
+@pytest.mark.asyncio
+async def test_adaptive_timeout_large_model(profiler, mock_client):
+    """Test that large models (30B+) get even longer timeouts."""
+    # 30B model should get 1.8x timeout
+    large_profiler = ModelProfiler(mock_client, model_name="qwen:30b")
+    assert large_profiler.timeout == large_profiler.base_timeout * 1.8
+
+
+@pytest.mark.asyncio
+async def test_adaptive_timeout_very_large_model(profiler, mock_client):
+    """Test that very large models (70B+) get the longest timeouts."""
+    # 70B model should get 2.5x timeout
+    very_large_profiler = ModelProfiler(mock_client, model_name="llama3:70b")
+    assert very_large_profiler.timeout == very_large_profiler.base_timeout * 2.5

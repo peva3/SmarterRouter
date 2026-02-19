@@ -66,6 +66,23 @@ ROUTER_JUDGE_BASE_URL=https://api.openai.com/v1
 # API Key for the Judge's service
 ROUTER_JUDGE_API_KEY=
 
+# Optional: HTTP Referer header (required by some providers like OpenRouter)
+# This helps with analytics and rankings on provider platforms
+# Example: ROUTER_JUDGE_HTTP_REFERER=https://mysite.com
+ROUTER_JUDGE_HTTP_REFERER=
+
+# Optional: X-Title header (required by some providers like OpenRouter)  
+# Site/app name for provider analytics
+# Example: ROUTER_JUDGE_X_TITLE=SmarterRouter
+ROUTER_JUDGE_X_TITLE=
+
+# Retry configuration for transient errors (429 rate limit, 5xx server errors)
+# Max retry attempts before falling back to basic scoring
+ROUTER_JUDGE_MAX_RETRIES=3
+
+# Initial delay between retries in seconds (doubles each retry: 1s, 2s, 4s...)
+ROUTER_JUDGE_RETRY_BASE_DELAY=1.0
+
 # =============================================================================
 # EMBEDDINGS CONFIGURATION
 # =============================================================================
@@ -146,9 +163,10 @@ ROUTER_PREFER_NEWER_MODELS=true
 # TIMEOUT CONFIGURATION
 # =============================================================================
 
-# Timeout for profiling operations in seconds (default: 30)
-# Lower values speed up profiling but may miss slow models
-ROUTER_PROFILE_TIMEOUT=30
+# Timeout for profiling operations in seconds (default: 90)
+# Lower values speed up profiling but may cause timeouts on large models (14B+)
+# Increase this if profiling large models like qwen-14b, deepseek-r1:14b, etc.
+ROUTER_PROFILE_TIMEOUT=90
 
 # Timeout for model generation in seconds (default: 120)
 # Larger models need more time - increase if large models timeout
@@ -197,7 +215,8 @@ ROUTER_LOG_FORMAT=text
 
 # Database URL for storing profiles and benchmarks (default: SQLite)
 # For production, consider PostgreSQL: postgresql://user:pass@localhost/router
-ROUTER_DATABASE_URL=sqlite:///router.db
+# Note: The database file and parent directories are automatically created on startup
+ROUTER_DATABASE_URL=sqlite:///data/router.db
 
 # =============================================================================
 # SMART CACHE CONFIGURATION

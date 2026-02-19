@@ -242,6 +242,17 @@ async def startup_event():
         app_state.router_engine.vram_manager = vram_manager
     if app_state.backend:
         vram_manager.set_backend(app_state.backend)
+        
+        # Pre-load pinned model if configured (improves first-response latency)
+        if settings.pinned_model:
+            logger.info(f"Pre-loading pinned model: {settings.pinned_model}")
+            try:
+                # Estimate VRAM for pinned model
+                vram_gb = get_model_vram_estimate(settings.pinned_model)
+                await vram_manager.load_model(settings.pinned_model, vram_gb, pin=True)
+                app_state.current_loaded_model = settings.pinned_model
+            except Exception as e:
+                logger.warning(f"Failed to pre-load pinned model {settings.pinned_model}: {e}")
 
     # Start background sync task
     if settings.provider == "ollama":

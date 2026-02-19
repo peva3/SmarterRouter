@@ -17,6 +17,43 @@
   - `tests/test_openai_backend.py` - 14 tests for OpenAIBackend
   - `tests/test_backend_contract.py` - Contract tests ensuring all backends behave consistently
 
+### Judge Improvements
+
+- **Universal Compatibility**: Removed `response_format` parameter which isn't supported by all providers
+- **Enhanced Prompt Engineering**: Clear JSON instructions ensure consistent output format without provider-specific features
+- **OpenRouter Support**: Added optional `HTTP-Referer` and `X-Title` headers for OpenRouter compliance
+- **Retry Logic with Exponential Backoff**: Automatically retries on transient errors:
+  - Retries on 429 (rate limit), 5xx (server errors), and network timeouts
+  - Configurable via `ROUTER_JUDGE_MAX_RETRIES` (default: 3) and `ROUTER_JUDGE_RETRY_BASE_DELAY` (default: 1.0s)
+  - Helps with OpenRouter free tier rate limiting (20 req/min)
+- **Better Error Logging**: Detailed error messages including raw response body on 400 errors
+- **Markdown JSON Extraction**: Added `_extract_json_from_content()` to handle JSON wrapped in markdown code blocks (```json ... ```), fixing issues with providers like Google Gemini that wrap responses in markdown
+
+### Profiling Performance Optimizations
+
+- **Parallel Prompt Processing**: Rewrote `_test_category()` to process all prompts in a category concurrently with semaphore control (max 3 concurrent):
+  - Reduces profiling time from 15×timeout to ~3×timeout per category
+  - Maintains system stability by limiting concurrent requests
+  - Each prompt still individually scored by judge
+- **Adaptive Timeout Based on Model Size**: `ModelProfiler` now automatically adjusts timeout with granular tiers based on model parameters:
+  - Very large models (70B+): 2.5× base timeout (225s)
+  - Large models (30B-69B): 1.8× base timeout (162s)
+  - Medium-large models (14B-29B): 1.4× base timeout (126s) - Fixes timeouts on qwen-14b, etc.
+  - Medium models (7B-13B): 1.1× base timeout (99s)
+  - Small models (≤3B): 0.8× base timeout (72s)
+  - Extracts parameter count from model names (e.g., "llama3:70b", "phi3:1b")
+- **Increased Default Profiling Timeout**: Changed default `ROUTER_PROFILE_TIMEOUT` from 60s to 90s to better accommodate larger models like qwen-14b, deepseek-r1:14b, etc.
+- **Async VRAM Measurement**: Added `_measure_vram_gb_async()` to avoid blocking the event loop during VRAM sampling
+
+### Database Reliability Improvements
+
+- **Automatic Database File Creation**: Enhanced `init_db()` in `router/database.py` to handle SQLite database initialization more robustly:
+  - Automatically creates parent directories if they don't exist
+  - Touches the database file before SQLAlchemy initialization to ensure proper permissions
+  - Prevents "unable to open database file" errors on fresh Docker deployments
+  - Handles both relative paths (`./router.db`) and absolute paths
+  - Logs directory and file creation for debugging
+
 ### Security & Production Hardening
 
 - **Production Security Warnings**: Added startup warning if `ROUTER_ADMIN_API_KEY` is not set

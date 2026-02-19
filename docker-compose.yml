@@ -9,8 +9,8 @@ services:
     env_file:
       - .env
     volumes:
-      # Database persistence
-      - ./router.db:/app/router.db:rw
+      # Mount a data directory for persistence (safer than mounting individual files)
+      - ./data:/app/data:rw
       # Optional: mount tmpfs for temporary files if needed
       - type: tmpfs
         target: /tmp
