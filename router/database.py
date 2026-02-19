@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from router.config import settings
@@ -87,11 +87,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db() -> None:
-    """Initialize database tables."""
+    """Initialize database tables and run migrations."""
     try:
         # Re-run setup just in case settings changed or for explicit calls
         _ensure_sqlite_setup()
         Base.metadata.create_all(bind=engine)
+        _run_migrations()
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
@@ -102,6 +103,42 @@ def init_db() -> None:
             logger.error(f"DEBUG INFO: Exists={Path(db_path).exists()}, IsDir={Path(db_path).is_dir()}")
             logger.error(f"DEBUG INFO: Dir Writable={os.access(Path(db_path).parent, os.W_OK)}")
         raise
+
+
+def _run_migrations() -> None:
+    """Run database migrations for schema changes."""
+    if "sqlite" not in settings.database_url.lower():
+        return
+    
+    with engine.connect() as conn:
+        # Check if model_profiles table exists
+        result = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='model_profiles'"
+        ))
+        if not result.fetchone():
+            return
+        
+        # Get existing columns
+        result = conn.execute(text("PRAGMA table_info(model_profiles)"))
+        existing_columns = {row[1] for row in result.fetchall()}
+        
+        # Add adaptive_timeout_used column if missing
+        if "adaptive_timeout_used" not in existing_columns:
+            logger.info("Adding column: adaptive_timeout_used")
+            conn.execute(text(
+                "ALTER TABLE model_profiles ADD COLUMN adaptive_timeout_used FLOAT"
+            ))
+            conn.commit()
+        
+        # Add profiling_token_rate column if missing
+        if "profiling_token_rate" not in existing_columns:
+            logger.info("Adding column: profiling_token_rate")
+            conn.execute(text(
+                "ALTER TABLE model_profiles ADD COLUMN profiling_token_rate FLOAT"
+            ))
+            conn.commit()
+        
+        logger.info("Database migrations completed")
 
 
 @contextmanager

@@ -1,5 +1,19 @@
 ## [Unreleased] - Pending
 
+### Routing Algorithm Improvements
+
+- **Profile Scores in Combined Score**: Added profile scores as Signal 4 in the routing algorithm. Previously, profile scores were only used in bonus calculations. Now they directly influence the combined category score with weight `0.8 * quality_weight`, making runtime profiling data more impactful.
+- **Smarter Model Selection for Simple Tasks**: Improved routing to better favor small/fast models for low complexity tasks:
+  - Low complexity (< 0.15): Strong bonuses for small models (≤7B: +0.8-1.5) and penalties for large models (≥14B: -1.0 to -2.0)
+  - Category boost threshold raised from 0.05 to 0.15 to prevent weak signals from triggering the 20x boost
+  - Size bonuses now only apply for moderate+ complexity tasks (≥ 0.3), not for benchmarked models at low complexity
+- **Database Migration**: Added automatic migration for new columns `adaptive_timeout_used` and `profiling_token_rate` in SQLite. Migration runs on startup via `_run_migrations()` in `database.py`.
+
+### Test Script Fixes
+
+- **Syntax Error Fix**: Fixed missing quotes in bc comparisons (`$(...)` should be `"$(...)"`) in `test_smarterrouter_v2.sh`
+- **Haiku Test Fix**: Updated haiku detection to properly handle escaped newlines in JSON responses using Python line counting
+
 ### Backend Provider Fixes & Improvements
 
 - **Removed `generate()` from Protocol**: The unused `generate()` method was removed from `LLMBackend` protocol. All backends now consistently use `chat()` for all generation tasks.

@@ -320,7 +320,7 @@ class RouterEngine:
             result = await self._keyword_dispatch(text_prompt, model_names, request_obj)
 
         if self.cache_enabled and self.semantic_cache:
-            self.semantic_cache.set(prompt_str, result, embedding)
+            await self.semantic_cache.set(prompt_str, result, embedding)
 
         return result
 
@@ -710,16 +710,24 @@ Select the model that best matches the user's prompt needs."""
                 # Signal 3: Name-based Inference (Fallback)
                 inference_score = affinity.get(category, 0.0)
 
+                # Signal 4: Profile Scores (Runtime profiling data)
+                profile_score = 0.0
+                if profile:
+                    _, profile_field = category_map.get(category, (None, None))
+                    if profile_field:
+                        profile_score = profile.get(profile_field, 0.0) or 0.0
+
                 # Weighted combination of signals
                 combined_cat_score = (
                     (benchmark_score * 1.5 * quality_weight)
                     + (elo_signal * 1.0 * quality_weight)
                     + (inference_score * 0.4 * quality_weight)
+                    + (profile_score * 0.8 * quality_weight)  # Profile is more reliable than name inference
                 )
 
                 # If this is the dominant category, apply the 20x Category-First boost
-                # BUT only if we have actual benchmark data OR model is appropriately sized
-                has_actual_data = benchmark_score > 0 or elo_signal > 0
+                # BUT only if we have actual data (benchmark, ELO, or profile)
+                has_actual_data = benchmark_score > 0 or elo_signal > 0 or profile_score > 0
 
                 # Check if model meets minimum size for this category + complexity
                 complexity_bucket = self._get_complexity_bucket(analysis.get("complexity", 0.0))
@@ -727,7 +735,7 @@ Select the model that best matches the user's prompt needs."""
                 params = self._extract_parameter_count(model_name)
                 has_adequate_size = params is not None and params >= min_size
 
-                if category == dominant_category and combined_cat_score > 0.05:
+                if category == dominant_category and combined_cat_score > 0.15:
                     if has_actual_data:
                         combined_cat_score *= 20.0  # Strong boost with data
                     elif has_adequate_size:
@@ -775,8 +783,8 @@ Select the model that best matches the user's prompt needs."""
                     penalty = -2.0 if quality_pref >= 0.5 else -0.5
                     size_score = penalty
 
-            # Apply size score only when we have benchmark data OR high complexity
-            if has_benchmark or complexity >= 0.3:
+            # Apply size score only for moderate+ complexity tasks
+            if complexity >= 0.3:
                 bonus_score += size_score * 0.5
 
             # Complexity-Size Matching Logic (enhanced)
@@ -801,11 +809,15 @@ Select the model that best matches the user's prompt needs."""
                 elif params and params < 4:
                     bonus_score -= 2.0 * quality_weight
             elif complexity < 0.15:
-                # Low complexity: Slight preference for small models, but not heavy penalty for large
+                # Low complexity: Strong preference for small/fast models
                 if params and params <= 4:
-                    bonus_score += 0.3 * speed_weight
+                    bonus_score += 1.5 * speed_weight  # Strong bonus for tiny models
+                elif params and params <= 7:
+                    bonus_score += 0.8 * speed_weight  # Good bonus for small models
+                elif params and params >= 14:
+                    bonus_score -= 1.0 * speed_weight  # Penalize large models
                 elif params and params >= 30:
-                    bonus_score -= 0.3 * speed_weight
+                    bonus_score -= 2.0 * speed_weight  # Strong penalty for very large
 
             # === CATEGORY-AWARE MINIMUM SIZE REQUIREMENTS ===
             # Apply severe penalty if model is below minimum size for category + complexity
@@ -842,7 +854,22 @@ Select the model that best matches the user's prompt needs."""
             # Diversity Penalty: Reduce score if model has been selected too frequently recently
             # This prevents one model from dominating and encourages exploration
             model_frequency = model_frequencies.get(model_name, 0.0)
-            diversity_penalty = -model_frequency * 0.5  # Max 50% penalty for monopolization
+            diversity_penalty = 0.0
+            
+            if model_frequency > 0.5:
+                # Apply multiplicative penalty to base_score
+                # freq 0.5 -> 0.65x (35% reduction)
+                # freq 0.8 -> 0.44x (56% reduction)
+                # freq 1.0 -> 0.30x (70% reduction)
+                reduction = (model_frequency - 0.5) * 1.4  # scales from 0 to 0.7
+                multiplier = max(0.3, 1.0 - reduction)
+                base_score = base_score * multiplier
+                # For logging, compute an approximate additive equivalent
+                diversity_penalty = -base_score * (1.0 - multiplier) / (multiplier if multiplier > 0 else 1)
+            elif model_frequency > 0:
+                # Small frequency gets tiny penalty to nudge exploration
+                diversity_penalty = -model_frequency * 0.2
+                # No multiplicative penalty for low frequency
 
             total_score = base_score + bonus_score + diversity_penalty
 
