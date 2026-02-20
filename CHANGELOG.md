@@ -1,15 +1,48 @@
+## [2.1.0] - 2026-02-20
+
+### New Features
+
+- **ArtificialAnalysis.ai Benchmark Integration**: New benchmark data source providing proprietary intelligence/coding/math indices, real-world speed metrics (tokens/sec), and standard benchmarks (MMLU-Pro, GPQA, LiveCodeBench, Math-500). Configure via `ROUTER_BENCHMARK_SOURCES=artificial_analysis`, `ROUTER_ARTIFICIAL_ANALYSIS_API_KEY`, and optional model mapping YAML file. Data stored in new `extra_data` JSON column for provider-specific fields.
+
+- **Model Keep-Alive Configuration**: Added `ROUTER_MODEL_KEEP_ALIVE` setting to control how long models stay loaded in VRAM after each request. Default `-1` (keep indefinitely). Set to `0` to unload immediately after each response, or positive seconds for custom TTL. Addresses issue where multiple models accumulate in VRAM.
+
+- **Manual Benchmark Sync Endpoint**: Added `POST /admin/sync-benchmarks` endpoint to manually trigger benchmark synchronization from all configured sources. Requires admin API key if configured. Returns count of synced models and matched model names.
+
+### Bug Fixes
+
+- **Signature Inside Code Blocks**: Fixed bug where the model signature could be appended inside a fenced code block if the LLM response ended with an unclosed code fence. Added detection and automatic closing of unclosed blocks before signature insertion.
+
+- **Prometheus Metrics Label Mismatch**: Fixed `ValueError: Incorrect label names` in VRAM monitor. GPU metrics in `router/metrics.py` were defined with only `gpu_index` label, but `vram_monitor.py` was using both `gpu_index` and `vendor`. Added `vendor` label to all GPU metrics.
+
+- **Benchmark DB DateTime Comparison**: Fixed `TypeError: can't compare offset-naive and offset-aware datetimes` in `bulk_upsert_benchmarks`. Now properly converts naive datetimes to UTC-aware before comparison.
+
+- **Benchmark DB Dict Comparison**: Fixed error when comparing `extra_data` dict field using `>` operator. Dict fields are now always updated if present (skip the value comparison).
+
+### Improvements
+
+- **Deprecation Warnings Fixed**: Replaced all `datetime.utcnow()` calls with `datetime.now(timezone.utc)` in ArtificialAnalysis provider to eliminate Python 3.12+ deprecation warnings.
+
+- **Database Migration for extra_data**: Added automatic migration to create `extra_data` JSON column in `model_benchmarks` table. Runs on startup via `_run_migrations()` in `database.py`.
+
+- **Example Mapping File**: Created `artificial_analysis_models.example.yaml` with detailed comments, example mappings for popular model families (Llama, Phi, Qwen, Gemma, Mistral), and instructions for finding correct AA IDs.
+
+- **Configuration Documentation**: Updated `docs/configuration.md` with:
+  - Detailed ArtificialAnalysis settings
+  - `ROUTER_MODEL_KEEP_ALIVE` documentation
+  - Updated complete `.env` example
+  - Benchmark sources ordering and priority explanation
+
+### Test Coverage
+
+- Added `tests/test_schemas.py` (8 tests) for code block handling utilities
+- Fixed `test_check_nvidia_smi_not_available` to properly mock GPU manager on systems with actual NVIDIA hardware
+- Added `model_keep_alive` default assertion to `tests/test_config.py`
+- Test count: 303 tests passing
+
+---
+
 ## [2.0.0] - 2026-02-20
 
-- **Model Keep-Alive Configuration**: Added `ROUTER_MODEL_KEEP_ALIVE` setting to control how long models stay loaded in VRAM after each request. Default `-1` (indefinite). Set to `0` to unload immediately, or positive seconds for TTL. Addresses issue with multiple models staying loaded indefinitely.
-- **Manual Benchmark Sync Endpoint**: Added `/admin/sync-benchmarks` POST endpoint to manually trigger benchmark synchronization from all configured sources. Requires admin API key if configured.
-- **Signature Code Block Fix**: Fixed bug where the model signature could be appended inside a fenced code block if the response ended with an unclosed code fence. Now detects and closes any unclosed code block before adding the signature.
-- **Database Migration for extra_data**: Added automatic migration to create `extra_data` JSON column in `model_benchmarks` table, required for ArtificialAnalysis provider data storage.
-- **Helper Functions**: Added `is_unclosed_code_block()` and `close_unclosed_code_block()` in `router/schemas.py` for robust markdown code fence handling.
-- **Benchmark DB Robustness**: Fixed `bulk_upsert_benchmarks` to handle naive vs aware datetime comparisons and skip `>` on dict fields (`extra_data`), preventing TypeError during sync.
-- **Example Mapping File**: Created `artificial_analysis_models.example.yaml` with detailed comments and example mappings for popular model families.
-- **TestAdditions**: Added `tests/test_schemas.py` (8 tests) for code block handling; fixed `test_check_nvidia_smi_not_available` to properly mock GPU manager.
-- **Configuration Documentation**: Updated `docs/configuration.md` with detailed settings for ArtificialAnalysis, VRAM keep-alive, and benchmark sources.
-- **ArtificialAnalysis.ai Integration**: Added new benchmark data source providing proprietary intelligence/coding/math indices, real-world speed metrics, and standard benchmarks (MMLU-Pro, GPQA, LiveCodeBench, Math-500). Configure via `ROUTER_BENCHMARK_SOURCES=artificial_analysis`, `ROUTER_ARTIFICIAL_ANALYSIS_API_KEY`, and optional model mapping file. See `docs/benchmarks.md` for details.
 - **Semantic Cache Optimization (O(N) computation reduction)**: Modified `SemanticCache._cosine_similarity` to pre-calculate and store embedding magnitudes upon insertion instead of re-calculating them inside the `for` loop during lookups. This significantly reduces CPU overhead when `SemanticCache` reaches its `max_size` (e.g., 500 entries) with 8192-dimension embeddings, saving up to ~4 million redundant math operations per cache lookup.
 - **Race Condition / Duplicate Code Fix**: Fixed a logical bug in `main.py`'s `stream_chat` endpoint. There was duplicate VRAM unloading logic caused by an unindented block (`if current and current != selected_model and current != pinned:`) that was executing outside the `else` clause, leading to redundant API calls to unload models.
 - **Deep Mypy Type-Safety Enhancements**:
