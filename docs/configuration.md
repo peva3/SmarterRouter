@@ -3,6 +3,7 @@
 SmarterRouter is configured via environment variables in the `.env` file. This reference documents all available options.
 
 ## Table of Contents
+- [Benchmark Data Sources](#benchmark-data-sources)
 - [Backend Provider Configuration](#backend-provider-configuration)
 - [Security Settings](#security-settings)
 - [Routing Configuration](#routing-configuration)
@@ -13,6 +14,54 @@ SmarterRouter is configured via environment variables in the `.env` file. This r
 - [Monitoring & Logging](#monitoring--logging)
 - [Database](#database)
 - [LLM-as-Judge](#llm-as-judge)
+
+## Benchmark Data Sources
+
+### `ROUTER_BENCHMARK_SOURCES`
+Comma-separated list of benchmark data sources. Options:
+- `huggingface` (default)
+- `lmsys`
+- `artificial_analysis`
+
+Example: `ROUTER_BENCHMARK_SOURCES=huggingface,lmsys,artificial_analysis`
+
+**Note:** Sources are queried in the order listed. If multiple sources provide data for the same model, the **last source's data wins** (non-null values overwrite earlier ones).
+
+### `ROUTER_ARTIFICIAL_ANALYSIS_API_KEY`
+API key for ArtificialAnalysis.ai (required if `artificial_analysis` in `ROUTER_BENCHMARK_SOURCES`).
+
+Get your free API key from: <https://artificialanalysis.ai/insights>
+
+Rate limit: 1,000 requests per day (free tier). Data is cached for 24 hours by default to stay within limits.
+
+### `ROUTER_ARTIFICIAL_ANALYSIS_CACHE_TTL`
+Cache TTL for ArtificialAnalysis data (seconds). Default: `86400` (24 hours).
+
+Increase if you have a paid plan with higher rate limits; decrease if you need fresher data.
+
+### `ROUTER_ARTIFICIAL_ANALYSIS_MODEL_MAPPING_FILE`
+Path to YAML file mapping ArtificialAnalysis model identifiers to SmarterRouter model names.
+
+ArtificialAnalysis uses different naming conventions than Ollama. This file lets you explicitly map their model IDs or names to your local model tags.
+
+**Example mapping file format** (see `artificial_analysis_models.example.yaml`):
+
+```yaml
+mappings:
+  # By ArtificialAnalysis model ID (UUID) - most reliable
+  "2dad8957-4c16-4e74-bf2d-8b21514e0ae9": "openai/o3-mini"
+
+  # By ArtificialAnalysis model name/slug
+  "o3-mini": "openai/o3-mini"
+  "claude-3-5-sonnet": "anthropic/claude-3-5-sonnet"
+  "gemini-2.5-pro": "google/gemini-2.5-pro"
+```
+
+If no explicit mapping is found, the provider attempts to auto-generate a name using the pattern `{creator-slug}/{model-slug}`.
+
+**Why mapping needed:** Your Ollama model tags might be `llama3.1:70b` while ArtificialAnalysis calls it "Llama-3.1-70B". The mapping bridges this gap.
+
+---
 
 ## Backend Provider Configuration
 
@@ -210,9 +259,14 @@ Similarity threshold for semantic matching (0.0-1.0). Higher = more strict match
 ## VRAM Monitoring
 
 ### `ROUTER_VRAM_MONITOR_ENABLED`
-Enable VRAM monitoring via `nvidia-smi`.
+Enable VRAM monitoring with auto-detection across all GPU vendors (NVIDIA, AMD, Intel, Apple Silicon).
 
 **Default:** `true`
+
+### `ROUTER_APPLE_UNIFIED_MEMORY_GB`
+Override auto-detected unified memory for Apple Silicon Macs. SmarterRouter estimates GPU memory as a percentage of system RAM (default: 75%). Set this to explicitly define the total GB available for GPU workloads on Apple Silicon.
+
+**Default:** (auto-detect as 75% of system RAM)
 
 ### `ROUTER_VRAM_MONITOR_INTERVAL`
 VRAM sampling interval (seconds).
@@ -220,11 +274,11 @@ VRAM sampling interval (seconds).
 **Default:** `30`
 
 ### `ROUTER_VRAM_MAX_TOTAL_GB`
-Maximum VRAM the router can allocate. Leave empty to auto-detect 90% of GPU total.
+Maximum VRAM the router can allocate. Leave empty to auto-detect 90% of total GPU memory across all detected GPUs.
 
 **Example:** For 24GB GPU, set to `22.0` to reserve 2GB for system
 
-**Default:** (auto-detect 90% of GPU total)
+**Default:** (auto-detect 90% of total detected VRAM)
 
 ### `ROUTER_VRAM_UNLOAD_THRESHOLD_PCT`
 VRAM utilization percentage for warnings (not automatic unloads).
@@ -245,6 +299,25 @@ Strategy for selecting models to unload:
 Default VRAM estimate for models without measured data.
 
 **Default:** `8.0`
+
+### `ROUTER_MODEL_KEEP_ALIVE`
+Controls how long models stay loaded in VRAM after each request (passed to backend's `keep_alive` parameter).
+
+- `-1` (default): Keep models loaded indefinitely. They stay in VRAM until explicitly unloaded or the router shuts down.
+- `0`: Unload models immediately after each response. Good for conserving VRAM at the cost of slower subsequent requests (model must reload).
+- Positive integer: Number of seconds to keep the model loaded after the response (e.g., `300` = 5 minutes).
+
+**Note:** This setting only affects backends that support `keep_alive` (Ollama). Other backends may ignore it.
+
+**Example:** Set `ROUTER_MODEL_KEEP_ALIVE=0` to ensure only the most recently used model remains loaded, freeing VRAM for other applications.
+
+**Multi-GPU Support:** SmarterRouter automatically detects all available GPUs regardless of vendor and combines their memory. GPU indexing is global across vendors (0, 1, 2, ...). If no GPUs are detected on startup, VRAM monitoring is disabled with a warning. GPU detection runs on every startup, so adding new hardware requires only a restart.
+
+**Supported Vendors:**
+- **NVIDIA:** via `nvidia-smi`
+- **AMD:** via `rocm-smi` or sysfs
+- **Intel:** Arc GPUs with dedicated VRAM (via sysfs `lmem_total`)
+- **Apple Silicon:** Unified memory estimation (default 75% of system RAM)
 
 ---
 
@@ -354,6 +427,7 @@ ROUTER_CACHE_MAX_SIZE=500
 # VRAM
 ROUTER_VRAM_MAX_TOTAL_GB=22.0
 ROUTER_VRAM_AUTO_UNLOAD_ENABLED=true
+ROUTER_MODEL_KEEP_ALIVE=-1
 
 # Logging
 ROUTER_LOG_LEVEL=INFO

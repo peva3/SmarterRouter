@@ -209,3 +209,29 @@ def strip_signature(content: str, signature_format: str | None = None) -> str:
         content = re.sub(pattern + r"$", "", content, flags=re.MULTILINE)
 
     return content.rstrip()
+
+
+def is_unclosed_code_block(content: str) -> bool:
+    """Check if content ends with an unclosed fenced code block."""
+    if not content:
+        return False
+    in_code = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_code and stripped == "```":
+                in_code = False
+            else:
+                in_code = True
+    return in_code
+
+
+def close_unclosed_code_block(content: str) -> str:
+    """Close an unclosed fenced code block by appending three backticks."""
+    if not content:
+        return content
+    if is_unclosed_code_block(content):
+        if not content.endswith("\n"):
+            content += "\n"
+        content += "```\n"
+    return content

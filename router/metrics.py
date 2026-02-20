@@ -71,9 +71,9 @@ VRAM_UTILIZATION_PCT = Gauge(
 def create_gpu_metrics():
     """Create per-GPU metrics with labels."""
     return {
-        "total": Gauge("smarterrouter_gpu_total_gb", "Total VRAM per GPU", ["gpu_index"]),
-        "used": Gauge("smarterrouter_gpu_used_gb", "Used VRAM per GPU", ["gpu_index"]),
-        "free": Gauge("smarterrouter_gpu_free_gb", "Free VRAM per GPU", ["gpu_index"]),
+        "total": Gauge("smarterrouter_gpu_total_gb", "Total VRAM per GPU", ["gpu_index", "vendor"]),
+        "used": Gauge("smarterrouter_gpu_used_gb", "Used VRAM per GPU", ["gpu_index", "vendor"]),
+        "free": Gauge("smarterrouter_gpu_free_gb", "Free VRAM per GPU", ["gpu_index", "vendor"]),
     }
 
 gpu_metrics = create_gpu_metrics()

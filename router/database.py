@@ -138,6 +138,20 @@ def _run_migrations() -> None:
             ))
             conn.commit()
         
+        # Add extra_data column to model_benchmarks if missing (for ArtificialAnalysis)
+        result = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='model_benchmarks'"
+        ))
+        if result.fetchone():
+            result = conn.execute(text("PRAGMA table_info(model_benchmarks)"))
+            existing_bb_columns = {row[1] for row in result.fetchall()}
+            if "extra_data" not in existing_bb_columns:
+                logger.info("Adding column: extra_data")
+                conn.execute(text(
+                    "ALTER TABLE model_benchmarks ADD COLUMN extra_data JSON"
+                ))
+                conn.commit()
+        
         logger.info("Database migrations completed")
 
 

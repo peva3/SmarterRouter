@@ -93,6 +93,7 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         "context_window",
         "vision",
         "tool_calling",
+        "extra_data",  # Provider-specific extra data (e.g., ArtificialAnalysis indices)
         "last_updated",
     }
 
@@ -103,7 +104,8 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         for k, v in data.items():
             if v is None:
                 continue
-            if isinstance(v, (dict, list)):
+            # Allow dict/list for extra_data only; skip for all other fields
+            if isinstance(v, (dict, list)) and k != "extra_data":
                 continue
             # Validate key against whitelist
             if k not in ALLOWED_BENCHMARK_FIELDS:
@@ -129,10 +131,23 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                         # Extra safety: ensure key is in whitelist before setattr
                         if k not in ALLOWED_BENCHMARK_FIELDS:
                             continue
-                        # Only update if the new value is not None/0, or if existing is None/0
                         new_val = v
                         old_val = getattr(existing, k)
-                        if new_val and (not old_val or new_val > old_val or k == "last_updated"):
+                        
+                        # Always update these fields if present
+                        if k in ("last_updated", "extra_data"):
+                            should_update = new_val is not None
+                        # For datetime comparisons, handle naive vs aware
+                        elif isinstance(new_val, datetime) and isinstance(old_val, datetime):
+                            if new_val.tzinfo is None:
+                                new_val = new_val.replace(tzinfo=timezone.utc)
+                            if old_val.tzinfo is None:
+                                old_val = old_val.replace(tzinfo=timezone.utc)
+                            should_update = new_val and (not old_val or new_val > old_val)
+                        else:
+                            should_update = new_val and (not old_val or new_val > old_val)
+                        
+                        if should_update:
                             setattr(existing, k, v)
             else:
                 # Filter dict one more time to ensure only allowed fields

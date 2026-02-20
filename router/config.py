@@ -59,12 +59,21 @@ class Settings(BaseSettings):
     # Benchmark sources (comma separated)
     benchmark_sources: str = Field(default="huggingface,lmsys")
 
+    # ArtificialAnalysis.ai settings
+    artificial_analysis_api_key: str | None = Field(default=None)
+    artificial_analysis_cache_ttl: int = Field(default=86400)  # 24 hours
+    artificial_analysis_model_mapping_file: str | None = Field(default=None)
+
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="text")  # "text" or "json"
 
     database_url: str = Field(default="sqlite:///data/router.db")
 
     pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
+
+    # Model keep_alive duration (in seconds) passed to backend. 
+    # -1 = keep loaded indefinitely (default), 0 = unload after response, positive = seconds to keep alive
+    model_keep_alive: float = Field(default=-1)
 
     # Name the router presents itself as to external UIs (e.g., OpenWebUI)
     router_external_model_name: str = Field(default="smarterrouter/main")
@@ -101,12 +110,17 @@ class Settings(BaseSettings):
     embed_model: str | None = Field(default=None)  # Model to use for embeddings
 
     # VRAM Monitoring & Management
-    vram_monitor_enabled: bool = Field(default=True)  # Enable VRAM monitoring via nvidia-smi
+    vram_monitor_enabled: bool = Field(default=True)  # Enable VRAM monitoring (auto-detects all GPU vendors)
     vram_monitor_interval: int = Field(default=30)  # Seconds between VRAM samples
     vram_max_total_gb: float | None = Field(
         default=None
     )  # Max VRAM to allocate (set below GPU total)
     vram_log_interval: int = Field(default=60)  # How often to log VRAM summary
+
+    # Apple Silicon specific configuration
+    apple_unified_memory_gb: float | None = Field(
+        default=None
+    )  # Total unified memory in GB (for M1/M2/M3). If not set, auto-detects from system.
 
     # VRAM Profiling
     profile_measure_vram: bool = Field(default=True)  # Measure actual VRAM during profiling

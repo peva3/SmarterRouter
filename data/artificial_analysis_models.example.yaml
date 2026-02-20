@@ -1,0 +1,51 @@
+# ArtificialAnalysis Model Mapping Configuration
+#
+# This file maps ArtificialAnalysis model identifiers to SmarterRouter (Ollama) model names.
+# ArtificialAnalysis uses their own model IDs and names which may differ from your local model tags.
+#
+# Mapping is attempted in this order:
+#   1. Explicit mapping by model ID (UUID)
+#   2. Explicit mapping by model name (slug)
+#   3. Auto-generated "creator/model" format (e.g., "openai/gpt-4o")
+#   4. Model name alone
+#
+# Copy this file to a location of your choice (e.g., /etc/smarterrouter/aa_models.yaml)
+# and set ROUTER_ARTIFICIAL_ANALYSIS_MODEL_MAPPING_FILE to point to it.
+
+mappings:
+  # Map by ArtificialAnalysis model ID (UUID) - most reliable
+  # "2dad8957-4c16-4e74-bf2d-8b21514e0ae9": "openai/o3-mini"
+
+  # Map by ArtificialAnalysis model name/slug - also reliable
+  "o3-mini": "openai/o3-mini"
+  "o1": "openai/o1"
+  "o1-mini": "openai/o1-mini"
+  "gpt-4o": "openai/gpt-4o"
+  "gpt-4o-mini": "openai/gpt-4o-mini"
+  "gpt-4-turbo": "openai/gpt-4-turbo"
+
+  "claude-3-5-sonnet": "anthropic/claude-3-5-sonnet"
+  "claude-3-5-haiku": "anthropic/claude-3-5-haiku"
+  "claude-3-opus": "anthropic/claude-3-opus"
+  "claude-3-sonnet": "anthropic/claude-3-sonnet"
+
+  "gemini-2.5-pro": "google/gemini-2.5-pro"
+  "gemini-2.5-flash": "google/gemini-2.5-flash"
+  "gemini-2.0-flash": "google/gemini-2.0-flash"
+  "gemini-1.5-pro": "google/gemini-1.5-pro"
+  "gemma-2-27b": "google/gemma-2-27b"
+  "gemma-2-9b": "google/gemma-2-9b"
+
+  # For models you run locally via Ollama, map to your Ollama tags
+  # Example: if you have "llama3.1:70b" in Ollama and AA reports "Llama-3.1-70B"
+  # "Llama-3.1-70B": "llama3.1:70b"
+  # "Llama-3.1-8B": "llama3.1:8b"
+  # "CodeLlama-34B": "codellama:34b"
+  # "Mistral-Large-Instruct-2407": "mistral-large"
+
+  # Together AI models (if using OpenAI-compatible backend with Together)
+  # "Mixtral-8x7B-Instruct-v0.1": "together/mixtral-8x7b-instruct"
+  # "Llama-3.1-70B-Instruct": "together/llama-3.1-70b-instruct"
+
+  # Add your custom mappings below
+  #

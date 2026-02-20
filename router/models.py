@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, Integer, JSON, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -102,6 +102,9 @@ class ModelBenchmark(Base):
     # New capabilities
     vision: Mapped[bool] = mapped_column(Integer, default=0)
     tool_calling: Mapped[bool] = mapped_column(Integer, default=0)
+
+    # Extra provider-specific data (e.g., ArtificialAnalysis indices, speed metrics)
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     last_updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -70,7 +70,7 @@ SmarterRouter will automatically select the best model for each prompt!
 - ✅ **Model discovery** - Automatically finds all available models from your backend
 - ✅ **Performance profiling** - Tests each model with standardized prompts on your hardware
 - ✅ **Smart routing** - Analyzes prompts and picks the optimal model based on category and complexity
-- ✅ **VRAM management** - Monitors GPU usage and unloads models when needed
+- ✅ **VRAM management** - Auto-detects all GPUs (NVIDIA, AMD, Intel, Apple Silicon), monitors usage, and unloads models when needed
 - ✅ **Fallback handling** - Automatically retries with backup models if primary fails
 - ✅ **Response caching** - Caches identical prompts for instant responses
 - ✅ **Continuous learning** - Collects user feedback to improve routing decisions
@@ -95,6 +95,8 @@ nano .env  # edit as needed
 | `ROUTER_QUALITY_PREFERENCE` | 0.0 (speed) to 1.0 (quality) | `0.5` |
 | `ROUTER_PINNED_MODEL` | Keep a small model always loaded (optional) | (none) |
 | `ROUTER_ADMIN_API_KEY` | **Required for production** to secure admin endpoints | (none) |
+
+**VRAM monitoring:** Enabled by default with auto-detection across NVIDIA, AMD, Intel, and Apple Silicon GPUs. Multi-GPU systems are fully supported. See [Configuration Reference](docs/configuration.md#vram-monitoring) for details.
 
 **⚠️ Production security:** Always set `ROUTER_ADMIN_API_KEY` in production to protect admin endpoints.
 

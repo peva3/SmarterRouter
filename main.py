@@ -52,6 +52,7 @@ from router.schemas import (
     sanitize_prompt,
     sanitize_for_logging,
     strip_signature,
+    close_unclosed_code_block,
     EmbeddingsRequest,
     EmbeddingsResponse,
     EmbeddingData,
@@ -215,7 +216,7 @@ async def startup_event():
         await vram_monitor.start()
 
         # Auto-detect total VRAM if not configured
-        if settings.vram_max_total_gb is None and vram_monitor.has_nvidia:
+        if settings.vram_max_total_gb is None and vram_monitor.has_gpu:
             current = vram_monitor.get_current()
             if current:
                 # Suggest using 90% of total as safe default
@@ -550,6 +551,7 @@ async def chat_completions(
         "top_logprobs": validated_request.top_logprobs,
         "tools": skills_registry.list_skills() if validated_request.tools else None,
         "tool_choice": validated_request.tool_choice,
+        "keep_alive": config.model_keep_alive,
     }
     # Remove None values
     backend_kwargs = {k: v for k, v in backend_kwargs.items() if v is not None}
@@ -782,6 +784,8 @@ async def chat_completions(
         signature = config.signature_format.format(model=final_model)
         # Strip any existing signature first, then add our own
         content = strip_signature(content)
+        # Close any unclosed fenced code block before appending signature
+        content = close_unclosed_code_block(content)
         content += signature
 
     # Cache the response (without signature) for future requests (include generation params)
@@ -824,6 +828,7 @@ async def stream_chat(
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     created = datetime.now(timezone.utc).timestamp()
+    in_code = False  # Track fenced code block state
 
     try:
         stream, latency = await client.chat_streaming(model, messages, **kwargs)
@@ -848,6 +853,14 @@ async def stream_chat(
         async for chunk in stream:
             content = chunk.get("message", {}).get("content", "")
             if content:
+                # Update code block state
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("```"):
+                        if in_code and stripped == "```":
+                            in_code = False
+                        else:
+                            in_code = True
                 content_chunk = {
                     'id': chunk_id,
                     'object': 'chat.completion.chunk',
@@ -860,6 +873,20 @@ async def stream_chat(
                 yield f"data: {json.dumps(content_chunk)}\n\n"
 
             if chunk.get("done", False):
+                # If code block still open, close it before finishing
+                if in_code:
+                    fence_chunk = {
+                        'id': chunk_id,
+                        'object': 'chat.completion.chunk',
+                        'created': created,
+                        'model': model,
+                        'choices': [
+                            {'index': 0, 'delta': {'content': "```"}, 'finish_reason': None}
+                        ],
+                    }
+                    yield f"data: {json.dumps(fence_chunk)}\n\n"
+                    in_code = False
+
                 # Add signature if enabled
                 if config.signature_enabled:
                     signature = config.signature_format.format(model=model)
@@ -1055,6 +1082,30 @@ async def invalidate_cache(
         "invalidated": invalidated,
         "model": model,
         "response_cache_only": response_cache_only,
+    }
+
+
+@app.post("/admin/sync-benchmarks")
+async def sync_benchmarks_endpoint(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+):
+    """Manually trigger benchmark sync from all configured sources (requires admin API key if configured)."""
+    if not app_state.backend:
+        return JSONResponse({"error": "Backend not initialized"}, status_code=503)
+    
+    await rate_limit_request(request, config, is_admin=True)
+    
+    models = await app_state.backend.list_models()
+    model_names = [m.name for m in models]
+    
+    count, matched = await sync_benchmarks(model_names)
+    
+    return {
+        "synced": count,
+        "matched_models": matched,
+        "total_models": len(model_names),
     }
 
 

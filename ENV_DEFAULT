@@ -221,6 +221,19 @@ ROUTER_PROFILE_PROMPTS_PER_CATEGORY=3
 # Available: huggingface, lmsys, artificial_analysis
 ROUTER_BENCHMARK_SOURCES=huggingface,lmsys
 
+# ArtificialAnalysis.ai settings (optional, requires API key)
+# Get your API key from: https://artificialanalysis.ai/insights
+#ROUTER_ARTIFICIAL_ANALYSIS_API_KEY=your-api-key-here
+
+# Cache TTL for ArtificialAnalysis data (seconds)
+# Free tier has 1000 requests/day, so cache for at least 24h recommended
+#ROUTER_ARTIFICIAL_ANALYSIS_CACHE_TTL=86400
+
+# Model mapping file for ArtificialAnalysis
+# YAML file mapping AA model IDs/names to SmarterRouter model names
+# See artificial_analysis_models.example.yaml for format
+#ROUTER_ARTIFICIAL_ANALYSIS_MODEL_MAPPING_FILE=/path/to/mapping.yaml
+
 # =============================================================================
 # RESPONSE CONFIGURATION
 # =============================================================================

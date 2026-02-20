@@ -1,0 +1,57 @@
+# ArtificialAnalysis Model Mapping Configuration
+#
+# This file maps ArtificialAnalysis model identifiers to your local Ollama model names.
+# ArtificialAnalysis uses different naming than Ollama; this bridge ensures the correct
+# benchmark data is attached to your local models.
+#
+# Mapping strategies (in order of preference):
+# 1. By ArtificialAnalysis ID (UUID) - most reliable and unambiguous
+# 2. By ArtificialAnalysis name/slug - human-readable but may have duplicates
+# 3. Auto-generation via creator/model slug combination (fallback)
+#
+# Example mapping entries:
+
+mappings:
+  # Llama 3.2 1B Instruct (Meta)
+  # AA ID: 80f7860a-7665-4658-9f05-15bccf5f832f
+  # AA name: "Llama 3.2 Instruct 1B"
+  # Ollama tag: llama3.2:1b (or just "llama32" if that's your model name)
+  - aa_id: "80f7860a-7665-4658-9f05-15bccf5f832f"
+    ollama_name: "llama32"
+
+  # Phi-3 Mini Instruct (Microsoft/Azure)
+  # AA ID: ded8d96e-835f-4359-947a-a4c3bb78e983
+  # AA name: "Phi-3 Mini Instruct 3.8B"
+  - aa_id: "ded8d96e-835f-4359-947a-a4c3bb78e983"
+    ollama_name: "phi3"
+
+  # Qwen3 4B Instruct (Alibaba)
+  # AA ID: b0249961-b8b2-479d-8325-a29ea17c7b89
+  # AA name: "Qwen3 4B 2507 Instruct"
+  - aa_id: "b0249961-b8b2-479d-8325-a29ea17c7b89"
+    ollama_name: "qwen3"
+
+  # Gemma 3 1B Instruct (Google)
+  # AA ID: d1720545-d0a8-4c15-a53e-ef5ca99ac7ea
+  - aa_id: "d1720545-d0a8-4c15-a53e-ef5ca99ac7ea"
+    ollama_name: "gemma3"
+
+  # Mistral Small 3.2 (Mistral AI)
+  # AA ID: 43da3718-3d2e-40dd-901a-05664179ff7f
+  - aa_id: "43da3718-3d2e-40dd-901a-05664179ff7f"
+    ollama_name: "mistralnemo"
+
+# How to find the correct AA IDs for your models:
+# 1. Enable ArtificialAnalysis provider in .env
+# 2. Restart SmarterRouter
+# 3. Check logs for "AA sample relevant models" or "AA all model creators"
+# 4. Identify the AA ID that matches your model's size/version from the list
+#
+# Important: The ollama_name must exactly match your model name as listed by:
+#   curl http://localhost:11434/api/tags
+#
+# If no mapping is found, the provider attempts auto-generation using the pattern:
+#   {creator-slug}/{model-slug}
+# (e.g., "meta/llama-3.2-1b") but this often fails to match local tags.
+#
+# Tip: Use aa_id for reliability - IDs are unique and never change.

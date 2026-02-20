@@ -236,6 +236,12 @@ class TestVRAMMonitor:
     @patch('subprocess.run')
     def test_check_nvidia_smi_not_available(self, mock_run, monitor):
         """Test nvidia-smi detection when not available."""
+        # Mock GPU manager to report no GPUs
+        mock_gpu_manager = MagicMock()
+        mock_gpu_manager.has_gpus = False
+        mock_gpu_manager.backends = []
+        monitor.gpu_manager = mock_gpu_manager
+        monitor.has_nvidia = False
         mock_run.side_effect = FileNotFoundError()
         
         result = monitor._check_nvidia_smi()

@@ -1,5 +1,6 @@
 """Tests for benchmark providers."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -279,14 +280,242 @@ class TestArtificialAnalysisProvider:
 
     @pytest.fixture
     def provider(self):
-        return ArtificialAnalysisProvider()
+        # Set dummy API key for tests
+        with patch.dict(os.environ, {"ROUTER_ARTIFICIAL_ANALYSIS_API_KEY": "test-key"}):
+            return ArtificialAnalysisProvider()
 
     def test_name_property(self, provider):
         """Test provider name."""
         assert provider.name == "artificial_analysis"
 
     @pytest.mark.asyncio
-    async def test_fetch_data_returns_empty(self, provider):
-        """Test that placeholder returns empty list."""
-        result = await provider.fetch_data(["llama3"])
-        assert result == []
+    async def test_fetch_data_success(self, provider):
+        """Test successful data fetch from ArtificialAnalysis API."""
+        mock_response = {
+            "status": 200,
+            "data": [
+                {
+                    "id": "test-id-123",
+                    "name": "gpt-4o",
+                    "slug": "gpt-4o",
+                    "model_creator": {"id": "openai-id", "name": "OpenAI", "slug": "openai"},
+                    "evaluations": {
+                        "artificial_analysis_intelligence_index": 75.5,
+                        "artificial_analysis_coding_index": 68.2,
+                        "artificial_analysis_math_index": 72.0,
+                        "mmlu_pro": 0.85,
+                        "gpqa": 0.78,
+                        "livecodebench": 0.82,
+                        "math_500": 0.91,
+                    },
+                    "pricing": {
+                        "price_1m_blended_3_to_1": 5.0,
+                    },
+                    "median_output_tokens_per_second": 150.0,
+                    "median_time_to_first_token_seconds": 0.5,
+                }
+            ],
+        }
+
+        with patch("router.providers.artificial_analysis.httpx.AsyncClient") as mock_client_class:
+            mock_response_obj = MagicMock()
+            mock_response_obj.status_code = 200
+            mock_response_obj.json.return_value = mock_response
+
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+
+            mock_context = AsyncMock()
+            mock_context.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_context.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client_class.return_value = mock_context
+
+            result = await provider.fetch_data(["openai/gpt-4o"])
+
+            assert len(result) == 1
+            assert result[0]["ollama_name"] == "openai/gpt-4o"
+            assert result[0]["mmlu"] == 0.85
+            assert result[0]["humaneval"] == 0.82  # livecodebench maps to humaneval
+            assert result[0]["math"] == 0.91
+            assert result[0]["gpqa"] == 0.78
+            # With given scores: mmlu=0.85, gpqa=0.78, math=0.91, livecodebench=0.82
+            # Reasoning: mmlu + gpqa + math = 0.85+0.78+0.91 = 2.54; count = 2+1+2 = 5? Actually count includes math*2? Let's recalc:
+            # count: mmlu(2) + gpqa(1) + math(2) + livecodebench(2) = 7; reasoning = mmlu+gpqa+math = 2.54; reasoning_score = 2.54/7 ≈ 0.363
+            # Coding: livecodebench only; denominator = 2 (since coding benchmark present); coding_score = 0.82/2 = 0.41
+            assert result[0]["reasoning_score"] == pytest.approx(0.363, abs=0.001)
+            assert result[0]["coding_score"] == pytest.approx(0.41, abs=0.001)
+            assert result[0]["throughput"] == 150.0
+            assert "extra_data" in result[0]
+            assert result[0]["extra_data"]["artificial_analysis_intelligence_index"] == 75.5
+
+    @pytest.mark.asyncio
+    async def test_fetch_data_with_mapping(self):
+        """Test model mapping via YAML."""
+        # Set mapping file path via env - file is at repository root
+        with patch.dict(
+            os.environ,
+            {
+                "ROUTER_ARTIFICIAL_ANALYSIS_API_KEY": "test-key",
+                "ROUTER_ARTIFICIAL_ANALYSIS_MODEL_MAPPING_FILE": "artificial_analysis_models.example.yaml",
+            },
+        ):
+            provider = ArtificialAnalysisProvider()
+
+            mock_response = {
+                "status": 200,
+                "data": [
+                    {
+                        "id": "test-id",
+                        "name": "o3-mini",
+                        "slug": "o3-mini",
+                        "model_creator": {"id": "openai-id", "name": "OpenAI", "slug": "openai"},
+                        "evaluations": {
+                            "mmlu_pro": 0.79,
+                            "livecodebench": 0.70,
+                            "math_500": 0.88,
+                            "gpqa": 0.65,
+                        },
+                        "median_output_tokens_per_second": 100.0,
+                        "median_time_to_first_token_seconds": 1.0,
+                    }
+                ],
+            }
+
+            with patch("router.providers.artificial_analysis.httpx.AsyncClient") as mock_client_class:
+                mock_response_obj = MagicMock()
+                mock_response_obj.status_code = 200
+                mock_response_obj.json.return_value = mock_response
+
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+
+                mock_context = AsyncMock()
+                mock_context.__aenter__ = AsyncMock(return_value=mock_client_instance)
+                mock_context.__aexit__ = AsyncMock(return_value=None)
+
+                mock_client_class.return_value = mock_context
+
+                result = await provider.fetch_data(["openai/o3-mini"])
+
+                # Should map via YAML mapping
+                assert len(result) == 1
+                assert result[0]["ollama_name"] == "openai/o3-mini"
+
+    @pytest.mark.asyncio
+    async def test_fetch_data_authentication_error(self, provider):
+        """Test handling of invalid API key."""
+        with patch("router.providers.artificial_analysis.httpx.AsyncClient") as mock_client_class:
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+
+            mock_client_instance = MagicMock()
+            mock_client_instance.get = MagicMock(return_value=mock_response)
+
+            mock_context = AsyncMock()
+            mock_context.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_context.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client_class.return_value = mock_context
+
+            result = await provider.fetch_data(["gpt-4o"])
+            assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_data_rate_limit(self, provider):
+        """Test handling of rate limit errors."""
+        with patch("router.providers.artificial_analysis.httpx.AsyncClient") as mock_client_class:
+            mock_response = MagicMock()
+            mock_response.status_code = 429
+
+            mock_client_instance = MagicMock()
+            mock_client_instance.get = MagicMock(return_value=mock_response)
+
+            mock_context = AsyncMock()
+            mock_context.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_context.__aexit__ = AsyncMock(return_value=None)
+
+            mock_client_class.return_value = mock_context
+
+            result = await provider.fetch_data(["gpt-4o"])
+            assert result == []
+
+    def test_convert_to_benchmark_dict(self, provider):
+        """Test data conversion logic."""
+        model_data = {
+            "id": "test-id",
+            "name": "Test Model",
+            "model_creator": {"name": "TestAI"},
+            "evaluations": {
+                "mmlu_pro": 0.80,
+                "gpqa": 0.75,
+                "livecodebench": 0.85,
+                "math_500": 0.90,
+            },
+            "median_output_tokens_per_second": 200.0,
+            "median_time_to_first_token_seconds": 0.3,
+        }
+
+        benchmark = provider._convert_to_benchmark_dict(model_data, "testai/test-model")
+
+        assert benchmark["ollama_name"] == "testai/test-model"
+        assert benchmark["mmlu"] == 0.80
+        assert benchmark["humaneval"] == 0.85
+        assert benchmark["math"] == 0.90
+        assert benchmark["gpqa"] == 0.75
+        assert benchmark["throughput"] == 200.0
+        assert "extra_data" in benchmark
+        assert benchmark["extra_data"]["artificial_analysis_id"] == "test-id"
+        assert benchmark["extra_data"]["model_creator"] == "TestAI"
+
+    def test_convert_to_benchmark_dict_with_missing_fields(self, provider):
+        """Test handling of missing evaluation fields."""
+        model_data = {
+            "id": "test-id",
+            "name": "Test Model",
+            "model_creator": {"name": "TestAI"},
+            "evaluations": {},  # No scores
+            "median_output_tokens_per_second": 150.0,
+        }
+
+        benchmark = provider._convert_to_benchmark_dict(model_data, "testai/test-model")
+
+        assert benchmark["ollama_name"] == "testai/test-model"
+        # Missing fields result in None or calculated scores of 0.0
+        assert benchmark["mmlu"] is None
+        assert benchmark["reasoning_score"] == 0.0
+        assert benchmark["coding_score"] == 0.0
+        assert benchmark["throughput"] == 150.0
+
+    def test_map_to_ollama_name_with_mapping(self, provider):
+        """Test explicit mapping by model name."""
+        provider.model_mapping = {"o3-mini": "openai/o3-mini"}
+
+        model_data = {
+            "name": "o3-mini",
+            "model_creator": {"name": "OpenAI"},
+        }
+
+        ollama_name = provider._map_to_ollama_name(model_data, ["openai/o3-mini"])
+        assert ollama_name == "openai/o3-mini"
+
+    def test_map_to_ollama_name_auto_generate(self, provider):
+        """Test auto-generation of creator/model format."""
+        model_data = {
+            "name": "gpt-4o",
+            "model_creator": {"name": "OpenAI"},
+        }
+
+        ollama_name = provider._map_to_ollama_name(model_data, ["openai/gpt-4o"])
+        assert ollama_name == "openai/gpt-4o"
+
+    def test_map_to_ollama_name_no_match(self, provider):
+        """Test when no mapping found."""
+        model_data = {
+            "name": "unknown-model",
+            "model_creator": {"name": "UnknownOrg"},
+        }
+
+        ollama_name = provider._map_to_ollama_name(model_data, ["some-model"])
+        assert ollama_name is None
+
