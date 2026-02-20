@@ -1,14 +1,13 @@
 # SmarterRouter
 
-[![GitHub stars](https://img.shields.io/github/stars/peva3/SmarterRouter)](https://github.com/peva3/SmarterRouter/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/peva3/SmarterRouter)](https://github.com/peva3/SmarterRouter/network/members)
-[![GitHub license](https://img.shields.io/github/license/peva3/SmarterRouter)](https://github.com/peva3/SmarterRouter/blob/main/LICENSE)
-[![Docker pulls](https://img.shields.io/docker/pulls/smarterrouter/smarterrouter)](https://hub.docker.com/r/smarterrouter/smarterrouter)
-[![Python version](https://img.shields.io/pypi/pyversions/smarterrouter)](https://pypi.org/project/smarterrouter/)
-[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/peva3/SmarterRouter/ci.yml)](https://github.com/peva3/SmarterRouter/actions)
-
 **Intelligent, multi-backend AI router** that sits between your application and various LLM providers. It profiles your models, aggregates benchmark data, and intelligently routes each query to the best available model for the task—all locally, all free.
+**Key Benefits:**
+- **Zero manual model selection** - AI automatically picks the right model for each prompt
+- **All local, zero cost** - No cloud API fees, works with your existing models
+- **Production-ready** - Monitoring, metrics, and error handling built-in
+- **Drop-in replacement** - Works with any OpenAI-compatible client
 
+  
 ## Why SmarterRouter? (vs other LLM proxies)
 
 | Feature | SmarterRouter | OptiLLM | ClewdR | LLM-API-Proxy | Reader |
@@ -20,11 +19,7 @@
 | **Production Features** | ✅ Monitoring + Metrics | ✅ Metrics | ✅ Dashboard | ✅ Resilience | ✅ Simple |
 | **Learning Capability** | ✅ Profiles models over time | ❌ Static config | ❌ Static config | ❌ Static config | ❌ Static config |
 
-**Key Benefits:**
-- **Zero manual model selection** - AI automatically picks the right model for each prompt
-- **All local, zero cost** - No cloud API fees, works with your existing models
-- **Production-ready** - Monitoring, metrics, and error handling built-in
-- **Drop-in replacement** - Works with any OpenAI-compatible client
+
 
 ---
 
