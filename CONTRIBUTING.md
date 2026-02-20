@@ -21,7 +21,7 @@ This project follows the [Contributor Covenant Code of Conduct](https://www.cont
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/peva3/SmarterRouter.git
+   git clone https://github.com/YOUR_USERNAME/SmarterRouter.git
    cd SmarterRouter
    ```
 3. Create a branch for your changes:
