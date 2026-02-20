@@ -34,7 +34,7 @@ An intelligent, multi-backend AI router that sits between your application and v
 ### Installation
 1.  **Clone the repository:**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/peva3/SmarterRouter.git
     cd SmarterRouter
     ```
 2.  **Install dependencies:**
