@@ -48,7 +48,7 @@ class SemanticCache:
         embed_model: str | None = None,
         response_max_size: int = 50,
     ):
-        self.cache: OrderedDict[str, tuple[RoutingResult, float, list[float] | None]] = (
+        self.cache: OrderedDict[str, tuple[RoutingResult, float, list[float] | None, float | None]] = (
             OrderedDict()
         )
         self.max_size = max_size
@@ -74,15 +74,11 @@ class SemanticCache:
     def _hash_prompt(self, prompt: str) -> str:
         return hashlib.sha256(prompt.encode()).hexdigest()[:32]
 
-    def _cosine_similarity(self, a: list[float], b: list[float]) -> float:
-        if not a or not b:
+    def _cosine_similarity(self, a: list[float], b: list[float], mag_a: float, mag_b: float) -> float:
+        if not a or not b or mag_a == 0 or mag_b == 0:
             return 0.0
         dot_product = sum(x * y for x, y in zip(a, b))
-        magnitude_a = sum(x * x for x in a) ** 0.5
-        magnitude_b = sum(x * x for x in b) ** 0.5
-        if magnitude_a == 0 or magnitude_b == 0:
-            return 0.0
-        return dot_product / (magnitude_a * magnitude_b)
+        return dot_product / (mag_a * mag_b)
 
     async def _get_embedding(self, client: LLMBackend, text: str) -> list[float] | None:
         if not self.embed_model:
@@ -104,7 +100,7 @@ class SemanticCache:
 
         async with self._lock:
             if key in self.cache:
-                result, timestamp, _ = self.cache[key]
+                result, timestamp, _, _ = self.cache[key]
                 if current_time - timestamp < self.ttl:
                     self.cache.move_to_end(key)
                     self.stats["routing_hits"] += 1
@@ -117,10 +113,11 @@ class SemanticCache:
                 best_match = None
                 best_similarity = 0.0
                 best_key = None
+                embedding_mag = sum(x * x for x in embedding) ** 0.5
 
-                for cache_key, (result, timestamp, cache_embedding) in self.cache.items():
-                    if cache_embedding and current_time - timestamp < self.ttl:
-                        similarity = self._cosine_similarity(embedding, cache_embedding)
+                for cache_key, (result, timestamp, cache_embedding, cache_mag) in self.cache.items():
+                    if cache_embedding and cache_mag and current_time - timestamp < self.ttl:
+                        similarity = self._cosine_similarity(embedding, cache_embedding, embedding_mag, cache_mag)
                         if similarity > best_similarity and similarity >= self.similarity_threshold:
                             best_similarity = similarity
                             best_match = result
@@ -145,7 +142,8 @@ class SemanticCache:
     ) -> None:
         key = self._hash_prompt(prompt)
         async with self._lock:
-            self.cache[key] = (result, time.time(), embedding)
+            mag = sum(x * x for x in embedding) ** 0.5 if embedding else None
+            self.cache[key] = (result, time.time(), embedding, mag)
             self.cache.move_to_end(key)
             if len(self.cache) > self.max_size:
                 self.cache.popitem(last=False)
@@ -618,7 +616,7 @@ Select the model that best matches the user's prompt needs."""
             base_parts = base.split("2")[0] if "2" in base else base
 
             best_match = None
-            best_score = 0
+            best_score = 0.0
 
             for bm_name, bm in benchmark_map.items():
                 bm_base = (
@@ -628,7 +626,7 @@ Select the model that best matches the user's prompt needs."""
                 # Exact match
                 if base == bm_base:
                     best_match = bm
-                    best_score = 100
+                    best_score = 100.0
                     break
 
                 # Partial match - check if major model name matches
@@ -655,10 +653,10 @@ Select the model that best matches the user's prompt needs."""
 
         # Log benchmark match details for each model
         for name in model_names:
-            bm = normalized_benchmark_map.get(name)
-            if bm:
+            bench_match = normalized_benchmark_map.get(name)
+            if bench_match:
                 logger.info(
-                    f"  {name} -> benchmark: reasoning={bm.get('reasoning_score')}, coding={bm.get('coding_score')}, elo={bm.get('elo_rating')}"
+                    f"  {name} -> benchmark: reasoning={bench_match.get('reasoning_score')}, coding={bench_match.get('coding_score')}, elo={bench_match.get('elo_rating')}"
                 )
             else:
                 logger.info(f"  {name} -> NO benchmark match")

@@ -1,5 +1,7 @@
 """Prometheus metrics for SmarterRouter."""
 
+from typing import cast
+
 from prometheus_client import (
     Counter,
     Gauge,
@@ -79,4 +81,5 @@ gpu_metrics = create_gpu_metrics()
 
 def generate_metrics() -> bytes:
     """Generate Prometheus metrics output."""
-    return generate_latest(REGISTRY)
+    result = generate_latest(REGISTRY)
+    return cast(bytes, result) if result else b""

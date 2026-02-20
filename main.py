@@ -317,7 +317,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SmarterRouter",
     description="AI-powered LLM router that intelligently selects the best model",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -536,7 +536,7 @@ async def chat_completions(
     messages_dict = [{"role": msg.role, "content": clean_message_content(msg)} for msg in messages]
 
     # Collect additional parameters for backend
-    backend_kwargs = {
+    backend_kwargs: dict[str, Any] = {
         "temperature": validated_request.temperature,
         "top_p": validated_request.top_p,
         "n": validated_request.n,
@@ -555,31 +555,21 @@ async def chat_completions(
     backend_kwargs = {k: v for k, v in backend_kwargs.items() if v is not None}
 
     if stream:
-        # Proactive VRAM management for streaming - unload non-needed models before streaming
-        current = app_state.current_loaded_model
-        pinned = config.pinned_model
-
-        if current and current != selected_model and current != pinned:
-            logger.info(
-                f"VRAM management (streaming): unloading {current} to load {selected_model}"
-            )
-            if supports_unload(app_state.backend):
-                await app_state.backend.unload_model(current)
-
-        # Load model via VRAM manager if enabled
+        # Load model via VRAM manager if enabled, else fallback to traditional unload
         if app_state.vram_manager:
             vram_gb = get_model_vram_estimate(selected_model)
             await app_state.vram_manager.load_model(selected_model, vram_gb)
         else:
-            # Traditional: unload current model if different and not pinned
+            # Traditional: unload current model if different and not pinned before loading new
             current = app_state.current_loaded_model
             pinned = config.pinned_model
-        if current and current != selected_model and current != pinned:
-            logger.info(
-                f"VRAM management (streaming): unloading {current} to load {selected_model}"
-            )
-            if supports_unload(app_state.backend):
-                await app_state.backend.unload_model(current)
+            if current and current != selected_model and current != pinned:
+                logger.info(
+                    f"VRAM management (streaming): unloading {current} to load {selected_model}"
+                )
+                if supports_unload(app_state.backend):
+                    await app_state.backend.unload_model(current)
+                app_state.current_loaded_model = None
 
         # Update current model state
         app_state.current_loaded_model = selected_model
@@ -997,7 +987,7 @@ async def get_stats(
     await rate_limit_request(request, config, is_admin=True)
 
     # Calculate uptime
-    uptime_seconds = 0
+    uptime_seconds: float = 0.0
     if hasattr(app_state, "start_time"):
         uptime_seconds = (datetime.now(timezone.utc) - app_state.start_time).total_seconds()
 
@@ -1051,7 +1041,7 @@ async def invalidate_cache(
         return JSONResponse({"error": "Cache not initialized"}, status_code=503)
 
     cache = app_state.router_engine.semantic_cache
-    invalidated = 0
+    invalidated: int | str = 0
 
     if response_cache_only or model:
         invalidated = await cache.invalidate_response(model)
@@ -1088,7 +1078,7 @@ async def get_vram_status(
     current = monitor.get_current()
     history = monitor.get_history(minutes=history_minutes)
 
-    response = {
+    response: dict[str, Any] = {
         "current": None,
         "budget": {
             "max_configured_gb": monitor.total_vram_gb,

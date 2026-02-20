@@ -1,6 +1,12 @@
-## [Unreleased] - Pending
+## [2.0.0] - 2026-02-20
 
-### QA Deep Dive Fixes
+- **Semantic Cache Optimization (O(N) computation reduction)**: Modified `SemanticCache._cosine_similarity` to pre-calculate and store embedding magnitudes upon insertion instead of re-calculating them inside the `for` loop during lookups. This significantly reduces CPU overhead when `SemanticCache` reaches its `max_size` (e.g., 500 entries) with 8192-dimension embeddings, saving up to ~4 million redundant math operations per cache lookup.
+- **Race Condition / Duplicate Code Fix**: Fixed a logical bug in `main.py`'s `stream_chat` endpoint. There was duplicate VRAM unloading logic caused by an unindented block (`if current and current != selected_model and current != pinned:`) that was executing outside the `else` clause, leading to redundant API calls to unload models.
+- **Deep Mypy Type-Safety Enhancements**:
+  - Eliminated `Unsupported operand type for - ("None" and "float")` in backend streaming (`ollama.py`, `openai.py`, `llama_cpp.py`) by replacing untyped `timing` dicts with explicit explicit `start_time` and `first_token_time` variables.
+  - Resolved `Argument 4 to "chat" has incompatible type` by explicitly typing `backend_kwargs` as `dict[str, Any]` in `main.py`.
+  - Added explicit type annotations for `response` dicts and `invalidated` variables in `/admin` endpoints.
+
 
 - **Critical Bug Fix**: Removed unused `benchmark_source` field from `benchmark_db.py`. The field was in the whitelist but never existed in `ModelBenchmark` model, causing potential crashes in `get_benchmarks_for_models()`.
 - **Type Safety Improvements**:

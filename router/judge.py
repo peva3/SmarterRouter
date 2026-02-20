@@ -243,7 +243,7 @@ class JudgeClient:
     
     def _calculate_backoff(self, attempt: int) -> float:
         """Calculate exponential backoff delay."""
-        return self.base_delay * (2 ** attempt)
+        return float(self.base_delay * (2 ** attempt))
     
     async def close(self) -> None:
         """Close the shared HTTP client."""
@@ -264,7 +264,7 @@ class JudgeClient:
 
         judge_prompt = JUDGE_PROMPT_TEMPLATE.format(prompt=prompt, response=response)
 
-        last_exception = None
+        last_exception: Exception | None = None
         
         for attempt in range(self.max_retries):
             try:

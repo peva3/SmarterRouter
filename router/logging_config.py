@@ -159,6 +159,7 @@ def setup_logging(level: int = logging.INFO, log_format: str = "text") -> None:
     # Create console handler
     handler = logging.StreamHandler(sys.stdout)
 
+    formatter: logging.Formatter
     if log_format == "json":
         formatter = JSONFormatter()
     else:

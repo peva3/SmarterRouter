@@ -15,8 +15,9 @@ class Skill:
 
 
 class WebSearchSkill(Skill):
-    async def execute(self, query: str, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> str:
         """Perform a web search using DuckDuckGo API."""
+        query = kwargs.get("query", "")
         if not query:
             return "Error: query parameter is required for web search."
         try:
@@ -46,8 +47,9 @@ class WebSearchSkill(Skill):
 
 
 class CalculatorSkill(Skill):
-    async def execute(self, expression: str, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> str:
         """Safely evaluate a mathematical expression."""
+        expression = kwargs.get("expression", "")
         import operator
 
         allowed_operators = {

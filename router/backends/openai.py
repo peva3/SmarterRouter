@@ -52,7 +52,11 @@ class OpenAIBackend(LLMBackend):
         async with httpx.AsyncClient(timeout=effective_timeout) as client:
             response = await client.request(method, url, headers=headers, **kwargs)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if not isinstance(data, dict):
+                logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                return {}
+            return data
 
     async def list_models(self) -> list[ModelInfo]:
         try:
@@ -110,11 +114,12 @@ class OpenAIBackend(LLMBackend):
         url = f"{self.base_url}/chat/completions"
         full_model = self._full_model_name(model)
 
-        timing = {"start": time.perf_counter(), "first_token": None}
+        start_time = time.perf_counter()
+        first_token_time: float | None = None
         latency_ms = 0.0
 
         async def stream_generator() -> AsyncIterator[dict[str, Any]]:
-            nonlocal latency_ms
+            nonlocal latency_ms, first_token_time
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -142,9 +147,9 @@ class OpenAIBackend(LLMBackend):
                             try:
                                 data = json.loads(line[6:])
                                 # Measure time to first token
-                                if timing["first_token"] is None:
-                                    timing["first_token"] = time.perf_counter()
-                                    latency_ms = (timing["first_token"] - timing["start"]) * 1000
+                                if first_token_time is None:
+                                    first_token_time = time.perf_counter()
+                                    latency_ms = (first_token_time - start_time) * 1000
                                 # Normalize to Ollama format (already done in stream)
                                 content = ""
                                 finish_reason = None

@@ -498,19 +498,19 @@ class ModelProfiler:
         category_times: dict[str, float] = {}
         
         for i, cat in enumerate(categories):
-            result = results[i]
-            if isinstance(result, Exception):
-                logger.error(f"Category {cat} failed for {model}: {result}")
+            cat_result = results[i]
+            if isinstance(cat_result, Exception):
+                logger.error(f"Category {cat} failed for {model}: {cat_result}")
                 category_scores[cat] = 0.0
                 category_times[cat] = self.timeout * 1000
             else:
                 # At this point, result should be tuple[float, float]
                 try:
-                    score, time_ms = result  # type: ignore[misc]
-                    category_scores[cat] = score
-                    category_times[cat] = time_ms
+                    score, time_ms = cat_result  # type: ignore[misc]
+                    category_scores[cat] = float(score)
+                    category_times[cat] = float(time_ms)
                 except (TypeError, ValueError) as e:
-                    logger.error(f"Unexpected result format for {cat}: {result}, error: {e}")
+                    logger.error(f"Unexpected result format for {cat}: {cat_result}, error: {e}")
                     category_scores[cat] = 0.0
                     category_times[cat] = self.timeout * 1000
         

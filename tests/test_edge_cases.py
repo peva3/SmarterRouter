@@ -21,32 +21,37 @@ class TestSemanticCacheEdgeCases:
         """Test cosine similarity with edge cases."""
         cache = SemanticCache(max_size=10)
         
+        def sim(a, b):
+            mag_a = sum(x*x for x in a)**0.5 if a else 0.0
+            mag_b = sum(x*x for x in b)**0.5 if b else 0.0
+            return cache._cosine_similarity(a, b, mag_a, mag_b)
+            
         # Empty vectors
-        assert cache._cosine_similarity([], []) == 0.0
-        assert cache._cosine_similarity([], [1.0, 2.0]) == 0.0
-        assert cache._cosine_similarity([1.0, 2.0], []) == 0.0
+        assert sim([], []) == 0.0
+        assert sim([], [1.0, 2.0]) == 0.0
+        assert sim([1.0, 2.0], []) == 0.0
         
         # Zero vector
-        assert cache._cosine_similarity([0.0, 0.0], [1.0, 2.0]) == 0.0
-        assert cache._cosine_similarity([1.0, 2.0], [0.0, 0.0]) == 0.0
+        assert sim([0.0, 0.0], [1.0, 2.0]) == 0.0
+        assert sim([1.0, 2.0], [0.0, 0.0]) == 0.0
         
         # Identical vectors (similarity ≈ 1.0, accounting for floating point)
-        assert cache._cosine_similarity([1.0, 2.0], [1.0, 2.0]) == pytest.approx(1.0)
+        assert sim([1.0, 2.0], [1.0, 2.0]) == pytest.approx(1.0)
         
         # Orthogonal vectors (similarity = 0.0)
-        assert cache._cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+        assert sim([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 
     def test_cache_eviction_lru(self):
         """Test LRU eviction when cache is full."""
         cache = SemanticCache(max_size=3, ttl_seconds=3600)
         
         # Add 3 items
-        cache.cache["key1"] = (MagicMock(), 100.0, None)
-        cache.cache["key2"] = (MagicMock(), 100.0, None)
-        cache.cache["key3"] = (MagicMock(), 100.0, None)
+        cache.cache["key1"] = (MagicMock(), 100.0, None, None)
+        cache.cache["key2"] = (MagicMock(), 100.0, None, None)
+        cache.cache["key3"] = (MagicMock(), 100.0, None, None)
         
         # Add 4th item - should evict key1 (LRU)
-        cache.cache["key4"] = (MagicMock(), 100.0, None)
+        cache.cache["key4"] = (MagicMock(), 100.0, None, None)
         cache.cache.move_to_end("key4")
         if len(cache.cache) > cache.max_size:
             cache.cache.popitem(last=False)
