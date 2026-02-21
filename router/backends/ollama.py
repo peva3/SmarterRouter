@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -20,11 +21,14 @@ class OllamaBackend(LLMBackend):
         model_prefix: str = "",
         timeout: float = 60.0,
         generation_timeout: float = 120.0,
+        models_cache_ttl: float = 30.0,  # Cache model list for 30 seconds
     ):
         self.base_url = base_url.rstrip("/")
         self.model_prefix = model_prefix
         self.timeout = timeout  # Short timeout for quick operations (list, etc)
         self.generation_timeout = generation_timeout  # Longer timeout for generation
+        self.models_cache_ttl = models_cache_ttl
+        self._models_cache: tuple[list[ModelInfo], float] | None = None  # (models, timestamp)
 
     def _full_model_name(self, model: str) -> str:
         """Apply model prefix if configured."""
@@ -51,6 +55,20 @@ class OllamaBackend(LLMBackend):
             return data
 
     async def list_models(self) -> list[ModelInfo]:
+        """List available models with caching to avoid repeated HTTP requests.
+        
+        Results are cached for models_cache_ttl seconds (default 30s).
+        """
+        now = time.monotonic()
+        
+        # Check cache
+        if self._models_cache is not None:
+            models, cached_at = self._models_cache
+            if now - cached_at < self.models_cache_ttl:
+                logger.debug(f"Returning cached model list ({len(models)} models)")
+                return models
+        
+        # Fetch fresh models
         try:
             data = await self._request("GET", "/api/tags")
             models = []
@@ -62,10 +80,23 @@ class OllamaBackend(LLMBackend):
                         modified_at=m.get("modified_at", ""),
                     )
                 )
+            
+            # Update cache
+            self._models_cache = (models, now)
+            logger.debug(f"Refreshed model list cache ({len(models)} models)")
             return models
         except httpx.HTTPError as e:
+            # If fetch fails but we have cached data, return it
+            if self._models_cache is not None:
+                logger.warning(f"Failed to refresh model list: {e}, returning stale cache")
+                return self._models_cache[0]
             logger.error(f"Failed to list models: {e}")
             return []
+
+    def invalidate_models_cache(self) -> None:
+        """Manually invalidate the models cache."""
+        self._models_cache = None
+        logger.debug("Model list cache invalidated")
 
     async def chat(
         self,

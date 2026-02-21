@@ -211,27 +211,86 @@ def strip_signature(content: str, signature_format: str | None = None) -> str:
     return content.rstrip()
 
 
+def _get_unclosed_fence_char(content: str) -> str | None:
+    """
+    Detect if content ends with an unclosed fenced code block.
+    Returns the fence character ('`' or '~') if unclosed, None otherwise.
+    
+    Implements a proper Markdown fenced code block state machine:
+    - When not in a code block, a fence line opens a block.
+    - When in a code block, only an exact matching fence (3 of same char) closes it;
+      any other fence is treated as content.
+    """
+    if not content:
+        return None
+    in_code = False
+    current_fence = None  # '`' or '~' for the currently open block
+    
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        is_fence = stripped.startswith("```") or stripped.startswith("~~~")
+        
+        if is_fence:
+            # Determine fence char from this line
+            if stripped.startswith("```"):
+                fence_char = '`'
+            else:
+                fence_char = '~'
+                
+            if not in_code:
+                # Opening a new block
+                in_code = True
+                current_fence = fence_char
+            else:
+                # Inside a block: check if this line is the closing fence
+                if current_fence == fence_char and stripped == fence_char * 3:
+                    in_code = False
+                    current_fence = None
+                else:
+                    # Fence inside a code block is just content; ignore for state
+                    pass
+    
+    return current_fence if in_code else None
+
+
 def is_unclosed_code_block(content: str) -> bool:
     """Check if content ends with an unclosed fenced code block."""
-    if not content:
-        return False
-    in_code = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_code and stripped == "```":
-                in_code = False
-            else:
-                in_code = True
-    return in_code
+    return _get_unclosed_fence_char(content) is not None
 
 
 def close_unclosed_code_block(content: str) -> str:
-    """Close an unclosed fenced code block by appending three backticks."""
+    """Close an unclosed fenced code block by appending matching fence.
+    
+    Special handling: if the content ends with a fence line that just opened
+    an empty block (no content), remove that stray fence instead of closing it.
+    This prevents ugly empty code blocks appearing before signatures.
+    """
     if not content:
         return content
-    if is_unclosed_code_block(content):
-        if not content.endswith("\n"):
-            content += "\n"
-        content += "```\n"
+    
+    fence_char = _get_unclosed_fence_char(content)
+    if not fence_char:
+        return content
+    
+    lines = content.splitlines()
+    last_line = lines[-1].strip() if lines else ""
+    
+    # Check if last line is just a fence (opening with no content after)
+    # In this case, remove it entirely rather than creating an empty block
+    if last_line.startswith(fence_char * 3):
+        # Check if this fence is just an opening with no actual content
+        # (i.e., the block was just opened on the last line)
+        # We detect this by counting fences - if this is the most recent one
+        # and it opened a block (in_code was set), it's a stray fence
+        content_stripped = "\n".join(lines[:-1]).rstrip()
+        if not _get_unclosed_fence_char(content_stripped):
+            # Removing the last line makes the content "closed"
+            # This means the last line was a stray opening fence
+            return content_stripped + "\n"
+    
+    # Normal case: close the unclosed block
+    if not content.endswith("\n"):
+        content += "\n"
+    content += fence_char * 3 + "\n"
     return content

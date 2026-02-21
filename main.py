@@ -828,7 +828,6 @@ async def stream_chat(
     **kwargs: Any,
 ) -> AsyncIterator[str]:
     created = datetime.now(timezone.utc).timestamp()
-    in_code = False  # Track fenced code block state
 
     try:
         stream, latency = await client.chat_streaming(model, messages, **kwargs)
@@ -850,17 +849,13 @@ async def stream_chat(
         }
         yield f"data: {json.dumps(initial_chunk)}\n\n"
 
+        accumulated_content = ""
+
         async for chunk in stream:
             content = chunk.get("message", {}).get("content", "")
             if content:
-                # Update code block state
-                for line in content.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("```"):
-                        if in_code and stripped == "```":
-                            in_code = False
-                        else:
-                            in_code = True
+                accumulated_content += content
+                
                 content_chunk = {
                     'id': chunk_id,
                     'object': 'chat.completion.chunk',
@@ -873,19 +868,33 @@ async def stream_chat(
                 yield f"data: {json.dumps(content_chunk)}\n\n"
 
             if chunk.get("done", False):
-                # If code block still open, close it before finishing
-                if in_code:
-                    fence_chunk = {
-                        'id': chunk_id,
-                        'object': 'chat.completion.chunk',
-                        'created': created,
-                        'model': model,
-                        'choices': [
-                            {'index': 0, 'delta': {'content': "```"}, 'finish_reason': None}
-                        ],
-                    }
-                    yield f"data: {json.dumps(fence_chunk)}\n\n"
-                    in_code = False
+                # Use schemas.py function to handle code blocks properly
+                # This handles both unclosed blocks and stray fences
+                from router.schemas import close_unclosed_code_block
+                
+                closed_content = close_unclosed_code_block(accumulated_content)
+                
+                # If content was modified (fence added or removed), emit the difference
+                if closed_content != accumulated_content:
+                    # Find what was added (closing fence or removal)
+                    diff = closed_content[len(accumulated_content):] if closed_content.startswith(accumulated_content) else ""
+                    
+                    # If we need to add a closing fence (not just remove stray)
+                    if diff.strip():
+                        fence_chunk = {
+                            'id': chunk_id,
+                            'object': 'chat.completion.chunk',
+                            'created': created,
+                            'model': model,
+                            'choices': [
+                                {
+                                    'index': 0,
+                                    'delta': {'content': diff},
+                                    'finish_reason': None,
+                                }
+                            ],
+                        }
+                        yield f"data: {json.dumps(fence_chunk)}\n\n"
 
                 # Add signature if enabled
                 if config.signature_enabled:

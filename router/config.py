@@ -1,6 +1,6 @@
 import logging
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,20 @@ class Settings(BaseSettings):
 
     signature_enabled: bool = Field(default=True)
     signature_format: str = Field(default="\nModel: {model}")
+
+    @field_validator("signature_format", mode="before")
+    @classmethod
+    def process_escape_sequences(cls, v: str) -> str:
+        """Process escape sequences in signature_format from env vars.
+        
+        Environment variables don't interpret escape sequences like \\n.
+        This validator converts \\n to actual newline, \\t to tab, etc.
+        """
+        if isinstance(v, str):
+            v = v.replace("\\n", "\n")
+            v = v.replace("\\t", "\t")
+            v = v.replace("\\r", "\r")
+        return v
 
     polling_interval: int = Field(default=60)
     profile_timeout: int = Field(default=90)  # Increased to 90s for larger models like 14B+
