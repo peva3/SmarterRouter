@@ -1,3 +1,28 @@
+## [2.2.0] - 2026-02-21
+
+### New Features
+
+- **Performance Optimization - Profile & Benchmark Caching**: Added in-memory TTL cache (60-second) for profile and benchmark database queries. This eliminates redundant database queries on every routing decision, significantly reducing latency when cache is warm.
+
+- **Performance Optimization - Query Efficiency**: Changed `_keyword_dispatch` to use `get_benchmarks_for_models(model_names)` instead of fetching all benchmarks. This reduces database load by only fetching data for available models.
+
+- **Performance Optimization - Parallel Model Frequency Fetching**: Changed sequential model frequency fetching to use `asyncio.gather()` for parallel execution, reducing latency when cache is enabled.
+
+- **Cache Pre-warming**: Added `RouterEngine.warmup_caches()` method that pre-warms profile and benchmark caches on startup. Called automatically during server initialization to eliminate first-request latency.
+
+- **Cache Invalidation**: Added `RouterEngine.invalidate_caches()` method and automatic invalidation after benchmark sync completes, ensuring routing decisions use fresh data.
+
+### Improvements
+
+- Updated AGENTS.md with Performance Optimization section documenting the caching strategy
+
+### Test Coverage
+
+- Added `tests/test_caching.py` (7 tests) for cache functionality
+- Test count: 316 tests passing
+
+---
+
 ## [2.1.0] - 2026-02-20
 
 ### New Features

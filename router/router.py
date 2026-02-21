@@ -12,12 +12,21 @@ from typing import Any
 from sqlalchemy import select
 
 from router.backends.base import LLMBackend
-from router.benchmark_db import get_all_benchmarks, get_benchmarks_for_models
+from router.benchmark_db import (
+    get_all_benchmarks,
+    get_benchmarks_for_models,
+    invalidate_all_caches,
+    invalidate_profiles_cache,
+)
 from router.config import settings
 from router.database import get_session
 from router.models import ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
 
 logger = logging.getLogger(__name__)
+
+_PROFILE_CACHE_TTL = 60.0
+_profiles_cache: list[dict] | None = None
+_profiles_cache_time: float = 0.0
 
 
 @dataclass
@@ -279,6 +288,20 @@ class RouterEngine:
         else:
             self.semantic_cache = None
 
+    def warmup_caches(self, model_names: list[str] | None = None) -> None:
+        """Pre-warm caches on startup to avoid first-request latency."""
+        from router.benchmark_db import get_benchmarks_for_models
+
+        self._get_all_profiles()
+        if model_names:
+            get_benchmarks_for_models(model_names)
+        logger.info("Router caches pre-warmed")
+
+    def invalidate_caches(self) -> None:
+        """Invalidate all caches (call when models change)."""
+        invalidate_all_caches()
+        logger.info("Router caches invalidated")
+
     async def select_model(
         self, prompt: str | list[dict], request_obj: Any = None
     ) -> RoutingResult:
@@ -446,7 +469,7 @@ Select the model that best matches the user's prompt needs."""
         self, prompt: str, model_names: list[str], request_obj: Any = None
     ) -> RoutingResult:
         profiles = self._get_all_profiles()
-        benchmarks = get_all_benchmarks()  # Get ALL benchmarks for fuzzy matching
+        benchmarks = get_benchmarks_for_models(model_names)
         feedback_scores = self._get_model_feedback_scores()
 
         if not profiles and not benchmarks:
@@ -463,10 +486,9 @@ Select the model that best matches the user's prompt needs."""
         # Gather model selection frequencies for diversity penalty if cache enabled
         model_frequencies: dict[str, float] = {}
         if self.semantic_cache:
-            # Fetch frequencies for all models (sequential is fine, could parallelize)
-            model_frequencies = {
-                m: await self.semantic_cache.get_model_frequency(m) for m in model_names
-            }
+            freq_tasks = [self.semantic_cache.get_model_frequency(m) for m in model_names]
+            freq_results = await asyncio.gather(*freq_tasks)
+            model_frequencies = {m: f for m, f in zip(model_names, freq_results)}
 
         scores = self._calculate_combined_scores(
             profiles, benchmarks, analysis, model_names, feedback_scores, model_frequencies
@@ -572,10 +594,14 @@ Select the model that best matches the user's prompt needs."""
         )
 
     def _get_all_profiles(self) -> list[dict]:
+        global _profiles_cache, _profiles_cache_time
+        now = time.monotonic()
+        if _profiles_cache is not None and (now - _profiles_cache_time) < _PROFILE_CACHE_TTL:
+            return _profiles_cache
+
         with get_session() as session:
             profiles = session.execute(select(ModelProfile)).scalars().all()
-            # Convert to dicts to avoid session detachment issues
-            return [
+            _profiles_cache = [
                 {
                     "name": p.name,
                     "reasoning": p.reasoning,
@@ -587,6 +613,8 @@ Select the model that best matches the user's prompt needs."""
                 }
                 for p in profiles
             ]
+            _profiles_cache_time = now
+            return _profiles_cache
 
     def _calculate_combined_scores(
         self,

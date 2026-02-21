@@ -25,7 +25,9 @@ class TestSettings:
 
     def test_benchmark_sources_default(self):
         """Test default benchmark sources."""
-        assert settings.benchmark_sources == "huggingface,lmsys"
+        with patch.dict("os.environ", {}, clear=True):
+            default_settings = Settings(_env_file=None)
+            assert default_settings.benchmark_sources == "huggingface,lmsys"
 
     def test_log_level_default(self):
         """Test default log level."""

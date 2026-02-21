@@ -184,6 +184,16 @@ The routing cache provides two layers of lookup:
 - **Thread-Safe Operations**: All cache access is protected by an `asyncio.Lock`, ensuring correct behavior under concurrent load.
 - **Tracks Recent Selections**: Keeps track of model selection frequency for diversity awareness and prevents model monopolization.
 
+### Profile & Benchmark Cache (Database Query Optimization)
+To minimize database round-trips during routing decisions:
+
+- **In-Memory TTL Cache**: Profile and benchmark data is cached in memory with a 60-second TTL
+- **Pre-warming on Startup**: `RouterEngine.warmup_caches()` is called automatically during server initialization to eliminate first-request latency
+- **Smart Invalidation**: Cache is automatically invalidated after benchmark sync completes, ensuring fresh data
+- **Targeted Queries**: Uses `get_benchmarks_for_models(model_names)` instead of fetching all benchmarks, reducing query scope
+
+This optimization prevents redundant database queries on every routing decision when the cache is warm.
+
 ### Response Cache
 - **Full Response Caching**: Caches actual LLM responses, not just routing decisions.
 - **Model-Specific Keys**: Cache key is (model_name, prompt_hash).

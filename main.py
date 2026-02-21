@@ -203,6 +203,13 @@ async def startup_event():
             embed_model=settings.embed_model,
         )
 
+        try:
+            available_models = await app_state.backend.list_models()
+            model_names = [m.name for m in available_models] if available_models else []
+            app_state.router_engine.warmup_caches(model_names)
+        except Exception as e:
+            logger.warning(f"Failed to pre-warm router caches: {e}")
+
     # Initialize VRAM monitor
     vram_monitor: VRAMMonitor | None = None
     if settings.vram_monitor_enabled:
@@ -297,6 +304,9 @@ async def background_sync_task():
                     models = await app_state.backend.list_models()
                     model_names = [m.name for m in models]
                     await sync_benchmarks(model_names)
+                    # Invalidate router caches after benchmark sync
+                    if app_state.router_engine:
+                        app_state.router_engine.invalidate_caches()
 
                 # 2. Profile New Models
                 # This will only profile models that haven't been profiled yet

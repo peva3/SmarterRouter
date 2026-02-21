@@ -1,14 +1,23 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert
 
 from router.database import get_session
 from router.models import BenchmarkSync, ModelBenchmark
 
 logger = logging.getLogger(__name__)
+
+_BENCHMARK_CACHE_TTL = 60.0
+_benchmarks_cache: list[dict] | None = None
+_benchmarks_cache_time: float = 0.0
+_profiles_cache: list[dict] | None = None
+_profiles_cache_time: float = 0.0
+_PROFILE_CACHE_TTL = 60.0
+
+_benchmarks_for_models_cache: dict[frozenset, tuple[float, list[dict]]] = {}
 
 
 def get_benchmark(ollama_name: str) -> ModelBenchmark | None:
@@ -19,10 +28,14 @@ def get_benchmark(ollama_name: str) -> ModelBenchmark | None:
 
 
 def get_all_benchmarks() -> list[dict]:
+    global _benchmarks_cache, _benchmarks_cache_time
+    now = time.monotonic()
+    if _benchmarks_cache is not None and (now - _benchmarks_cache_time) < _BENCHMARK_CACHE_TTL:
+        return _benchmarks_cache
+
     with get_session() as session:
         benchmarks = session.execute(select(ModelBenchmark)).scalars().all()
-        # Convert to dicts to avoid session detachment
-        return [
+        _benchmarks_cache = [
             {
                 "ollama_name": b.ollama_name,
                 "reasoning_score": b.reasoning_score,
@@ -37,11 +50,21 @@ def get_all_benchmarks() -> list[dict]:
             }
             for b in benchmarks
         ]
+        _benchmarks_cache_time = now
+        return _benchmarks_cache
 
 
 def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
     if not model_names:
         return []
+    
+    cache_key = frozenset(model_names)
+    now = time.monotonic()
+    if cache_key in _benchmarks_for_models_cache:
+        cached_time, cached_result = _benchmarks_for_models_cache[cache_key]
+        if (now - cached_time) < _BENCHMARK_CACHE_TTL:
+            return cached_result
+    
     with get_session() as session:
         benchmarks = (
             session.execute(
@@ -50,8 +73,7 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
             .scalars()
             .all()
         )
-        # Convert to dicts to avoid detached instance issues
-        return [
+        result = [
             {
                 "ollama_name": b.ollama_name,
                 "reasoning_score": b.reasoning_score,
@@ -61,6 +83,8 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
             }
             for b in benchmarks
         ]
+        _benchmarks_for_models_cache[cache_key] = (now, result)
+        return result
 
 
 def upsert_benchmark(data: dict[str, Any]) -> None:
@@ -199,3 +223,27 @@ def remove_benchmarks_not_in(model_names: list[str]) -> int:
 
         session.commit()
         return deleted
+
+
+def invalidate_benchmarks_cache() -> None:
+    """Invalidate the benchmarks cache."""
+    global _benchmarks_cache, _benchmarks_cache_time, _benchmarks_for_models_cache
+    _benchmarks_cache = None
+    _benchmarks_cache_time = 0.0
+    _benchmarks_for_models_cache = {}
+    logger.debug("Benchmarks cache invalidated")
+
+
+def invalidate_profiles_cache() -> None:
+    """Invalidate the profiles cache."""
+    global _profiles_cache, _profiles_cache_time
+    _profiles_cache = None
+    _profiles_cache_time = 0.0
+    logger.debug("Profiles cache invalidated")
+
+
+def invalidate_all_caches() -> None:
+    """Invalidate all caches (benchmarks and profiles)."""
+    invalidate_benchmarks_cache()
+    invalidate_profiles_cache()
+    logger.debug("All caches invalidated")
