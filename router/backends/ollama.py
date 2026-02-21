@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaBackend(LLMBackend):
-    """Ollama backend implementation."""
+    """Ollama backend implementation with persistent HTTP client for connection reuse."""
 
     def __init__(
         self,
@@ -29,6 +29,25 @@ class OllamaBackend(LLMBackend):
         self.generation_timeout = generation_timeout  # Longer timeout for generation
         self.models_cache_ttl = models_cache_ttl
         self._models_cache: tuple[list[ModelInfo], float] | None = None  # (models, timestamp)
+        self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create persistent HTTP client for connection reuse."""
+        if self._client is None or self._client.is_closed:
+            async with self._client_lock:
+                if self._client is None or self._client.is_closed:
+                    self._client = httpx.AsyncClient(
+                        timeout=httpx.Timeout(self.generation_timeout, connect=10.0),
+                        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                    )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the HTTP client. Call during shutdown."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     def _full_model_name(self, model: str) -> str:
         """Apply model prefix if configured."""
@@ -45,14 +64,26 @@ class OllamaBackend(LLMBackend):
     ) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         effective_timeout = timeout if timeout is not None else self.timeout
-        async with httpx.AsyncClient(timeout=effective_timeout) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict):
-                logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
-                return {}
-            return data
+        client = await self._get_client()
+        
+        # Create a new client with specific timeout if needed
+        if effective_timeout != self.generation_timeout:
+            async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
+                response = await temp_client.request(method, url, **kwargs)
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                    return {}
+                return data
+        
+        response = await client.request(method, url, **kwargs)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+            return {}
+        return data
 
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests.

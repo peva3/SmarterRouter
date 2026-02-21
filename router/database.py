@@ -152,6 +152,27 @@ def _run_migrations() -> None:
                 ))
                 conn.commit()
         
+        # Create indexes for common query patterns
+        indexes_to_create = [
+            ("idx_model_feedback_model_timestamp", "model_feedback", "model_name, timestamp"),
+            ("idx_routing_decision_selected_model", "routing_decisions", "selected_model"),
+            ("idx_benchmark_sync_last_sync", "benchmark_sync", "last_sync"),
+        ]
+        
+        for index_name, table_name, columns in indexes_to_create:
+            try:
+                result = conn.execute(text(
+                    f"SELECT name FROM sqlite_master WHERE type='index' AND name='{index_name}'"
+                ))
+                if not result.fetchone():
+                    logger.info(f"Creating index: {index_name}")
+                    conn.execute(text(
+                        f"CREATE INDEX {index_name} ON {table_name} ({columns})"
+                    ))
+                    conn.commit()
+            except Exception as e:
+                logger.debug(f"Could not create index {index_name}: {e}")
+        
         logger.info("Database migrations completed")
 
 

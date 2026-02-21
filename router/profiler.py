@@ -678,6 +678,7 @@ class ModelProfiler:
 
 
 async def profile_all_models(client: LLMBackend, force: bool = False) -> list[ProfileResult]:
+    """Profile all models, optionally in parallel based on configuration."""
     models = await client.list_models()
     total_models = len(models)
 
@@ -698,23 +699,68 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
         return []
 
     results: list[ProfileResult] = []
-    for i, model_info in enumerate(new_models, 1):
-        try:
-            profiler = ModelProfiler(
-                client,
-                total_models=len(new_models),
-                current_model_num=i,
-                model_name=model_info.name,
-                model_size_bytes=model_info.size,
-            )
-            result = await profiler.profile_model(model_info.name)
-            if result:
-                results.append(result)
-                logger.info(
-                    f"PROGRESS: Completed {i}/{len(new_models)} models ({(i / len(new_models)) * 100:.1f}%)"
+    parallel_count = max(1, settings.profile_parallel_count)
+    
+    if parallel_count > 1:
+        logger.info(f"Profiling {len(new_models)} models with parallelism={parallel_count}")
+        
+        semaphore = asyncio.Semaphore(parallel_count)
+        completed_count = 0
+        lock = asyncio.Lock()
+        
+        async def profile_single(model_info: ModelInfo, index: int) -> ProfileResult | None:
+            nonlocal completed_count
+            async with semaphore:
+                try:
+                    profiler = ModelProfiler(
+                        client,
+                        total_models=len(new_models),
+                        current_model_num=index,
+                        model_name=model_info.name,
+                        model_size_bytes=model_info.size,
+                    )
+                    result = await profiler.profile_model(model_info.name)
+                    
+                    async with lock:
+                        completed_count += 1
+                        logger.info(
+                            f"PROGRESS: Completed {completed_count}/{len(new_models)} models "
+                            f"({(completed_count / len(new_models)) * 100:.1f}%)"
+                        )
+                    return result
+                except Exception as e:
+                    logger.error(f"Failed to profile {model_info.name}: {e}")
+                    return None
+        
+        tasks = [
+            profile_single(model_info, i)
+            for i, model_info in enumerate(new_models, 1)
+        ]
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for r in task_results:
+            if isinstance(r, ProfileResult):
+                results.append(r)
+            elif isinstance(r, Exception):
+                logger.error(f"Profiling task raised exception: {r}")
+    else:
+        for i, model_info in enumerate(new_models, 1):
+            try:
+                profiler = ModelProfiler(
+                    client,
+                    total_models=len(new_models),
+                    current_model_num=i,
+                    model_name=model_info.name,
+                    model_size_bytes=model_info.size,
                 )
-        except Exception as e:
-            logger.error(f"Failed to profile {model_info.name}: {e}")
+                result = await profiler.profile_model(model_info.name)
+                if result:
+                    results.append(result)
+                    logger.info(
+                        f"PROGRESS: Completed {i}/{len(new_models)} models ({(i / len(new_models)) * 100:.1f}%)"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to profile {model_info.name}: {e}")
 
     logger.info(
         f"PROGRESS: Profiling complete! {len(results)}/{len(new_models)} models profiled successfully"

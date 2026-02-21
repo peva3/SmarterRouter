@@ -47,30 +47,84 @@ class WebSearchSkill(Skill):
 
 
 class CalculatorSkill(Skill):
+    """Safely evaluate mathematical expressions with proper security."""
+    
+    # Maximum result magnitude to prevent DoS
+    MAX_RESULT = 1e15
+    
+    # Only allow these operators (no exponentiation to prevent DoS)
+    ALLOWED_OPERATORS = {"+", "-", "*", "/"}
+
     async def execute(self, **kwargs: Any) -> str:
-        """Safely evaluate a mathematical expression."""
+        """Safely evaluate a mathematical expression using ast parsing."""
         expression = kwargs.get("expression", "")
-        import operator
-
-        allowed_operators = {
-            "+": operator.add,
-            "-": operator.sub,
-            "*": operator.mul,
-            "/": operator.truediv,
-            "^": operator.pow,
-        }
-
+        
+        if not expression:
+            return "Error: expression parameter is required."
+        
+        # Security: limit expression length
+        if len(expression) > 100:
+            return "Error: expression too long (max 100 characters)."
+        
         try:
-            # Basic shunting-yard/RPN would be safer, but for now we'll do a simple split
-            # This is NOT production safe for complex expressions
-            parts = expression.replace(" ", "")
-            for op_symbol, op_func in allowed_operators.items():
-                if op_symbol in parts:
-                    left, right = parts.split(op_symbol, 1)
-                    return str(op_func(float(left), float(right)))
-            return "Error: Invalid or unsupported expression."
+            import ast
+            import operator
+            
+            # Define allowed operations
+            operators = {
+                ast.Add: operator.add,
+                ast.Sub: operator.sub,
+                ast.Mult: operator.mul,
+                ast.Div: operator.truediv,
+                ast.USub: operator.neg,  # Unary minus
+            }
+            
+            def safe_eval(node):
+                """Recursively evaluate AST node with safety checks."""
+                if isinstance(node, ast.Constant):
+                    if isinstance(node.value, (int, float)):
+                        return float(node.value)
+                    raise ValueError("Only numeric values allowed")
+                
+                elif isinstance(node, ast.BinOp):
+                    if type(node.op) not in operators:
+                        raise ValueError(f"Operator not allowed: {type(node.op).__name__}")
+                    
+                    left = safe_eval(node.left)
+                    right = safe_eval(node.right)
+                    result = operators[type(node.op)](left, right)
+                    
+                    # Prevent overflow/DoS
+                    if abs(result) > self.MAX_RESULT:
+                        raise ValueError("Result too large")
+                    return result
+                
+                elif isinstance(node, ast.UnaryOp):
+                    if type(node.op) not in operators:
+                        raise ValueError(f"Unary operator not allowed")
+                    operand = safe_eval(node.operand)
+                    return operators[type(node.op)](operand)
+                
+                else:
+                    raise ValueError(f"Expression type not allowed: {type(node).__name__}")
+            
+            # Parse and validate expression
+            tree = ast.parse(expression, mode="eval")
+            result = safe_eval(tree.body)
+            
+            # Format result nicely
+            if result == int(result):
+                return str(int(result))
+            return str(round(result, 10))
+            
+        except ValueError as e:
+            return f"Error: {e}"
+        except SyntaxError:
+            return "Error: Invalid expression syntax."
+        except ZeroDivisionError:
+            return "Error: Division by zero."
         except Exception as e:
-            return f"Error evaluating expression: {e}"
+            return f"Error evaluating expression: {type(e).__name__}"
 
 
 class SkillsRegistry:

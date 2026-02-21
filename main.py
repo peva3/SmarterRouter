@@ -75,6 +75,30 @@ def get_model_vram_estimate(model_name: str) -> float:
     return settings.vram_default_estimate_gb
 
 
+async def list_models_with_timeout(
+    backend: LLMBackend, 
+    timeout: float = 10.0
+) -> list:
+    """
+    List models with timeout protection.
+    
+    Args:
+        backend: The LLM backend to query
+        timeout: Maximum time to wait (default 10s)
+        
+    Returns:
+        List of ModelInfo objects, or empty list on timeout/error
+    """
+    try:
+        return await asyncio.wait_for(backend.list_models(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout ({timeout}s) waiting for backend.list_models()")
+        return []
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
+        return []
+
+
 from router.skills import skills_registry
 
 
@@ -204,7 +228,7 @@ async def startup_event():
         )
 
         try:
-            available_models = await app_state.backend.list_models()
+            available_models = await list_models_with_timeout(app_state.backend)
             model_names = [m.name for m in available_models] if available_models else []
             app_state.router_engine.warmup_caches(model_names)
         except Exception as e:
@@ -279,6 +303,13 @@ async def shutdown_event():
         if supports_unload(app_state.backend):
             await app_state.backend.unload_model(settings.pinned_model)
 
+    # Close backend HTTP client for connection cleanup
+    if app_state.backend and hasattr(app_state.backend, 'close'):
+        try:
+            await app_state.backend.close()
+        except Exception as e:
+            logger.warning(f"Error closing backend: {e}")
+
 
 async def background_sync_task():
     """Background task to sync benchmarks and profile new models."""
@@ -301,7 +332,7 @@ async def background_sync_task():
                 if should_sync:
                     logger.info("Starting benchmark sync...")
                     # Get available model names to match against benchmarks
-                    models = await app_state.backend.list_models()
+                    models = await list_models_with_timeout(app_state.backend)
                     model_names = [m.name for m in models]
                     await sync_benchmarks(model_names)
                     # Invalidate router caches after benchmark sync
@@ -482,7 +513,7 @@ async def chat_completions(
     try:
         # Model override - skip routing and use specified model
         if model_override:
-            available_models = await app_state.backend.list_models()
+            available_models = await list_models_with_timeout(app_state.backend)
             model_names = [m.name for m in available_models]
 
             # Try exact match first, then partial match
@@ -524,7 +555,7 @@ async def chat_completions(
             logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
         logger.error(f"Routing failed: {e}")
-        models = await app_state.backend.list_models()
+        models = await list_models_with_timeout(app_state.backend)
         if models:
             selected_model = models[0].name
             reasoning = "Fallback to first available model"
@@ -610,7 +641,7 @@ async def chat_completions(
 
     # Get available models for fallback
     try:
-        available_models = await app_state.backend.list_models()
+        available_models = await list_models_with_timeout(app_state.backend)
         fallback_list = [m.name for m in available_models if m.name != selected_model]
         # Put selected_model first in retry list
         fallback_list = [selected_model] + fallback_list
@@ -953,14 +984,38 @@ async def get_profiles(
     request: Request,
     _: Annotated[bool, Depends(verify_admin_token)],
     config: Annotated[Settings, Depends(get_settings)],
+    limit: int = 100,
+    offset: int = 0,
 ):
-    """Get model profiles (requires admin API key if configured)."""
+    """Get model profiles (requires admin API key if configured).
+    
+    Args:
+        limit: Maximum number of profiles to return (default 100, max 1000)
+        offset: Number of profiles to skip (for pagination)
+    """
     await rate_limit_request(request, config, is_admin=True)
+    
+    # Clamp limit to prevent memory exhaustion
+    limit = min(max(1, limit), 1000)
+    offset = max(0, offset)
 
     with get_session() as session:
-        profiles = list(session.query(ModelProfile).all())
+        # Get total count for pagination info
+        from sqlalchemy import func
+        total = session.query(func.count(ModelProfile.id)).scalar()
+        
+        profiles = (
+            session.query(ModelProfile)
+            .order_by(ModelProfile.name)
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
 
         return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
             "profiles": [
                 {
                     "name": p.name,
@@ -982,12 +1037,33 @@ async def get_benchmarks(
     request: Request,
     _: Annotated[bool, Depends(verify_admin_token)],
     config: Annotated[Settings, Depends(get_settings)],
+    limit: int = 100,
+    offset: int = 0,
 ):
-    """Get benchmark data (requires admin API key if configured)."""
+    """Get benchmark data (requires admin API key if configured).
+    
+    Args:
+        limit: Maximum number of benchmarks to return (default 100, max 1000)
+        offset: Number of benchmarks to skip (for pagination)
+    """
     await rate_limit_request(request, config, is_admin=True)
+    
+    # Clamp limit to prevent memory exhaustion
+    limit = min(max(1, limit), 1000)
+    offset = max(0, offset)
 
     with get_session() as session:
-        benchmarks = list(session.query(ModelBenchmark).all())
+        # Get total count for pagination info
+        from sqlalchemy import func
+        total = session.query(func.count(ModelBenchmark.id)).scalar()
+        
+        benchmarks = (
+            session.query(ModelBenchmark)
+            .order_by(ModelBenchmark.ollama_name)
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
 
         last_sync = session.execute(
             select(BenchmarkSync).order_by(BenchmarkSync.id.desc()).limit(1)
@@ -1000,6 +1076,9 @@ async def get_benchmarks(
         sync_status = last_sync.status if last_sync else None
 
         return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
             "benchmarks": [
                 {
                     "ollama_name": b.ollama_name,
@@ -1116,7 +1195,7 @@ async def sync_benchmarks_endpoint(
     
     await rate_limit_request(request, config, is_admin=True)
     
-    models = await app_state.backend.list_models()
+    models = await list_models_with_timeout(app_state.backend)
     model_names = [m.name for m in models]
     
     count, matched = await sync_benchmarks(model_names)
@@ -1226,7 +1305,7 @@ async def explain_routing(
 
     try:
         # Get available models
-        available_models = await app_state.backend.list_models()
+        available_models = await list_models_with_timeout(app_state.backend)
         if not available_models:
             return JSONResponse(
                 {"error": {"message": "No models available", "type": "internal_error"}},

@@ -74,6 +74,7 @@ class TestSemanticCacheEdgeCases:
         import time
         cache = SemanticCache(max_size=10)
         cache.recent_selections = [("model1", time.time())]
+        cache._model_frequency = {"model1": 1}
         
         freq = await cache.get_model_frequency("model1")
         assert freq == 1.0

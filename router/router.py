@@ -47,7 +47,11 @@ CATEGORY_MIN_SIZES = {
 
 
 class SemanticCache:
-    """Smart LRU cache for routing decisions with semantic similarity and response caching."""
+    """Smart LRU cache for routing decisions with semantic similarity and response caching.
+    
+    Optimized with numpy for vectorized similarity search and separate locks for
+    routing and response caches to minimize contention.
+    """
 
     def __init__(
         self,
@@ -56,6 +60,7 @@ class SemanticCache:
         similarity_threshold: float = 0.85,
         embed_model: str | None = None,
         response_max_size: int = 50,
+        embedding_ttl_seconds: int = 86400,  # 24 hours for embeddings
     ):
         self.cache: OrderedDict[str, tuple[RoutingResult, float, list[float] | None, float | None]] = (
             OrderedDict()
@@ -66,11 +71,18 @@ class SemanticCache:
         self.embed_model = embed_model
         self.recent_selections: list[tuple[str, float]] = []
         self.max_recent = 20
-        self._lock = asyncio.Lock()
+        self._routing_lock = asyncio.Lock()
+        self._response_lock = asyncio.Lock()
+        self._embedding_lock = asyncio.Lock()
 
         self.response_cache: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
         self.response_max_size = response_max_size
         self.response_ttl = ttl_seconds
+        
+        # Separate embedding cache with longer TTL (24h default)
+        # Key: prompt hash, Value: (embedding, magnitude, timestamp)
+        self.embedding_cache: dict[str, tuple[list[float], float, float]] = {}
+        self.embedding_ttl = embedding_ttl_seconds
 
         self.stats = {
             "routing_hits": 0,
@@ -78,7 +90,11 @@ class SemanticCache:
             "routing_similarity_hits": 0,
             "response_hits": 0,
             "response_misses": 0,
+            "embedding_cache_hits": 0,
+            "embedding_cache_misses": 0,
         }
+        
+        self._model_frequency: dict[str, int] = {}
 
     def _hash_prompt(self, prompt: str) -> str:
         return hashlib.sha256(prompt.encode()).hexdigest()[:32]
@@ -89,16 +105,80 @@ class SemanticCache:
         dot_product = sum(x * y for x, y in zip(a, b))
         return dot_product / (mag_a * mag_b)
 
+    def _cosine_similarity_batch(
+        self, 
+        query: list[float], 
+        query_mag: float,
+        candidates: list[tuple[str, list[float], float]]
+    ) -> list[tuple[str, float]]:
+        """Vectorized batch cosine similarity using numpy for better performance.
+        
+        Args:
+            query: Query embedding vector
+            query_mag: Magnitude of query vector
+            candidates: List of (key, embedding, magnitude) tuples
+            
+        Returns:
+            List of (key, similarity) tuples sorted by similarity descending
+        """
+        if not candidates:
+            return []
+        
+        try:
+            import numpy as np
+            query_arr = np.array(query, dtype=np.float32)
+            candidate_matrix = np.array([c[1] for c in candidates], dtype=np.float32)
+            mags = np.array([c[2] for c in candidates], dtype=np.float32)
+            keys = [c[0] for c in candidates]
+            
+            dot_products = candidate_matrix @ query_arr
+            similarities = dot_products / (mags * query_mag + 1e-10)
+            
+            results = [(keys[i], float(similarities[i])) for i in range(len(keys))]
+            results.sort(key=lambda x: x[1], reverse=True)
+            return results
+        except ImportError:
+            results = [
+                (c[0], self._cosine_similarity(query, c[1], query_mag, c[2]))
+                for c in candidates
+            ]
+            results.sort(key=lambda x: x[1], reverse=True)
+            return results
+
     async def _get_embedding(self, client: LLMBackend, text: str) -> list[float] | None:
+        """Get embedding for text, using cache if available.
+        
+        Embeddings are cached for 24 hours by default to avoid repeated
+        expensive embedding API calls for the same prompts.
+        """
         if not self.embed_model:
             return None
+        
+        key = self._hash_prompt(text[:8192])
+        current_time = time.time()
+        
+        async with self._embedding_lock:
+            if key in self.embedding_cache:
+                emb, mag, timestamp = self.embedding_cache[key]
+                if current_time - timestamp < self.embedding_ttl:
+                    self.stats["embedding_cache_hits"] += 1
+                    return emb
+                else:
+                    del self.embedding_cache[key]
+        
         try:
             result = await client.embed(self.embed_model, text[:8192])
             embeddings = result.get("embeddings") or result.get("embedding")
             if embeddings:
-                if isinstance(embeddings[0], list):
-                    return embeddings[0]
-                return embeddings[0] if embeddings else None
+                emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings
+                if embeddings:
+                    emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings[0] if embeddings else None
+                    if emb:
+                        mag = sum(x * x for x in emb) ** 0.5
+                        async with self._embedding_lock:
+                            self.embedding_cache[key] = (emb, mag, current_time)
+                        self.stats["embedding_cache_misses"] += 1
+                        return emb
         except Exception as e:
             logger.debug(f"Embedding failed: {e}")
         return None
@@ -107,7 +187,7 @@ class SemanticCache:
         key = self._hash_prompt(prompt)
         current_time = time.time()
 
-        async with self._lock:
+        async with self._routing_lock:
             if key in self.cache:
                 result, timestamp, _, _ = self.cache[key]
                 if current_time - timestamp < self.ttl:
@@ -119,26 +199,27 @@ class SemanticCache:
                     del self.cache[key]
 
             if embedding:
-                best_match = None
-                best_similarity = 0.0
-                best_key = None
                 embedding_mag = sum(x * x for x in embedding) ** 0.5
-
-                for cache_key, (result, timestamp, cache_embedding, cache_mag) in self.cache.items():
-                    if cache_embedding and cache_mag and current_time - timestamp < self.ttl:
-                        similarity = self._cosine_similarity(embedding, cache_embedding, embedding_mag, cache_mag)
-                        if similarity > best_similarity and similarity >= self.similarity_threshold:
-                            best_similarity = similarity
-                            best_match = result
-                            best_key = cache_key
-
-                if best_match and best_key:
-                    self.cache.move_to_end(best_key)
-                    self.stats["routing_similarity_hits"] += 1
-                    logger.debug(
-                        f"Cache hit (similarity={best_similarity:.2f}) for prompt hash: {best_key[:8]}..."
+                candidates = [
+                    (cache_key, cache_emb, cache_mag)
+                    for cache_key, (_, timestamp, cache_emb, cache_mag) in self.cache.items()
+                    if cache_emb and cache_mag and current_time - timestamp < self.ttl
+                ]
+                
+                if candidates:
+                    similarities = self._cosine_similarity_batch(
+                        embedding, embedding_mag, candidates
                     )
-                    return best_match
+                    
+                    for cache_key, similarity in similarities:
+                        if similarity >= self.similarity_threshold:
+                            result = self.cache[cache_key][0]
+                            self.cache.move_to_end(cache_key)
+                            self.stats["routing_similarity_hits"] += 1
+                            logger.debug(
+                                f"Cache hit (similarity={similarity:.2f}) for prompt hash: {cache_key[:8]}..."
+                            )
+                            return result
 
             self.stats["routing_misses"] += 1
             return None
@@ -150,7 +231,7 @@ class SemanticCache:
         embedding: list[float] | None = None,
     ) -> None:
         key = self._hash_prompt(prompt)
-        async with self._lock:
+        async with self._routing_lock:
             mag = sum(x * x for x in embedding) ** 0.5 if embedding else None
             self.cache[key] = (result, time.time(), embedding, mag)
             self.cache.move_to_end(key)
@@ -159,7 +240,12 @@ class SemanticCache:
 
             self.recent_selections.append((result.selected_model, time.time()))
             if len(self.recent_selections) > self.max_recent:
-                self.recent_selections.pop(0)
+                old = self.recent_selections.pop(0)
+                if old[0] in self._model_frequency:
+                    self._model_frequency[old[0]] = max(0, self._model_frequency[old[0]] - 1)
+            
+            self._model_frequency[result.selected_model] = self._model_frequency.get(result.selected_model, 0) + 1
+            
         logger.debug(f"Cached routing decision for: {key[:8]}...")
 
     def _make_response_key(self, model: str, prompt: str, params: dict | None = None) -> tuple:
@@ -178,7 +264,7 @@ class SemanticCache:
         key = self._make_response_key(model, prompt, params)
         current_time = time.time()
 
-        async with self._lock:
+        async with self._response_lock:
             if key in self.response_cache:
                 response, timestamp = self.response_cache[key]
                 if current_time - timestamp < self.response_ttl:
@@ -194,7 +280,7 @@ class SemanticCache:
 
     async def set_response(self, model: str, prompt: str, response: str, params: dict | None = None) -> None:
         key = self._make_response_key(model, prompt, params)
-        async with self._lock:
+        async with self._response_lock:
             self.response_cache[key] = (response, time.time())
             self.response_cache.move_to_end(key)
             if len(self.response_cache) > self.response_max_size:
@@ -203,7 +289,7 @@ class SemanticCache:
 
     async def invalidate_response(self, model: str | None = None) -> int:
         count = 0
-        async with self._lock:
+        async with self._response_lock:
             if model is None:
                 count = len(self.response_cache)
                 self.response_cache.clear()
@@ -215,46 +301,44 @@ class SemanticCache:
         return count
 
     async def get_model_frequency(self, model_name: str) -> float:
-        async with self._lock:
-            if not self.recent_selections:
+        async with self._routing_lock:
+            if not self._model_frequency:
                 return 0.0
-            recent_count = sum(1 for m, _ in self.recent_selections if m == model_name)
-            return recent_count / len(self.recent_selections)
+            total = sum(self._model_frequency.values())
+            if total == 0:
+                return 0.0
+            return self._model_frequency.get(model_name, 0) / total
 
     async def get_stats(self) -> dict[str, Any]:
-        async with self._lock:
-            total_routing = self.stats["routing_hits"] + self.stats["routing_misses"]
-            routing_hit_rate = (
-                self.stats["routing_hits"] / total_routing if total_routing > 0 else 0.0
-            )
-            similarity_rate = self.stats["routing_similarity_hits"] / max(
-                1, self.stats["routing_hits"] + self.stats["routing_similarity_hits"]
-            )
-
-            total_response = self.stats["response_hits"] + self.stats["response_misses"]
-            response_hit_rate = (
-                self.stats["response_hits"] / total_response if total_response > 0 else 0.0
-            )
-
-            return {
-                "routing": {
-                    "size": len(self.cache),
-                    "max_size": self.max_size,
-                    "hits": self.stats["routing_hits"],
-                    "similarity_hits": self.stats["routing_similarity_hits"],
-                    "misses": self.stats["routing_misses"],
-                    "hit_rate": round(routing_hit_rate, 3),
-                    "similarity_rate": round(similarity_rate, 3),
-                },
-                "response": {
-                    "size": len(self.response_cache),
-                    "max_size": self.response_max_size,
-                    "hits": self.stats["response_hits"],
-                    "misses": self.stats["response_misses"],
-                    "hit_rate": round(response_hit_rate, 3),
-                },
-                "recent_selections": len(self.recent_selections),
+        async with self._routing_lock:
+            routing_stats = {
+                "size": len(self.cache),
+                "max_size": self.max_size,
+                "hits": self.stats["routing_hits"],
+                "similarity_hits": self.stats["routing_similarity_hits"],
+                "misses": self.stats["routing_misses"],
             }
+            total_routing = self.stats["routing_hits"] + self.stats["routing_misses"]
+            routing_stats["hit_rate"] = round(
+                self.stats["routing_hits"] / total_routing if total_routing > 0 else 0.0, 3
+            )
+            
+        async with self._response_lock:
+            response_stats = {
+                "size": len(self.response_cache),
+                "max_size": self.response_max_size,
+                "hits": self.stats["response_hits"],
+                "misses": self.stats["response_misses"],
+            }
+            total_response = self.stats["response_hits"] + self.stats["response_misses"]
+            response_stats["hit_rate"] = round(
+                self.stats["response_hits"] / total_response if total_response > 0 else 0.0, 3
+            )
+
+        return {
+            "routing": routing_stats,
+            "response": response_stats,
+        }
 
 
 class RouterEngine:
@@ -445,22 +529,17 @@ Select the model that best matches the user's prompt needs."""
 
         try:
             with get_session() as session:
-                # Simple average score per model
-                # In real prod, use proper aggregation query: SELECT model_name, AVG(score) ...
-                feedbacks = session.execute(select(ModelFeedback)).scalars().all()
-
-                model_scores: dict[str, float] = {}
-                model_counts: dict[str, int] = {}
-
-                for f in feedbacks:
-                    model_scores[f.model_name] = model_scores.get(f.model_name, 0.0) + f.score
-                    model_counts[f.model_name] = model_counts.get(f.model_name, 0) + 1
-
-                return {
-                    name: score / model_counts[name]
-                    for name, score in model_scores.items()
-                    if model_counts.get(name, 0) > 0
-                }
+                from sqlalchemy import func
+                # Use SQL aggregation for O(1) database load instead of O(N) full table scan
+                results = (
+                    session.query(
+                        ModelFeedback.model_name,
+                        func.avg(ModelFeedback.score).label('avg_score')
+                    )
+                    .group_by(ModelFeedback.model_name)
+                    .all()
+                )
+                return {name: float(avg_score) for name, avg_score in results}
         except Exception as e:
             logger.warning(f"Failed to fetch feedback scores: {e}")
             return {}

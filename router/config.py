@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     profile_vram_sample_delay: float = Field(default=2.0)  # Wait after model load before measuring
     profile_vram_samples: int = Field(default=3)  # Take N samples and average
 
+    # Parallel Profiling
+    # Number of models to profile concurrently (default: 1 = sequential)
+    # Set to 2-3 for multi-GPU systems or when models fit in VRAM simultaneously
+    profile_parallel_count: int = Field(default=1)
+
     # Profiling Warmup & Loading
     # Assumed disk read speed (MB/s) for warmup timeout calculation
     # Conservative default (50 MB/s) works for HDDs and SSDs
