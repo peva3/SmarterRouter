@@ -6,7 +6,10 @@
 - [Performance Problems](#performance-problems)
 - [Database Issues](#database-issues)
 - [Docker Issues](#docker-issues)
+- [GPU Issues (All Vendors)](#gpu-issues-all-vendors)
 - [Debug Mode](#debug-mode)
+
+> **GPU Support:** SmarterRouter supports NVIDIA, AMD (ROCm), Intel Arc, and Apple Silicon GPUs. If your GPU isn't detected, check the GPU issues section below for vendor-specific troubleshooting.
 
 ## Common Issues
 
@@ -84,6 +87,10 @@ docker-compose up -d
 
 ---
 
+## GPU Issues (All Vendors)
+
+SmarterRouter auto-detects GPUs from all vendors on startup. Check logs for detection messages.
+
 ### "nvidia-smi not found"
 
 **Symptom:** GPU monitoring disabled; VRAM not tracking.
@@ -105,6 +112,90 @@ docker-compose up -d
    docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
    ```
 4. Restart SmarterRouter with `--gpus all` or `--compatibility`
+
+---
+
+### "AMD GPU not detected"
+
+**Symptom:** AMD GPU present but VRAM monitoring disabled.
+
+**Diagnosis:**
+```bash
+# Check for rocm-smi
+rocm-smi
+
+# Check sysfs entries
+ls /sys/class/drm/card*/device/mem_info_vram_total
+```
+
+**Solutions:**
+1. Install ROCm runtime:
+   ```bash
+   # Ubuntu 22.04
+   sudo amdgpu-install --usecase=rocm,graphics --no-dkms
+   sudo usermod -a -G render,video $USER
+   ```
+2. For Docker, ensure device passthrough:
+   ```yaml
+   devices:
+     - /dev/kfd
+     - /dev/dri
+   ```
+3. Verify AMD vendor ID in sysfs:
+   ```bash
+   cat /sys/class/drm/card*/device/vendor
+   # Should show: 0x1002 for AMD
+   ```
+
+---
+
+### "Intel Arc GPU not detected"
+
+**Symptom:** Intel Arc GPU present but VRAM monitoring disabled.
+
+**Diagnosis:**
+```bash
+# Check for Intel GPU with dedicated memory
+ls /sys/class/drm/card*/device/lmem_total
+
+# Check driver loaded
+lsmod | grep i915
+```
+
+**Solutions:**
+1. Ensure Intel GPU drivers are installed (kernel 5.19+ recommended)
+2. For Docker, ensure device passthrough:
+   ```yaml
+   devices:
+     - /dev/dri
+   ```
+3. Verify Intel vendor ID:
+   ```bash
+   cat /sys/class/drm/card*/device/vendor
+   # Should show: 0x8086 for Intel
+   ```
+
+**Note:** Only Intel Arc dedicated GPUs with local memory (lmem) are supported. Integrated Intel UHD/Iris GPUs use shared system memory and are not monitored.
+
+---
+
+### "Apple Silicon GPU memory incorrect"
+
+**Symptom:** Apple Silicon detected but VRAM estimate is wrong.
+
+**Solutions:**
+1. Manually set unified memory:
+   ```bash
+   # In .env
+   ROUTER_APPLE_UNIFIED_MEMORY_GB=16  # for 16GB Mac
+   ```
+2. Apple Silicon VRAM is estimated as 75% of total RAM by default
+3. Run SmarterRouter natively on macOS host (not in Docker) for accurate detection:
+   ```bash
+   system_profiler SPHardwareDataType | grep "Memory:"
+   ```
+
+**Important:** Docker Desktop on macOS cannot pass GPU to containers. You must run SmarterRouter on the host directly.
 
 ---
 
