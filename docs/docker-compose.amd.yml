@@ -1,0 +1,69 @@
+# Docker Compose for AMD GPUs (ROCm)
+#
+# Requirements:
+#   - AMD GPU with ROCm support:
+#     - Radeon RX 6000/7000 series
+#     - Radeon Instinct (MI series)
+#     - Radeon Pro series
+#   - ROCm runtime installed: https://rocm.docs.amd.com/en/latest/deploy/linux/index.html
+#   - Verify: rocm-smi should work on host
+#
+# Quick Start:
+#   1. Copy this file to your project root: cp docs/docker-compose.amd.yml docker-compose.yml
+#   2. Copy environment template: cp ENV_DEFAULT .env
+#   3. Run: docker-compose up -d
+#
+# Verify GPU access:
+#   docker exec smarterrouter ls /sys/class/drm
+#   docker logs smarterrouter | grep -i "amd\|gpu"
+#
+# Troubleshooting:
+#   - If GPU not detected, check: ls /sys/class/drm/card*/device/mem_info_vram_total
+#   - Ensure user is in render/video groups: groups $USER
+#   - For compute workloads, you may need a ROCm base image (see below)
+#
+# ROCm Base Image Option:
+#   For full ROCm compute support, build from ROCm base:
+#   ```dockerfile
+#   FROM rocm/pytorch:rocm6.0_ubuntu22.04_py3.9_pytorch_2.0.1
+#   COPY . /app
+#   WORKDIR /app
+#   RUN pip install -r requirements.txt
+#   CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "11436"]
+#   ```
+
+services:
+  smarterrouter:
+    image: ghcr.io/peva3/smarterrouter:latest
+    container_name: smarterrouter
+    ports:
+      - "11436:11436"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:rw
+      - type: tmpfs
+        target: /tmp
+    restart: unless-stopped
+    networks:
+      - smarterrouter-network
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11436/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # AMD GPU device passthrough
+    devices:
+      - /dev/kfd                  # AMD Kernel Fusion Driver (required for ROCm)
+      - /dev/dri                  # Direct Rendering Infrastructure (required for GPU access)
+    
+    # Optional: ROCm environment
+    # environment:
+    #   - ROCM_PATH=/opt/rocm
+    #   - HIP_VISIBLE_DEVICES=0     # Limit to specific GPU (0, 1, etc.)
+    #   - ROUTER_VRAM_MAX_TOTAL_GB=16
+
+networks:
+  smarterrouter-network:
+    driver: bridge

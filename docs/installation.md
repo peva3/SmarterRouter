@@ -119,12 +119,28 @@ gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:11436
 
 SmarterRouter supports automatic VRAM monitoring across multiple GPU vendors:
 
-| Vendor | Detection Method | Docker Support |
-|--------|-----------------|----------------|
-| NVIDIA | nvidia-smi | ✅ Full (NVIDIA Container Toolkit) |
-| AMD | rocm-smi or sysfs | ✅ ROCm containers |
-| Intel Arc | sysfs (lmem) | ⚠️ Limited (oneAPI/Level Zero) |
-| Apple Silicon | Unified memory | ❌ Run on host (no GPU passthrough) |
+| Vendor | Detection Method | Docker Support | Template |
+|--------|-----------------|----------------|----------|
+| NVIDIA | nvidia-smi | ✅ Full | [docker-compose.nvidia.yml](docker-compose.nvidia.yml) |
+| AMD | rocm-smi or sysfs | ✅ ROCm containers | [docker-compose.amd.yml](docker-compose.amd.yml) |
+| Intel Arc | sysfs (lmem) | ⚠️ Limited | [docker-compose.intel.yml](docker-compose.intel.yml) |
+| Apple Silicon | Unified memory | ❌ Run on host | [docker-compose.apple.md](docker-compose.apple.md) |
+| Multi-GPU | Combined detection | ✅ Mixed vendors | [docker-compose.multi-gpu.yml](docker-compose.multi-gpu.yml) |
+
+**Quick Start:** Copy the appropriate template to your project root:
+```bash
+# For NVIDIA GPUs
+cp docs/docker-compose.nvidia.yml docker-compose.yml
+
+# For AMD GPUs  
+cp docs/docker-compose.amd.yml docker-compose.yml
+
+# For Intel Arc GPUs
+cp docs/docker-compose.intel.yml docker-compose.yml
+
+# For multi-GPU setups
+cp docs/docker-compose.multi-gpu.yml docker-compose.yml
+```
 
 ### NVIDIA GPUs (Recommended)
 
@@ -133,6 +149,13 @@ NVIDIA provides the best Docker GPU support with the NVIDIA Container Toolkit.
 **Requirements:**
 - NVIDIA GPU with proprietary drivers installed
 - NVIDIA Container Toolkit: <https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/overview.html>
+
+**Quick Setup:**
+```bash
+# Use the NVIDIA template
+cp docs/docker-compose.nvidia.yml docker-compose.yml
+docker-compose --compatibility up -d
+```
 
 **Verify installation:**
 ```bash
@@ -156,6 +179,13 @@ AMD GPUs use ROCm (Radeon Open Compute) for GPU monitoring.
 - AMD GPU with ROCm support (RX 6000/7000 series, Radeon Instinct, Radeon Pro)
 - ROCm runtime installed on host
 
+**Quick Setup:**
+```bash
+# Use the AMD template
+cp docs/docker-compose.amd.yml docker-compose.yml
+docker-compose up -d
+```
+
 **Verify installation:**
 ```bash
 # Check if rocm-smi is available
@@ -164,20 +194,9 @@ rocm-smi
 # Or check sysfs
 ls /sys/class/drm/card*/device/mem_info_vram_total
 ```
-
-**Docker configuration:**
-Edit `docker-compose.yml` and uncomment the AMD GPU section, or use:
-```bash
-docker run -d \
-  --name smarterrouter \
-  --device /dev/kfd --device /dev/dri \
-  -p 11436:11436 \
-  --env-file .env \
-  -v $(pwd)/data:/app/data \
-  ghcr.io/peva3/smarterrouter:latest
 ```
 
-**Note:** For full ROCm support in containers, you may need to use a ROCm base image. See the `docker-compose.yml` for detailed options.
+**Note:** For full ROCm support in containers, you may need to use a ROCm base image. See [docker-compose.amd.yml](docker-compose.amd.yml) for detailed options.
 
 ### Intel Arc GPUs
 
@@ -187,24 +206,20 @@ Intel Arc GPUs use sysfs for memory monitoring via local memory (lmem).
 - Intel Arc A-series GPU (A380, A770, etc.) or Data Center GPU
 - Intel GPU drivers (i915 kernel module)
 
+**Quick Setup:**
+```bash
+# Use the Intel template
+cp docs/docker-compose.intel.yml docker-compose.yml
+docker-compose up -d
+```
+
 **Verify installation:**
 ```bash
 # Check for Intel GPU with dedicated memory
 ls /sys/class/drm/card*/device/lmem_total
 ```
 
-**Docker configuration:**
-```bash
-docker run -d \
-  --name smarterrouter \
-  --device /dev/dri \
-  -p 11436:11436 \
-  --env-file .env \
-  -v $(pwd)/data:/app/data \
-  ghcr.io/peva3/smarterrouter:latest
-```
-
-**Note:** Intel GPU support in Docker requires the device to be passed through. Compute workloads may need oneAPI/Level Zero setup.
+**Note:** Intel GPU support in Docker requires the device to be passed through. Compute workloads may need oneAPI/Level Zero setup. See [docker-compose.intel.yml](docker-compose.intel.yml) for details.
 
 ### Apple Silicon (M1/M2/M3)
 
@@ -212,7 +227,9 @@ Apple Silicon uses unified memory where CPU and GPU share system RAM. VRAM monit
 
 **Important:** Docker Desktop on macOS **cannot pass GPU to containers**. You must run SmarterRouter directly on the host (not in Docker) for Apple Silicon GPU support.
 
-**Native installation:**
+See [docker-compose.apple.md](docker-compose.apple.md) for complete native installation instructions.
+
+**Quick Start:**
 ```bash
 # Clone and setup
 git clone https://github.com/peva3/SmarterRouter.git
@@ -221,38 +238,38 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Configure for Apple Silicon
-echo "ROUTER_APPLE_UNIFIED_MEMORY_GB=16" >> .env  # Optional: set if auto-detect fails
+# Configure for Apple Silicon (optional)
+echo "ROUTER_APPLE_UNIFIED_MEMORY_GB=16" >> .env  # Set if auto-detect fails
 
 # Run
 python -m uvicorn main:app --host 0.0.0.0 --port 11436
 ```
 
-**Configuration options:**
-- `ROUTER_APPLE_UNIFIED_MEMORY_GB`: Override auto-detected RAM (e.g., 16 for 16GB Mac)
-- Default GPU allocation: 75% of system RAM
-
 ### Multi-GPU Setups
 
-SmarterRouter automatically detects all GPUs across vendors:
+SmarterRouter automatically detects all GPUs across vendors. For mixed GPU setups (e.g., NVIDIA + AMD, or all three), use the multi-GPU template:
 
 ```bash
-# Mixed NVIDIA + AMD setup
-# Both will be detected and combined for VRAM tracking
-docker run -d \
-  --name smarterrouter \
-  --gpus all \
-  --device /dev/kfd --device /dev/dri \
-  -p 11436:11436 \
-  --env-file .env \
-  -v $(pwd)/data:/app/data \
-  ghcr.io/peva3/smarterrouter:latest
+# Copy the multi-GPU template
+cp docs/docker-compose.multi-gpu.yml docker-compose.yml
+
+# Edit to uncomment the sections for your specific GPUs
+nano docker-compose.yml
+
+# Run with NVIDIA support (if included)
+docker-compose --compatibility up -d
 ```
 
 **Multi-GPU configuration:**
-- Set `ROUTER_VRAM_MAX_TOTAL_GB` to limit total VRAM usage
+- Set `ROUTER_VRAM_MAX_TOTAL_GB` to limit total VRAM usage across all GPUs
 - GPUs are indexed globally (0, 1, 2, ...) regardless of vendor
 - Check `/admin/vram` endpoint to see detected GPUs
+
+**Example combinations:**
+- **NVIDIA + AMD**: Uncomment both deploy.resources (NVIDIA) and devices (AMD)
+- **NVIDIA + Intel**: Uncomment deploy.resources (NVIDIA) and devices (Intel)
+- **AMD + Intel**: Uncomment devices section only
+- **All three**: Uncomment all GPU sections
 
 ### No GPU / CPU-Only Mode
 

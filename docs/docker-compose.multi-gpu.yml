@@ -1,0 +1,177 @@
+# Docker Compose for Multi-GPU Setups (Mixed Vendors)
+#
+# This configuration supports multiple GPUs from different vendors.
+# SmarterRouter will automatically detect all GPUs and combine their VRAM.
+#
+# Supported combinations:
+#   - NVIDIA + AMD
+#   - NVIDIA + Intel
+#   - AMD + Intel
+#   - NVIDIA + AMD + Intel
+#
+# Note: Apple Silicon cannot be combined with other GPUs (runs on host only)
+#
+# Requirements:
+#   - All relevant drivers installed for each GPU vendor
+#   - NVIDIA Container Toolkit (for NVIDIA GPUs)
+#   - ROCm runtime (for AMD GPUs)
+#   - Intel i915 driver (for Intel GPUs)
+#
+# Quick Start:
+#   1. Copy this file to your project root: cp docs/docker-compose.multi-gpu.yml docker-compose.yml
+#   2. Copy environment template: cp ENV_DEFAULT .env
+#   3. Edit to uncomment only the GPU types you have
+#   4. Run: docker-compose --compatibility up -d (for NVIDIA)
+#      OR: docker-compose up -d (without NVIDIA)
+#
+# Verify GPU detection:
+#   docker logs smarterrouter | grep -i "gpu\|vram"
+
+services:
+  smarterrouter:
+    image: ghcr.io/peva3/smarterrouter:latest
+    container_name: smarterrouter
+    ports:
+      - "11436:11436"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:rw
+      - type: tmpfs
+        target: /tmp
+    restart: unless-stopped
+    networks:
+      - smarterrouter-network
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11436/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # =========================================================================
+    # MULTI-GPU CONFIGURATION
+    # Uncomment the sections for the GPUs you have
+    # =========================================================================
+
+    # -------------------------------------------------------------------------
+    # NVIDIA GPUs (use with deploy.resources)
+    # -------------------------------------------------------------------------
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all              # Use all NVIDIA GPUs
+              capabilities: [gpu]
+
+    # -------------------------------------------------------------------------
+    # AMD GPUs (use with devices)
+    # -------------------------------------------------------------------------
+    # Uncomment if you have AMD GPUs:
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+
+    # -------------------------------------------------------------------------
+    # Intel GPUs (use with devices)
+    # -------------------------------------------------------------------------
+    # Uncomment if you have Intel Arc GPUs (add to devices list above):
+    # devices:
+    #   - /dev/dri
+
+    # -------------------------------------------------------------------------
+    # NVIDIA + AMD Combined
+    # -------------------------------------------------------------------------
+    # For systems with both NVIDIA and AMD GPUs, combine both configurations:
+    # 
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+
+    # -------------------------------------------------------------------------
+    # NVIDIA + Intel Combined
+    # -------------------------------------------------------------------------
+    # For systems with both NVIDIA and Intel GPUs:
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # devices:
+    #   - /dev/dri
+
+    # -------------------------------------------------------------------------
+    # AMD + Intel Combined
+    # -------------------------------------------------------------------------
+    # For systems with both AMD and Intel GPUs (no NVIDIA):
+    #
+    # devices:
+    #   - /dev/kfd              # AMD
+    #   - /dev/dri              # Both AMD and Intel
+
+    # -------------------------------------------------------------------------
+    # NVIDIA + AMD + Intel Combined
+    # -------------------------------------------------------------------------
+    # For systems with all three GPU types:
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+
+    # =========================================================================
+    # ENVIRONMENT CONFIGURATION
+    # =========================================================================
+    # environment:
+    #   # Total VRAM limit across all GPUs (leave some buffer)
+    #   - ROUTER_VRAM_MAX_TOTAL_GB=48
+    #
+    #   # Optional: Pin a model to keep in VRAM
+    #   - ROUTER_PINNED_MODEL=phi3:mini
+    #
+    #   # Auto-unload when VRAM is pressured
+    #   - ROUTER_VRAM_AUTO_UNLOAD_ENABLED=true
+    #   - ROUTER_VRAM_UNLOAD_THRESHOLD_PCT=85
+
+networks:
+  smarterrouter-network:
+    driver: bridge
+
+# =========================================================================
+# EXAMPLE CONFIGURATIONS
+# =========================================================================
+
+# Example: 2x NVIDIA RTX 3090 + 1x AMD Radeon Pro
+# ---
+# Total VRAM: 48GB (2x24) + 16GB = 64GB
+# Recommended ROUTER_VRAM_MAX_TOTAL_GB: 60 (leave 4GB buffer)
+#
+# deploy:
+#   resources:
+#     reservations:
+#       devices:
+#         - driver: nvidia
+#           count: all
+#           capabilities: [gpu]
+# devices:
+#   - /dev/kfd
+#   - /dev/dri
+# environment:
+#   - ROUTER_VRAM_MAX_TOTAL_GB=60
