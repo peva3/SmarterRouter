@@ -3,11 +3,13 @@
 # GPU SUPPORT: Uncomment the section that matches your GPU setup below.
 # SmarterRouter auto-detects GPUs on startup and logs what was found.
 #
-# QUICK START (NVIDIA - Most Common):
-#   docker-compose --compatibility up -d
-#   OR: docker compose up -d --gpus all
+# QUICK START:
+#   - NVIDIA: docker-compose --compatibility up -d
+#   - AMD:    Comment out deploy section, uncomment devices section, then docker-compose up -d
+#   - Intel:  Comment out deploy section, uncomment devices section, then docker-compose up -d
 #
-# For other GPUs, see the commented sections below.
+# IMPORTANT: The `deploy` section is ONLY for NVIDIA. AMD/Intel use `devices` at service level.
+# See docs/docker-compose.amd.yml, docs/docker-compose.intel.yml for ready-to-use templates.
 
 services:
   smarterrouter:
@@ -35,11 +37,11 @@ services:
       start_period: 10s
 
     # =========================================================================
-    # GPU CONFIGURATION - Uncomment the section for your GPU(s)
+    # GPU CONFIGURATION - Choose ONE section below
     # =========================================================================
 
     # -------------------------------------------------------------------------
-    # NVIDIA GPU (Recommended - Full Docker Support)
+    # NVIDIA GPU (Default - Full Docker Support)
     # -------------------------------------------------------------------------
     # Requirements:
     #   - NVIDIA drivers installed on host
@@ -48,6 +50,8 @@ services:
     # Usage:
     #   docker-compose --compatibility up -d
     #   OR (newer Docker Compose): docker compose up -d --gpus all
+    #
+    # NOTE: For AMD or Intel GPUs, COMMENT OUT this entire deploy section!
     #
     deploy:
       resources:
@@ -58,53 +62,41 @@ services:
               capabilities: [gpu]
 
     # -------------------------------------------------------------------------
-    # AMD GPU (ROCm)
+    # AMD GPU (ROCm) - COMMENT OUT NVIDIA deploy section above first!
     # -------------------------------------------------------------------------
     # Requirements:
     #   - AMD GPU with ROCm support (RX 6000/7000, Radeon Instinct, Radeon Pro)
     #   - ROCm runtime installed: https://rocm.docs.amd.com/en/latest/deploy/linux/index.html
     #
-    # Usage: Uncomment the lines below and comment out the NVIDIA deploy section above
+    # IMPORTANT: Comment out the entire 'deploy' section above before uncommenting!
+    # The 'devices' section below goes at SERVICE level, NOT inside deploy.
     #
     # devices:
     #   - /dev/kfd              # AMD Kernel Fusion Driver
     #   - /dev/dri              # Direct Rendering Infrastructure
     # environment:
-    #   - ROCM_PATH=/opt/rocm   # If using ROCm base image
-    #
-    # For full ROCm compute support, you may need to use a ROCm base image:
-    # image: rocm/pytorch:rocm6.0_ubuntu22.04_py3.9_pytorch_2.0.1
-    # (Then install SmarterRouter dependencies inside)
+    #   - ROCM_PATH=/opt/rocm   # Optional: if using ROCm base image
 
     # -------------------------------------------------------------------------
-    # Intel Arc GPU
+    # Intel Arc GPU - COMMENT OUT NVIDIA deploy section above first!
     # -------------------------------------------------------------------------
     # Requirements:
     #   - Intel Arc A-series GPU (A380, A770, etc.)
     #   - Intel GPU drivers (i915 kernel module)
-    #   - Optional: Intel oneAPI Base Toolkit for compute
     #
-    # Usage: Uncomment the lines below and comment out the NVIDIA deploy section above
+    # IMPORTANT: Comment out the entire 'deploy' section above before uncommenting!
     #
     # devices:
     #   - /dev/dri              # Direct Rendering Infrastructure
     # environment:
-    #   - LEVEL_ZERO_DEVICE=0   # For oneAPI/Level Zero
+    #   - LEVEL_ZERO_DEVICE=0   # Optional: For oneAPI/Level Zero
 
     # -------------------------------------------------------------------------
-    # Multi-GPU Setup (NVIDIA + AMD)
+    # Multi-GPU (NVIDIA + AMD) - Keep deploy AND add devices
     # -------------------------------------------------------------------------
-    # For systems with both NVIDIA and AMD GPUs:
-    # 1. Uncomment BOTH the NVIDIA deploy section AND AMD devices
-    # 2. SmarterRouter will detect and combine VRAM from all GPUs
+    # For systems with both NVIDIA and AMD GPUs, keep the deploy section
+    # AND uncomment the devices section below:
     #
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
     # devices:
     #   - /dev/kfd
     #   - /dev/dri
@@ -112,11 +104,8 @@ services:
     # -------------------------------------------------------------------------
     # CPU-Only / No GPU
     # -------------------------------------------------------------------------
-    # If you don't have a GPU or want to disable VRAM monitoring:
-    # 1. Comment out ALL GPU sections above
-    # 2. Add to your .env file: ROUTER_VRAM_MONITOR_ENABLED=false
-    #
-    # SmarterRouter will still work but without VRAM-based model management.
+    # Comment out ALL GPU sections above and add to your .env:
+    # ROUTER_VRAM_MONITOR_ENABLED=false
 
     # =========================================================================
     # END GPU CONFIGURATION
@@ -125,20 +114,3 @@ services:
 networks:
   smarterrouter-network:
     driver: bridge
-
-# =========================================================================
-# OPTIONAL: Additional Services
-# =========================================================================
-
-# Redis for distributed rate limiting (uncomment if needed)
-# redis:
-#   image: redis:7-alpine
-#   container_name: smarterrouter-redis
-#   ports:
-#     - "6379:6379"
-#   volumes:
-#     - redis-data:/data
-#   restart: unless-stopped
-#
-# volumes:
-#   redis-data:

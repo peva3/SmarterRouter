@@ -341,7 +341,7 @@ class ModelProfiler:
                     logger.warning(f"Profile timeout for {model} on {category} prompt {prompt_idx + 1}")
                     return float(effective_timeout * 1000), "", prompt
                 except Exception as e:
-                    logger.error(f"Profile error for {model}: {e}")
+                    logger.error(f"Profile error for {model}: {type(e).__name__}: {e}")
                     return 0.0, "", prompt
         
         # Process all prompts concurrently

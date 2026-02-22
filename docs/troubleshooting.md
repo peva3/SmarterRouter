@@ -115,6 +115,45 @@ SmarterRouter auto-detects GPUs from all vendors on startup. Check logs for dete
 
 ---
 
+### "AMD APU shows wrong VRAM (e.g., 7.7GB instead of 58GB)"
+
+**Symptom:** AMD APU (Ryzen AI, Radeon 800M series) detected with small VRAM instead of full unified memory.
+
+**Diagnosis:**
+```bash
+# Check what's being reported
+cat /sys/class/drm/card*/device/mem_info_vram_total
+cat /sys/class/drm/card*/device/mem_info_gtt_total
+
+# VRAM total should be small (< 8GB) for APUs
+# GTT total should be large (~system RAM) for APUs
+```
+
+**Explanation:**
+APUs have two memory pools:
+- **VRAM** (mem_info_vram_*): Small BIOS carve-out (512MB-8GB)
+- **GTT** (mem_info_gtt_*): Unified memory pool (actual usable GPU memory)
+
+SmarterRouter auto-detects APUs (VRAM < 4GB) and uses GTT for total memory.
+
+**Solutions:**
+1. **Check BIOS UMA Buffer** - Should be set to minimum (512MB-2GB):
+   - Large UMA buffer wastes RAM and confuses detection
+   - GTT pool is the real usable memory, not VRAM
+
+2. **Manual Override** if detection still fails:
+   ```bash
+   # In .env
+   ROUTER_AMD_UNIFIED_MEMORY_GB=58  # ~90% of your RAM
+   ```
+
+3. **Verify ROCm architecture** (for gfx1150/gfx1151):
+   ```bash
+   export HSA_OVERRIDE_GFX_VERSION=11.5.1
+   ```
+
+---
+
 ### "AMD GPU not detected"
 
 **Symptom:** AMD GPU present but VRAM monitoring disabled.

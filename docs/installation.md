@@ -198,6 +198,51 @@ ls /sys/class/drm/card*/device/mem_info_vram_total
 
 **Note:** For full ROCm support in containers, you may need to use a ROCm base image. See [docker-compose.amd.yml](docker-compose.amd.yml) for detailed options.
 
+#### AMD APUs (Unified Memory)
+
+AMD APUs (Accelerated Processing Units) like Ryzen AI 300 series with Radeon 800M graphics use **unified memory** where CPU and GPU share system RAM. This requires special configuration.
+
+**Supported APUs:**
+- Ryzen AI 9 HX 370 (Radeon 890M)
+- Ryzen AI 9 HX 470 (Radeon 890M)
+- Ryzen 8000G series (Radeon 780M/760M)
+- Ryzen 5000/6000 mobile series with Radeon Graphics
+
+**Auto-Detection:**
+SmarterRouter automatically detects APUs and uses GTT (Graphics Translation Table) to report the unified memory pool, not the small BIOS VRAM carve-out.
+
+**BIOS Configuration (Critical for APUs):**
+1. Enter BIOS/UEFI settings
+2. Find "UMA Frame Buffer Size" or "UMA Mode" (often under Advanced > NB Configuration)
+3. **Set to minimum (512MB - 2GB)** - NOT maximum!
+   - Why? The BIOS setting is a VRAM *carve-out* that reduces available system RAM
+   - APUs use GTT for actual GPU memory, which dynamically allocates from system RAM
+   - Large carve-out just wastes RAM; GTT pool is the real usable memory
+4. Save and reboot
+
+**Manual Override (if auto-detection fails):**
+```bash
+# In .env - set to ~90% of your system RAM for the GPU
+# Example: 64GB system -> set ~58GB
+ROUTER_AMD_UNIFIED_MEMORY_GB=58
+```
+
+**Verification:**
+```bash
+# Check GTT pool size (actual unified memory)
+cat /sys/class/drm/card*/device/mem_info_gtt_total
+# Divide by 1073741824 to get GB
+
+# Check VRAM carve-out (usually small for APUs)
+cat /sys/class/drm/card*/device/mem_info_vram_total
+```
+
+**Architecture Override (for gfx1150/gfx1151):**
+Some newer APUs need a ROCm architecture override:
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.5.1
+```
+
 ### Intel Arc GPUs
 
 Intel Arc GPUs use sysfs for memory monitoring via local memory (lmem).

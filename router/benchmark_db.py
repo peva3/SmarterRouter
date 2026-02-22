@@ -94,13 +94,11 @@ def upsert_benchmark(data: dict[str, Any]) -> None:
 def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
     """Bulk upsert benchmarks using efficient single-transaction approach.
     
-    Uses SQLAlchemy bulk operations with ON CONFLICT for maximum performance.
-    Returns the number of benchmarks that were upserted.
+    Returns the number of benchmarks that were processed.
     """
     if not benchmarks:
         return 0
 
-    # Whitelist of allowed ModelBenchmark columns
     ALLOWED_BENCHMARK_FIELDS = {
         "ollama_name",
         "full_name",
@@ -126,7 +124,6 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         "last_updated",
     }
 
-    # Pre-process all items
     processed = []
     for data in benchmarks:
         cleaned = {}
@@ -140,59 +137,35 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                 continue
             cleaned[k] = v
         
-        if cleaned:
+        if cleaned and "ollama_name" in cleaned:
             cleaned["last_updated"] = datetime.now(timezone.utc)
             processed.append(cleaned)
 
     if not processed:
         return 0
 
+    count = 0
     with get_session() as session:
-        # Use SQLAlchemy bulk upsert with ON CONFLICT
-        # This is much faster than individual commits
-        try:
-            from sqlalchemy.dialects.sqlite import insert
-            
-            stmt = insert(ModelBenchmark).values(processed)
-            
-            # Define update rules for each column on conflict
-            update_dict = {
-                col: getattr(stmt.excluded, col) 
-                for col in ALLOWED_BENCHMARK_FIELDS 
-                if col not in ("ollama_name",)  # Don't update primary key
-            }
-            
-            # Special handling for datetime comparisons
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["ollama_name"],
-                set_=update_dict
-            )
-            
-            result = session.execute(stmt)
-            session.commit()
-            return result.rowcount
-            
-        except Exception as e:
-            logger.error(f"Bulk upsert failed: {e}")
-            session.rollback()
-            # Fallback to individual inserts if bulk fails
-            count = 0
-            for cleaned in processed:
+        for cleaned in processed:
+            try:
                 existing = session.query(ModelBenchmark).filter(
                     ModelBenchmark.ollama_name == cleaned.get("ollama_name")
                 ).first()
                 
                 if existing:
                     for k, v in cleaned.items():
-                        if k != "ollama_name":
+                        if k not in ("ollama_name",):
                             setattr(existing, k, v)
                 else:
                     safe_data = {k: v for k, v in cleaned.items() if k in ALLOWED_BENCHMARK_FIELDS}
                     session.add(ModelBenchmark(**safe_data))
                 count += 1
-            
-            session.commit()
-            return count
+            except Exception as e:
+                logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
+        
+        session.commit()
+
+    return count
 
 
 def get_last_sync() -> datetime | None:

@@ -1,3 +1,48 @@
+## [2.1.2] - 2026-02-22
+
+### AMD APU Unified Memory Support
+
+This release adds comprehensive support for AMD APUs (Accelerated Processing Units) with unified memory architecture, such as the Ryzen AI 300 series with Radeon 800M graphics.
+
+#### APU Detection Improvements
+
+- **Automatic APU Detection**: AMD GPUs with <4GB VRAM are now detected as APUs. The backend automatically falls back to sysfs GTT (Graphics Translation Table) pool instead of the small BIOS VRAM carve-out to report the true unified memory available.
+
+- **GTT Pool Detection**: APUs use GTT pool for actual GPU memory, not the BIOS VRAM carve-out. The backend now correctly reads `mem_info_gtt_*` sysfs entries for APUs, reporting ~58GB usable memory on a 64GB system instead of the misleading 2-8GB VRAM.
+
+- **rocm-smi Fallback**: When rocm-smi reports VRAM below the APU cutoff, the backend automatically falls back to sysfs GTT detection, ensuring correct unified memory reporting.
+
+### Intel GPU Driver Support
+
+- **Intel xe Driver Support**: Added support for Intel's new `xe` driver (used by Battlemage/Xe2 GPUs like Arc B580). The xe driver uses different sysfs paths than the traditional i915 driver. The backend now detects which driver is in use and queries VRAM accordingly.
+
+- **Driver Detection**: Intel backend now checks driver symlink to distinguish between i915 (Arc A-series) and xe (Arc B-series) drivers.
+
+#### Configuration
+
+- **New Setting**: `ROUTER_AMD_UNIFIED_MEMORY_GB` - Manual override for AMD APU unified memory size. Set to ~90% of your system RAM if auto-detection fails. Example: `ROUTER_AMD_UNIFIED_MEMORY_GB=58` for a 64GB system.
+
+#### Documentation
+
+- **AMD APU BIOS Guide**: Added detailed BIOS UMA Frame Buffer configuration guidance. The UMA buffer should be set to **minimum** (512MB-2GB), not maximum, because GTT is the actual usable memory pool.
+
+- **Troubleshooting**: Added AMD APU-specific troubleshooting section for wrong VRAM detection issues.
+
+- **Architecture Deep Dive**: Added unified memory architecture explanation to `DEEPDIVE.md`.
+
+### Bug Fixes
+
+- **Empty String Env Vars**: Fixed pydantic validation error when environment variables are set to empty strings (e.g., `ROUTER_VRAM_MAX_TOTAL_GB=`). Field validator now converts empty strings to `None`.
+
+- **Benchmark DB Upsert**: Fixed `bulk_upsert_benchmarks()` error with `None` values for optional fields. Now properly handles missing benchmark data.
+
+### Test Coverage
+
+- Test count: 333 tests passing
+- Added `tests/test_amd_backend.py` (16 tests) covering APU detection, GTT pool querying, and manual override functionality
+
+---
+
 ## [2.1.1] - 2026-02-21
 
 ### Performance Optimizations

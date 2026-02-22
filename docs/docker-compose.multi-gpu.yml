@@ -20,8 +20,11 @@
 # Quick Start:
 #   1. Copy this file to your project root: cp docs/docker-compose.multi-gpu.yml docker-compose.yml
 #   2. Copy environment template: cp ENV_DEFAULT .env
-#   3. Edit to uncomment only the GPU types you have
-#   4. Run: docker-compose --compatibility up -d (for NVIDIA)
+#   3. If using AMD GPUs, get group IDs and add to .env:
+#        echo "RENDER_GID=$(getent group render | cut -d: -f3)" >> .env
+#        echo "VIDEO_GID=$(getent group video | cut -d: -f3)" >> .env
+#   4. Edit to uncomment only the GPU types you have
+#   5. Run: docker-compose --compatibility up -d (for NVIDIA)
 #      OR: docker-compose up -d (without NVIDIA)
 #
 # Verify GPU detection:
@@ -66,12 +69,15 @@ services:
               capabilities: [gpu]
 
     # -------------------------------------------------------------------------
-    # AMD GPUs (use with devices)
+    # AMD GPUs (use with devices + group_add)
     # -------------------------------------------------------------------------
     # Uncomment if you have AMD GPUs:
     # devices:
     #   - /dev/kfd
     #   - /dev/dri
+    # group_add:
+    #   - ${RENDER_GID:-109}        # Get with: getent group render | cut -d: -f3
+    #   - ${VIDEO_GID:-44}          # Get with: getent group video | cut -d: -f3
 
     # -------------------------------------------------------------------------
     # Intel GPUs (use with devices)
@@ -95,6 +101,9 @@ services:
     # devices:
     #   - /dev/kfd
     #   - /dev/dri
+    # group_add:                      # Required for AMD
+    #   - ${RENDER_GID:-109}
+    #   - ${VIDEO_GID:-44}
 
     # -------------------------------------------------------------------------
     # NVIDIA + Intel Combined
@@ -119,6 +128,9 @@ services:
     # devices:
     #   - /dev/kfd              # AMD
     #   - /dev/dri              # Both AMD and Intel
+    # group_add:                # Required for AMD
+    #   - ${RENDER_GID:-109}
+    #   - ${VIDEO_GID:-44}
 
     # -------------------------------------------------------------------------
     # NVIDIA + AMD + Intel Combined
@@ -135,6 +147,9 @@ services:
     # devices:
     #   - /dev/kfd
     #   - /dev/dri
+    # group_add:                      # Required for AMD
+    #   - ${RENDER_GID:-109}
+    #   - ${VIDEO_GID:-44}
 
     # =========================================================================
     # ENVIRONMENT CONFIGURATION
@@ -173,5 +188,8 @@ networks:
 # devices:
 #   - /dev/kfd
 #   - /dev/dri
+# group_add:
+#   - ${RENDER_GID:-109}
+#   - ${VIDEO_GID:-44}
 # environment:
 #   - ROUTER_VRAM_MAX_TOTAL_GB=60

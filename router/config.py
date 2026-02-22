@@ -46,6 +46,23 @@ class Settings(BaseSettings):
             v = v.replace("\\r", "\r")
         return v
 
+    @field_validator(
+        "vram_max_total_gb",
+        "apple_unified_memory_gb",
+        "amd_unified_memory_gb",
+        mode="before",
+    )
+    @classmethod
+    def empty_str_to_none(cls, v):
+        """Convert empty strings to None for optional float fields.
+        
+        Environment variables set to empty (e.g., ROUTER_VRAM_MAX_TOTAL_GB=)
+        come through as empty strings, which can't be parsed as floats.
+        """
+        if v == "" or v is None:
+            return None
+        return v
+
     polling_interval: int = Field(default=60)
     profile_timeout: int = Field(default=90)  # Increased to 90s for larger models like 14B+
     generation_timeout: int = Field(
@@ -135,6 +152,11 @@ class Settings(BaseSettings):
     apple_unified_memory_gb: float | None = Field(
         default=None
     )  # Total unified memory in GB (for M1/M2/M3). If not set, auto-detects from system.
+
+    # AMD APU specific configuration
+    amd_unified_memory_gb: float | None = Field(
+        default=None
+    )  # Total unified memory in GB for AMD APUs. If not set, auto-detects from GTT pool.
 
     # VRAM Profiling
     profile_measure_vram: bool = Field(default=True)  # Measure actual VRAM during profiling

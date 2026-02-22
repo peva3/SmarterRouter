@@ -68,6 +68,7 @@ class VRAMMonitor:
         app_state: Optional[Any] = None,
         log_interval: int = 60,
         apple_unified_memory_gb: Optional[float] = None,
+        amd_unified_memory_gb: Optional[float] = None,
     ):
         self.interval = interval
         self.total_vram_gb = total_vram_gb
@@ -80,7 +81,10 @@ class VRAMMonitor:
         self._last_log_time = 0
 
         # NEW: Multi-vendor GPU backend manager
-        self.gpu_manager = GPUBackendManager(apple_unified_memory_gb=apple_unified_memory_gb)
+        self.gpu_manager = GPUBackendManager(
+            apple_unified_memory_gb=apple_unified_memory_gb,
+            amd_unified_memory_gb=amd_unified_memory_gb,
+        )
         self.has_gpu = self.gpu_manager.has_gpus
 
     @property

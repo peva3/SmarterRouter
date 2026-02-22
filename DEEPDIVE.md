@@ -72,6 +72,18 @@ The endpoint requires admin authentication if `ROUTER_ADMIN_API_KEY` is set.
 
 **Multi-GPU Support**: The VRAM monitor automatically detects all NVIDIA GPUs and aggregates their memory. The `total_vram_gb` used by the manager is the sum of all GPU memory. The `/admin/vram` endpoint also reports per‑GPU breakdowns, allowing you to see utilization on each device. The router does not currently pin models to specific GPUs; it relies on the backend's default device placement.
 
+**AMD APU Unified Memory**: AMD APUs (Accelerated Processing Units) like the Ryzen AI 300 series with Radeon 800M graphics use a unified memory architecture where CPU and GPU share system RAM. The VRAM monitor handles this specially:
+
+- **Detection**: GPUs with <4GB VRAM are detected as APUs
+- **Memory Source**: Uses GTT (Graphics Translation Table) pool instead of VRAM carve-out
+- **GTT vs VRAM**: 
+  - `mem_info_vram_*`: Small BIOS carve-out (512MB-8GB) - NOT the usable memory
+  - `mem_info_gtt_*`: Dynamic pool from system RAM - the ACTUAL usable memory
+- **BIOS Configuration**: UMA Frame Buffer should be set to MINIMUM (not maximum) to avoid wasting RAM
+- **Manual Override**: `ROUTER_AMD_UNIFIED_MEMORY_GB` allows setting unified memory size manually if auto-detection fails
+
+This architecture allows APUs to use nearly all system RAM for GPU workloads, unlike discrete GPUs with fixed VRAM.
+
 ---
 
 ## 3. Data Flow: Anatomy of a Request

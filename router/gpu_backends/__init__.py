@@ -23,7 +23,7 @@ class GPUBackendManager:
     - Re-checks detection on every startup (catches driver/Docker fixes)
 
     Example:
-        manager = GPUBackendManager(apple_unified_memory_gb=96)
+        manager = GPUBackendManager(apple_unified_memory_gb=96, amd_unified_memory_gb=58)
         # Auto-detects NVIDIA + AMD + Intel + Apple if available
 
         all_gpus = manager.get_all_memory_info()
@@ -36,15 +36,22 @@ class GPUBackendManager:
         # True if any GPUs detected
     """
 
-    def __init__(self, apple_unified_memory_gb: Optional[float] = None):
+    def __init__(
+        self,
+        apple_unified_memory_gb: Optional[float] = None,
+        amd_unified_memory_gb: Optional[float] = None,
+    ):
         """Initialize backend manager.
 
         Args:
             apple_unified_memory_gb: For Apple Silicon only - total unified memory in GB.
                                      If None, auto-detects from system.
+            amd_unified_memory_gb: For AMD APUs with unified memory - override auto-detected
+                                   GTT size. Useful when sysfs reports incorrect values.
         """
         self.backends: List[GPUBackend] = []
         self._apple_unified_memory_gb = apple_unified_memory_gb
+        self._amd_unified_memory_gb = amd_unified_memory_gb
         self._detect_all_backends()
 
     def _detect_all_backends(self) -> None:
@@ -67,9 +74,10 @@ class GPUBackendManager:
 
         for backend_class, vendor_name in backend_classes:
             try:
-                # Pass config to Apple backend if needed
                 if backend_class == AppleBackend:
                     backend = backend_class(unified_memory_gb=self._apple_unified_memory_gb)
+                elif backend_class == AMDBackend:
+                    backend = backend_class(unified_memory_gb=self._amd_unified_memory_gb)
                 else:
                     backend = backend_class()
 

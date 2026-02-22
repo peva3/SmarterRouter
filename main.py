@@ -242,6 +242,8 @@ async def startup_event():
             total_vram_gb=settings.vram_max_total_gb,
             app_state=app_state,
             log_interval=settings.vram_log_interval,
+            apple_unified_memory_gb=settings.apple_unified_memory_gb,
+            amd_unified_memory_gb=settings.amd_unified_memory_gb,
         )
         app_state.vram_monitor = vram_monitor
         await vram_monitor.start()

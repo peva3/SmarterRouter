@@ -2,16 +2,20 @@
 #
 # Requirements:
 #   - AMD GPU with ROCm support:
-#     - Radeon RX 6000/7000 series
+#     - Radeon RX 6000/7000 series (discrete)
 #     - Radeon Instinct (MI series)
 #     - Radeon Pro series
+#     - AMD APUs (Ryzen AI 300 series, Ryzen 8000G)
 #   - ROCm runtime installed: https://rocm.docs.amd.com/en/latest/deploy/linux/index.html
-#   - Verify: rocm-smi should work on host
+#   - Verify: rocm-smi should work on host (optional, sysfs fallback available)
 #
 # Quick Start:
 #   1. Copy this file to your project root: cp docs/docker-compose.amd.yml docker-compose.yml
 #   2. Copy environment template: cp ENV_DEFAULT .env
-#   3. Run: docker-compose up -d
+#   3. Get group IDs and add to .env:
+#        echo "RENDER_GID=$(getent group render | cut -d: -f3)" >> .env
+#        echo "VIDEO_GID=$(getent group video | cut -d: -f3)" >> .env
+#   4. Run: docker-compose up -d
 #
 # Verify GPU access:
 #   docker exec smarterrouter ls /sys/class/drm
@@ -21,6 +25,12 @@
 #   - If GPU not detected, check: ls /sys/class/drm/card*/device/mem_info_vram_total
 #   - Ensure user is in render/video groups: groups $USER
 #   - For compute workloads, you may need a ROCm base image (see below)
+#
+# APU (Unified Memory) Setup:
+#   AMD APUs like Ryzen AI 300 series use unified memory (CPU+GPU share RAM).
+#   The router auto-detects APUs and uses GTT pool instead of VRAM carve-out.
+#   - BIOS setting: Set UMA Frame Buffer to MINIMUM (512MB-2GB), NOT maximum
+#   - If auto-detection fails, set: ROUTER_AMD_UNIFIED_MEMORY_GB=58 (for 64GB RAM)
 #
 # ROCm Base Image Option:
 #   For full ROCm compute support, build from ROCm base:
@@ -58,11 +68,21 @@ services:
       - /dev/kfd                  # AMD Kernel Fusion Driver (required for ROCm)
       - /dev/dri                  # Direct Rendering Infrastructure (required for GPU access)
     
+    # AMD GPU group permissions (required for non-root access)
+    # Get the group IDs on your host:
+    #   RENDER_GID=$(getent group render | cut -d: -f3)
+    #   VIDEO_GID=$(getent group video | cut -d: -f3)
+    # Then set in .env or uncomment and hardcode:
+    group_add:
+      - ${RENDER_GID:-109}        # render group ID (default 109 on Ubuntu)
+      - ${VIDEO_GID:-44}          # video group ID (default 44 on Ubuntu)
+    
     # Optional: ROCm environment
     # environment:
     #   - ROCM_PATH=/opt/rocm
     #   - HIP_VISIBLE_DEVICES=0     # Limit to specific GPU (0, 1, etc.)
     #   - ROUTER_VRAM_MAX_TOTAL_GB=16
+    #   - ROUTER_AMD_UNIFIED_MEMORY_GB=58  # For APUs: override unified memory (optional)
 
 networks:
   smarterrouter-network:
