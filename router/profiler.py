@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
 
-from router.backends.base import LLMBackend
+from router.backends.base import LLMBackend, ModelInfo
 from router.config import settings
 from router.database import get_session
 from router.judge import JudgeClient
+from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import ModelProfile
 from router.prompts import BENCHMARK_PROMPTS
 
@@ -682,6 +683,21 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
     models = await client.list_models()
     total_models = len(models)
 
+    # Apply model filtering if configured
+    include = settings.model_filter_include
+    exclude = settings.model_filter_exclude
+    if include or exclude:
+        original_count = len(models)
+        models = filter_model_infos(models, include, exclude)
+        excluded_count = original_count - len(models)
+        log_filter_summary(original_count, len(models), excluded_count, include, exclude)
+
+    if not models:
+        raise ValueError(
+            f"No models available after filtering "
+            f"(include={include}, exclude={exclude})"
+        )
+
     existing_profiles = get_all_profile_names()
     ollama_model_names = {m.name for m in models}
     new_models = [m for m in models if m.name not in existing_profiles]
@@ -692,7 +708,8 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
         )
     else:
         new_models = models
-        logger.info(f"PROGRESS: Starting profiling of {total_models} models (force={force})")
+        filtered_count = len(models)
+        logger.info(f"PROGRESS: Starting profiling of {filtered_count} models (force={force})")
 
     if not new_models:
         logger.info("All models already profiled")

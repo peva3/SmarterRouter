@@ -20,6 +20,7 @@ from router.benchmark_db import (
 )
 from router.config import settings
 from router.database import get_session
+from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
 
 logger = logging.getLogger(__name__)
@@ -401,8 +402,21 @@ class RouterEngine:
                 return cached
 
         available_models = await self.client.list_models()
+        
+        # Apply model filtering if configured
+        include = settings.model_filter_include
+        exclude = settings.model_filter_exclude
+        if include or exclude:
+            original_count = len(available_models)
+            available_models = filter_model_infos(available_models, include, exclude)
+            excluded_count = original_count - len(available_models)
+            log_filter_summary(original_count, len(available_models), excluded_count, include, exclude)
+        
         if not available_models:
-            raise ValueError("No models available")
+            raise ValueError(
+                f"No models available after filtering "
+                f"(include={include}, exclude={exclude})"
+            )
 
         model_names = [m.name for m in available_models]
 

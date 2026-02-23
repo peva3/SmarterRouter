@@ -43,6 +43,7 @@ from router.models import (
 )
 from router.profiler import ModelProfiler, profile_all_models
 from router.router import RouterEngine
+from router.model_filter import filter_model_infos, log_filter_summary
 from router.vram_monitor import VRAMMonitor
 from router.vram_manager import VRAMManager, VRAMExceededError
 from router.schemas import (
@@ -229,6 +230,16 @@ async def startup_event():
 
         try:
             available_models = await list_models_with_timeout(app_state.backend)
+            
+            # Apply model filtering if configured
+            include = settings.model_filter_include
+            exclude = settings.model_filter_exclude
+            if include or exclude:
+                original_count = len(available_models) if available_models else 0
+                available_models = filter_model_infos(available_models, include, exclude)
+                excluded_count = original_count - (len(available_models) if available_models else 0)
+                log_filter_summary(original_count, len(available_models) if available_models else 0, excluded_count, include, exclude)
+            
             model_names = [m.name for m in available_models] if available_models else []
             app_state.router_engine.warmup_caches(model_names)
         except Exception as e:
@@ -335,6 +346,16 @@ async def background_sync_task():
                     logger.info("Starting benchmark sync...")
                     # Get available model names to match against benchmarks
                     models = await list_models_with_timeout(app_state.backend)
+                    
+                    # Apply model filtering if configured
+                    include = settings.model_filter_include
+                    exclude = settings.model_filter_exclude
+                    if include or exclude:
+                        original_count = len(models)
+                        models = filter_model_infos(models, include, exclude)
+                        excluded_count = original_count - len(models)
+                        log_filter_summary(original_count, len(models), excluded_count, include, exclude)
+                    
                     model_names = [m.name for m in models]
                     await sync_benchmarks(model_names)
                     # Invalidate router caches after benchmark sync

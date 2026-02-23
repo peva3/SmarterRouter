@@ -1,5 +1,32 @@
 ## [2.1.2] - 2026-02-22
 
+### Model Filtering
+
+Added optional model filtering via environment variables to control which models are discovered and available for routing.
+
+**New Settings:**
+- `ROUTER_MODEL_FILTER_INCLUDE` - Glob patterns to include (e.g., `gemma*,mistral*`)
+- `ROUTER_MODEL_FILTER_EXCLUDE` - Glob patterns to exclude (e.g., `*qwen*,*test*`)
+
+**Features:**
+- Case-insensitive matching for convenience
+- Glob patterns: `*` (any), `?` (single), `[seq]` (character class)
+- Exclude takes precedence over include
+- Applied at startup, before profiling, and before routing
+
+**Examples:**
+```bash
+# Only use gemma and mistral models
+ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*
+
+# Exclude specific model families
+ROUTER_MODEL_FILTER_EXCLUDE=*qwen*,*deepseek*
+
+# Combine: include gemma/mistral but exclude quantized versions
+ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*
+ROUTER_MODEL_FILTER_EXCLUDE=*q4_*,*q5_*
+```
+
 ### AMD APU Unified Memory Support
 
 This release adds comprehensive support for AMD APUs (Accelerated Processing Units) with unified memory architecture, such as the Ryzen AI 300 series with Radeon 800M graphics.

@@ -28,6 +28,18 @@ ROUTER_MODEL_PREFIX=
 # Example: ROUTER_PINNED_MODEL=phi3:mini
 ROUTER_PINNED_MODEL=
 
+# Model keep-alive duration (optional)
+# -1 = keep loaded indefinitely (default), 0 = unload after response, positive = seconds
+# Example: ROUTER_MODEL_KEEP_ALIVE=300
+# ROUTER_MODEL_KEEP_ALIVE=-1
+
+# Model filtering (optional)
+# Comma-separated glob patterns. Case-insensitive.
+# Example: ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*
+# Example: ROUTER_MODEL_FILTER_EXCLUDE=*qwen*,*test*
+# ROUTER_MODEL_FILTER_INCLUDE=
+# ROUTER_MODEL_FILTER_EXCLUDE=
+
 # === llama.cpp Server Settings ===
 # Uncomment to use llama.cpp server instead of Ollama
 # ROUTER_PROVIDER=llama.cpp

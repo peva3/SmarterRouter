@@ -311,6 +311,51 @@ Controls how long models stay loaded in VRAM after each request (passed to backe
 
 **Example:** Set `ROUTER_MODEL_KEEP_ALIVE=0` to ensure only the most recently used model remains loaded, freeing VRAM for other applications.
 
+### `ROUTER_MODEL_FILTER_INCLUDE`
+
+Comma-separated list of glob patterns to include when discovering models. Only models matching these patterns will be available for routing and profiling. Case-insensitive matching.
+
+**Patterns:**
+- `*` matches everything
+- `?` matches any single character
+- `[seq]` matches any character in seq
+- `[!seq]` matches any character not in seq
+
+**Default:** (empty - include all models)
+
+**Examples:**
+- `ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*` - Only include gemma and mistral models
+- `ROUTER_MODEL_FILTER_INCLUDE=llama*,phi*` - Include llama and phi model families
+
+### `ROUTER_MODEL_FILTER_EXCLUDE`
+
+Comma-separated list of glob patterns to exclude when discovering models. Models matching these patterns will be removed from the available set. Case-insensitive matching. Exclude patterns take precedence over include patterns.
+
+**Default:** (empty - exclude no models)
+
+**Examples:**
+- `ROUTER_MODEL_FILTER_EXCLUDE=*qwen*,*deepseek*` - Exclude qwen and deepseek models
+- `ROUTER_MODEL_FILTER_EXCLUDE=*test*,*dev*` - Exclude test/dev models
+
+### Combining Include and Exclude
+
+You can use both settings together. The filtering logic is:
+
+1. First, exclude patterns are applied (models matching exclude are removed)
+2. Then, include patterns are applied (if include is non-empty, only matching models remain)
+
+**Example - Use gemma and mistral but exclude quantized versions:**
+```
+ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*
+ROUTER_MODEL_FILTER_EXCLUDE=*q4_*,*q5_*,*q8_*
+```
+
+**Example - Exclude everything except specific models:**
+```
+ROUTER_MODEL_FILTER_EXCLUDE=*
+ROUTER_MODEL_FILTER_INCLUDE=llama3.1:8b,phi3:mini
+```
+
 **Multi-GPU Support:** SmarterRouter automatically detects all available GPUs regardless of vendor and combines their memory. GPU indexing is global across vendors (0, 1, 2, ...). If no GPUs are detected on startup, VRAM monitoring is disabled with a warning. GPU detection runs on every startup, so adding new hardware requires only a restart.
 
 **Supported Vendors:**

@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # -1 = keep loaded indefinitely (default), 0 = unload after response, positive = seconds to keep alive
     model_keep_alive: float = Field(default=-1)
 
+    # Model Filtering - Optional include/exclude patterns for model discovery
+    # Uses Unix shell-style glob patterns (*, ?, []). Case-insensitive matching.
+    # Examples: gemma*,mistral* (include only), *qwen*,*deepseek* (exclude), or combine both
+    model_filter_include: list[str] = Field(default_factory=list)  # Empty = include all
+    model_filter_exclude: list[str] = Field(default_factory=list)  # Empty = exclude none
+
     # Name the router presents itself as to external UIs (e.g., OpenWebUI)
     router_external_model_name: str = Field(default="smarterrouter/main")
 
