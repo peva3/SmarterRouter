@@ -84,6 +84,238 @@ The endpoint requires admin authentication if `ROUTER_ADMIN_API_KEY` is set.
 
 This architecture allows APUs to use nearly all system RAM for GPU workloads, unlike discrete GPUs with fixed VRAM.
 
+### 2.5 External Provider Integration
+
+SmarterRouter extends beyond local models with **external provider support**, allowing you to route to cloud APIs (OpenAI, Anthropic, Google, etc.) alongside your local Ollama models.
+
+#### provider.db: Benchmark Database for 400+ Models
+
+External provider integration relies on **provider.db**, a SQLite database containing benchmark scores for hundreds of models from OpenRouter. It's built by the [smarterrouter-provider](https://github.com/peva3/smarterrouter-provider) project, which aggregates data from:
+
+- **LMSYS Chatbot Arena** - ELO ratings from human preferences
+- **LiveBench** - Reasoning tasks
+- **BigCodeBench** - Coding ability
+- **MMLU, MMLU-Pro** - General knowledge
+- **GSM8K, ARC, BBH** - Math and reasoning
+- **SWE-bench, HumanEval** - Code generation
+- **And many more...** (28+ benchmark sources)
+
+**Auto-Update:** provider.db is automatically downloaded every 4 hours (configurable) by the background sync task in `main.py`. The file is stored at `data/provider.db` (200KB, ~400+ models).
+
+**Schema:**
+
+```sql
+CREATE TABLE model_benchmarks (
+    model_id TEXT PRIMARY KEY,           -- e.g., "openai/gpt-4o"
+    reasoning_score REAL NOT NULL,       -- 0-100 scale
+    coding_score REAL NOT NULL,          -- 0-100 scale
+    general_score REAL NOT NULL,         -- 0-100 scale
+    elo_rating INTEGER NOT NULL,         -- 1000-2000 scale
+    last_updated TIMESTAMP,
+    archived INTEGER DEFAULT 0
+)
+```
+
+#### Model Naming Convention
+
+External models use **provider prefixes** to distinguish them from local models:
+
+```
+openai/gpt-4o
+anthropic/claude-3-opus
+google/gemini-1.5-pro
+cohere/command-r-plus
+mistral/mistral-large
+```
+
+The prefix (before `/`) identifies the provider and is used by the router to determine which backend to use.
+
+#### BackendRegistry: Unified Multi-Backend Management
+
+The **BackendRegistry** (`router/backends/registry.py`) manages all available backends and determines where to route each model:
+
+```python
+class BackendRegistry:
+    def get_backend_for_model(self, model_name: str) -> tuple[str, LLMBackend | None]:
+        # 1. Check if external model from provider.db
+        if "/" in model_name and provider_db has benchmark:
+            return ("external", None)
+
+        # 2. Check if local model (no slash)
+        if local_backend and "/" not in model_name:
+            return ("local", local_backend)
+
+        # 3. Default to local if available
+        return ("local", local_backend) or ("unknown", None)
+```
+
+**Key insight:** The router uses the model name format to determine routing:
+- Models with `/` are external (looked up in provider.db)
+- Models without `/` are local Ollama models
+
+This naming convention eliminates configuration - just use `openai/gpt-4o` and the rest is automatic.
+
+#### ExternalBackendFactory: Provider-Specific Instances
+
+When an external model is selected, the **ExternalBackendFactory** (`router/backends/external.py`) creates or retrieves an appropriate backend:
+
+```python
+PROVIDER_CONFIGS = {
+    "openai": {
+        "default_base_url": "https://api.openai.com/v1",
+        "api_key_field": "openai_api_key",
+        "base_url_field": "openai_base_url",
+        "model_prefix": "",
+    },
+    "anthropic": {
+        "default_base_url": "https://api.anthropic.com/v1",
+        "api_key_field": "anthropic_api_key",
+        "base_url_field": "anthropic_base_url",
+        "model_prefix": "",  # Anthropic uses full model ID
+    },
+    "google": {
+        "default_base_url": "https://generativelanguage.googleapis.com/v1",
+        "api_key_field": "google_api_key",
+        "base_url_field": "google_base_url",
+        "model_prefix": "models/",
+    },
+    # ... cohere, mistral, etc.
+}
+```
+
+The factory is initialized on-demand and caches backend instances per provider for efficiency.
+
+#### Chat Request Flow (External Provider)
+
+1. **User sends request** to SmarterRouter: `POST /v1/chat/completions` with `model: "openai/gpt-4o"`
+
+2. **RouterEngine** selects the best model via `_keyword_dispatch()` or `_llm_dispatch()`
+
+3. **BackendRegistry** determines this is an external model (has `/` prefix and exists in provider.db)
+
+4. **ExternalBackendFactory** creates an `OpenAIBackend` instance for the `openai` provider (or retrieves cached instance)
+
+5. **OpenAIBackend** transforms the request:
+   - Applies model prefix (if configured) - OpenAI typically uses empty prefix
+   - Adds `Authorization: Bearer <api_key>` header
+   - Forwards to `https://api.openai.com/v1/chat/completions`
+
+6. **External API** processes request and returns response
+
+7. **OpenAIBackend** transforms response back to Ollama-compatible format and returns to RouterEngine
+
+8. **RouterEngine** adds signature (if enabled) and returns to client
+
+#### Configuration
+
+Enable external providers with these environment variables:
+
+```bash
+# Enable external routing
+ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
+ROUTER_EXTERNAL_PROVIDERS=openai,anthropic,google
+
+# API keys (required)
+ROUTER_OPENAI_API_KEY=sk-...
+ROUTER_ANTHROPIC_API_KEY=sk-ant-...
+ROUTER_GOOGLE_API_KEY=...
+ROUTER_COHERE_API_KEY=...
+ROUTER_MISTRAL_API_KEY=...
+
+# Optional: Custom base URLs (for proxies/self-hosted)
+ROUTER_ANTHROPIC_BASE_URL=https://custom-endpoint.com/v1
+ROUTER_GOOGLE_BASE_URL=https://custom-endpoint.com/v1
+```
+
+All external provider settings are **optional defaults** - if you don't set them, the router will fall back to local-only mode.
+
+#### Data Flow: External Model Selection
+
+The router's scoring algorithm works identically for external models:
+
+1. **Local profiles** (if model is also available locally) are loaded from `router.db`
+2. **External benchmarks** are loaded from `provider.db` via `get_benchmarks_for_models_with_external()`
+3. Scores are merged: local data takes precedence, external data fills gaps
+4. **Combined scores** are calculated using the standard formula:
+   ```
+   Combined = (benchmark × 1.5 × Q) + (elo × 1.0 × Q) + (profile × 0.8 × Q)
+   ```
+5. Model with highest score is selected, regardless of backend type
+
+#### Backend Compatibility: OpenAI-Compatible API
+
+The **OpenAIBackend** (`router/backends/openai.py`) handles all external providers because they offer OpenAI-compatible endpoints:
+
+- **OpenAI**: Native OpenAI API (`/v1/chat/completions`)
+- **Anthropic**: Anthropic's native Messages API uses `/v1/messages` but they also offer an OpenAI-compatible endpoint (`/v1/chat/completions`) for basic use cases. For advanced features (prompt caching), you'd need a dedicated Anthropic backend (future enhancement).
+- **Google**: Gemini API has OpenAI-compatible proxy
+- **Cohere**: Cohere API is OpenAI-compatible
+- **Mistral**: Mistral API is OpenAI-compatible
+
+All use the same request/response format: JSON with `messages`, `model`, `temperature`, etc., and return `choices[0].message.content`.
+
+#### Capability Detection
+
+External models' capabilities (vision, tool calling) are detected via **keyword matching** in the model name, same as local models:
+
+```python
+VISION_KEYWORDS = ['llava', 'pixtral', 'vision', 'gpt-4o', 'claude-3', ...]
+TOOL_KEYWORDS = ['gpt-4', 'claude-3', 'mistral-large', ...]
+```
+
+This happens in `router/router.py`'s `_has_capability()` method. For external models like `openai/gpt-4o-vision`, the router correctly identifies vision capability because `gpt-4o` is in the vision keywords list.
+
+#### Security Considerations
+
+**API Key Isolation:**
+- Each provider has its own dedicated environment variable (no shared keys)
+- Keys are never logged or exposed in model responses
+- Use Docker secrets or vault solutions in production
+
+**Network Security:**
+- All provider endpoints use HTTPS (enforced by validation)
+- No certificate pinning - relies on system CA store
+- Consider using a proxy/VPC for additional isolation
+
+**Least Privilege:**
+- Only grant the `external_providers_enabled` permission to providers you trust
+- Each enabled provider requires a valid API key
+- Misconfigured providers are logged but don't crash the system
+
+#### Performance Characteristics
+
+**Latency:**
+- Local models: ~100-500ms (depending on model size and hardware)
+- External APIs: ~1000-3000ms (network + server processing)
+- Cache hits: ~1-10ms (semantic cache bypasses model entirely)
+
+**Cost:**
+- Local: $0 (except electricity)
+- External: $ per token (OpenAI: $2.50-30/1M tokens; Anthropic: $3-15/1M tokens)
+- SmarterRouter helps reduce costs by routing simple tasks to cheaper models
+
+**Rate Limiting:**
+- External APIs have rate limits (OpenAI: varies by tier; Anthropic: 1000-10000 RPM)
+- SmarterRouter does NOT implement per-provider rate limiting yet - that's a future enhancement
+- If you hit limits, the router will see HTTP 429 errors and could fall back to local models
+
+#### Limitations and Future Work
+
+**Current Limitations:**
+1. **No streaming support for external providers** - The current implementation only returns complete responses. Streaming (server-sent events) is planned for a future release.
+2. **No prompt caching for Anthropic** - Anthropic's prompt caching requires using their native `/v1/messages` endpoint with special headers. The OpenAI-compatible endpoint doesn't support it.
+3. **No tool calling for external providers** - Tool/function calling is supported in the OpenAI backend but not yet tested with external providers.
+4. **Single fallback model** - If an external API fails, the router could try alternative models (local or other external). Currently falls back to keyword dispatch.
+5. **No usage tracking per provider** - Token usage is logged but not aggregated per external provider for cost reporting.
+
+**Planned Enhancements:**
+- Streaming support for external providers
+- Per-provider rate limit configuration
+- Automatic fallback to alternative providers on API errors
+- Cost-aware routing (factor API costs into scoring)
+- Provider-specific features (Anthropic prompt caching, OpenAI vision)
+- Usage analytics and cost reports
+
 ---
 
 ## 3. Data Flow: Anatomy of a Request

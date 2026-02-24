@@ -1,8 +1,9 @@
 """Tests for LlamaCppBackend."""
 
 import json
-import pytest
+
 import httpx
+import pytest
 import respx
 
 from router.backends.llama_cpp import LlamaCppBackend
@@ -46,11 +47,9 @@ class TestLlamaCppBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:8080/v1/models").mock(
-                return_value=httpx.Response(200, json={
-                    "data": [
-                        {"id": "llama3", "size": 1000000000}
-                    ]
-                })
+                return_value=httpx.Response(
+                    200, json={"data": [{"id": "llama3", "size": 1000000000}]}
+                )
             )
             models = await backend.list_models()
             assert len(models) == 1
@@ -62,13 +61,16 @@ class TestLlamaCppBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8080/v1/chat/completions").mock(
-                return_value=httpx.Response(200, json={
-                    "choices": [{"message": {"content": "Test response"}}],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "Test response"}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    },
+                )
             )
             result = await backend.chat("llama3", [{"role": "user", "content": "Test"}])
-            
+
             assert "message" in result
             assert result["message"]["content"] == "Test response"
             assert result["prompt_eval_count"] == 10
@@ -92,7 +94,7 @@ class TestLlamaCppBackend:
         stream_chunks = [
             b'data: {"choices": [{"delta": {"content": "Hello"}}]}\n',
             b'data: {"choices": [{"delta": {"content": " World"}}]}\n',
-            b'data: [DONE]\n',
+            b"data: [DONE]\n",
         ]
 
         with respx.mock() as mock_http:
@@ -103,13 +105,15 @@ class TestLlamaCppBackend:
                     headers={"content-type": "text/plain"},
                 )
             )
-            stream, latency = await backend.chat_streaming("llama3", [{"role": "user", "content": "Hi"}])
-            
+            stream, latency = await backend.chat_streaming(
+                "llama3", [{"role": "user", "content": "Hi"}]
+            )
+
             chunks = []
             async for chunk in stream:
                 if "message" in chunk:
                     chunks.append(chunk)
-            
+
             assert len(chunks) == 2
             assert chunks[0]["message"]["content"] == "Hello"
             assert chunks[1]["message"]["content"] == " World"
@@ -126,9 +130,9 @@ class TestLlamaCppBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8080/v1/embeddings").mock(
-                return_value=httpx.Response(200, json={
-                    "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]
-                })
+                return_value=httpx.Response(
+                    200, json={"data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]}
+                )
             )
             result = await backend.embed("llama3", "test text")
             assert "data" in result
@@ -142,7 +146,7 @@ class TestLlamaCppBackend:
                 return_value=httpx.Response(200, json={"data": []})
             )
             await backend.embed("llama3", "test")
-            
+
             request = mock_http.calls.last.request
             body = json.loads(request.content)
             assert body["model"] == "myorg/llama3"
@@ -153,13 +157,16 @@ class TestLlamaCppBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8080/v1/chat/completions").mock(
-                return_value=httpx.Response(200, json={
-                    "choices": [{"message": {"content": "OK"}}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "OK"}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                )
             )
             await backend.chat("llama3", [{"role": "user", "content": "test"}])
-            
+
             request = mock_http.calls.last.request
             body = json.loads(request.content)
             assert body["model"] == "myorg/llama3"

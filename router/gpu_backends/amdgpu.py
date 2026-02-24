@@ -14,7 +14,7 @@ APU vs Discrete Detection:
     - Very small or zero VRAM (BIOS carve-out, usually 512MB-8GB)
     - Large GTT pool (shared system memory)
     - Device names like "Radeon Graphics", "Vega", "Graphics"
-    
+
     Discrete GPUs have:
     - Large dedicated VRAM
     - GTT may exist but VRAM is primary
@@ -25,9 +25,8 @@ import logging
 import os
 import re
 import subprocess
-from typing import List, Optional
 
-from router.gpu_backends.base import GPUBackend, GPUMemory
+from router.gpu_backends.base import GPUMemory
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ class AMDBackend:
     This backend supports:
     - Discrete AMD GPUs (Radeon RX series, Radeon Pro, Instinct)
     - Integrated AMD APUs (Radeon Graphics, Ryzen mobile GPUs)
-    
+
     For APUs with unified memory, uses GTT (Graphics Translation Table)
     to report the full shared memory pool accessible to the GPU.
     """
@@ -50,7 +49,7 @@ class AMDBackend:
     def __init__(
         self,
         rocm_smi_path: str = "rocm-smi",
-        unified_memory_gb: Optional[float] = None,
+        unified_memory_gb: float | None = None,
     ):
         """Initialize AMD backend.
 
@@ -61,7 +60,7 @@ class AMDBackend:
         """
         self._rocm_smi_path = rocm_smi_path
         self._unified_memory_gb = unified_memory_gb
-        self._sysfs_paths: List[str] = []
+        self._sysfs_paths: list[str] = []
         self._is_apu: bool = False
         self._detected_device_name: str = "AMD GPU"
         self._detect_sysfs_cards()
@@ -75,11 +74,11 @@ class AMDBackend:
                     vendor_path = f"{device_path}/vendor"
                     if os.path.exists(vendor_path):
                         try:
-                            with open(vendor_path, "r") as f:
+                            with open(vendor_path) as f:
                                 vendor = f.read().strip()
                                 if vendor == AMD_VENDOR_ID:
                                     self._sysfs_paths.append(device_path)
-                        except (IOError, OSError):
+                        except OSError:
                             continue
         except (FileNotFoundError, OSError):
             pass
@@ -110,7 +109,7 @@ class AMDBackend:
 
         return len(self._sysfs_paths) > 0
 
-    def get_memory_info(self) -> List[GPUMemory]:
+    def get_memory_info(self) -> list[GPUMemory]:
         """Get memory info for all AMD GPUs.
 
         Tries rocm-smi first, falls back to sysfs if rocm-smi fails.
@@ -127,7 +126,7 @@ class AMDBackend:
                 return self._query_sysfs()
             except Exception as e:
                 logger.error(f"sysfs query failed with manual override: {e}")
-                raise ValueError(f"Unable to query AMD GPU memory with override: {e}")
+                raise ValueError(f"Unable to query AMD GPU memory with override: {e}") from None
 
         try:
             gpus = self._query_rocm_smi()
@@ -146,9 +145,9 @@ class AMDBackend:
             return self._query_sysfs()
         except Exception as e:
             logger.error(f"Both rocm-smi and sysfs failed for AMD: {e}")
-            raise ValueError(f"Unable to query AMD GPU memory: {e}")
+            raise ValueError(f"Unable to query AMD GPU memory: {e}") from None
 
-    def _query_rocm_smi(self) -> List[GPUMemory]:
+    def _query_rocm_smi(self) -> list[GPUMemory]:
         """Query AMD GPUs using rocm-smi command."""
         try:
             result = subprocess.run(
@@ -160,7 +159,7 @@ class AMDBackend:
             result.check_returncode()
 
             data = json.loads(result.stdout)
-            gpus: List[GPUMemory] = []
+            gpus: list[GPUMemory] = []
 
             gpu_list = data.get("system", {}).get("gpu", [])
             if not gpu_list and isinstance(data, list):
@@ -169,7 +168,7 @@ class AMDBackend:
             for idx, gpu_data in enumerate(gpu_list):
                 total_mib = self._extract_rocm_memory(gpu_data, "VRAM Total")
                 used_mib = self._extract_rocm_memory(gpu_data, "VRAM Used")
-                
+
                 if used_mib is not None and total_mib:
                     free_mib = total_mib - used_mib
                 else:
@@ -178,10 +177,10 @@ class AMDBackend:
                 if total_mib:
                     gpu_name = gpu_data.get("GPU", f"AMD GPU {idx}")
                     total_gb = total_mib / 1024.0
-                    
+
                     self._is_apu = total_gb < VRAM_CUTOFF_GB
                     self._detected_device_name = f"AMD {gpu_name}"
-                    
+
                     gpus.append(
                         GPUMemory(
                             index=0,
@@ -205,7 +204,7 @@ class AMDBackend:
             logger.debug(f"rocm-smi query error: {e}")
             raise
 
-    def _extract_rocm_memory(self, gpu_data: dict, key: str) -> Optional[int]:
+    def _extract_rocm_memory(self, gpu_data: dict, key: str) -> int | None:
         """Extract memory value in MiB from rocm-smi data.
 
         Handles formats like "24576 MiB", "24576", etc.
@@ -219,24 +218,24 @@ class AMDBackend:
                 return int(match.group(1))
         return None
 
-    def _query_sysfs(self) -> List[GPUMemory]:
+    def _query_sysfs(self) -> list[GPUMemory]:
         """Query AMD GPUs using sysfs entries.
 
         For discrete GPUs: Uses mem_info_vram_* for dedicated VRAM.
         For APUs: Uses mem_info_gtt_* for unified memory pool.
-        
+
         GTT (Graphics Translation Table) represents the shared system memory
         accessible to APU GPUs. This is the actual usable memory for APUs,
         not the small BIOS VRAM carve-out.
         """
-        gpus: List[GPUMemory] = []
+        gpus: list[GPUMemory] = []
 
         for device_path in self._sysfs_paths:
             try:
                 gpu_info = self._query_single_device(device_path)
                 if gpu_info:
                     gpus.append(gpu_info)
-            except (IOError, OSError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 logger.debug(f"Failed to read AMD GPU sysfs at {device_path}: {e}")
                 continue
 
@@ -245,33 +244,35 @@ class AMDBackend:
 
         return gpus
 
-    def _query_single_device(self, device_path: str) -> Optional[GPUMemory]:
+    def _query_single_device(self, device_path: str) -> GPUMemory | None:
         """Query a single AMD GPU device.
 
         Returns None if the device cannot be read.
         """
         vram_total_path = f"{device_path}/mem_info_vram_total"
         gtt_total_path = f"{device_path}/mem_info_gtt_total"
-        
+
         vram_total_bytes = self._read_sysfs_memory(vram_total_path)
         gtt_total_bytes = self._read_sysfs_memory(gtt_total_path)
-        
+
         if vram_total_bytes is None and gtt_total_bytes is None:
             return None
 
-        vram_total_gb = vram_total_bytes / (1024 ** 3) if vram_total_bytes else 0.0
-        gtt_total_gb = gtt_total_bytes / (1024 ** 3) if gtt_total_bytes else 0.0
+        vram_total_gb = vram_total_bytes / (1024**3) if vram_total_bytes else 0.0
+        gtt_total_gb = gtt_total_bytes / (1024**3) if gtt_total_bytes else 0.0
 
         self._is_apu = vram_total_gb < VRAM_CUTOFF_GB
-        
+
         card_match = re.search(r"card(\d+)", device_path)
         card_id = card_match.group(1) if card_match else "?"
 
         device_model = self._read_device_model(device_path)
-        
+
         if self._unified_memory_gb is not None:
             total_gb = self._unified_memory_gb
-            self._detected_device_name = f"AMD APU (card {card_id}, {device_model}) - Manual Override"
+            self._detected_device_name = (
+                f"AMD APU (card {card_id}, {device_model}) - Manual Override"
+            )
             used_gb = 0.0
             free_gb = total_gb
             logger.info(
@@ -281,11 +282,11 @@ class AMDBackend:
         elif self._is_apu and gtt_total_gb > 0:
             total_gb = gtt_total_gb
             self._detected_device_name = f"AMD APU (card {card_id}, {device_model})"
-            
+
             gtt_used_bytes = self._read_sysfs_memory(f"{device_path}/mem_info_gtt_used")
-            used_gb = gtt_used_bytes / (1024 ** 3) if gtt_used_bytes else 0.0
+            used_gb = gtt_used_bytes / (1024**3) if gtt_used_bytes else 0.0
             free_gb = total_gb - used_gb
-            
+
             logger.info(
                 f"AMD APU detected: {self._detected_device_name}, "
                 f"VRAM={vram_total_gb:.1f}GB, GTT(unified)={gtt_total_gb:.1f}GB"
@@ -293,18 +294,17 @@ class AMDBackend:
         else:
             total_gb = vram_total_gb
             self._detected_device_name = f"AMD GPU (card {card_id}, {device_model})"
-            
+
             used_gb = 0.0
             for used_key in ["mem_info_vram_used", "mem_info_vram_pmiss"]:
                 used_bytes = self._read_sysfs_memory(f"{device_path}/{used_key}")
                 if used_bytes:
-                    used_gb = used_bytes / (1024 ** 3)
+                    used_gb = used_bytes / (1024**3)
                     break
-            
+
             free_gb = total_gb - used_gb
             logger.info(
-                f"AMD discrete GPU detected: {self._detected_device_name}, "
-                f"VRAM={total_gb:.1f}GB"
+                f"AMD discrete GPU detected: {self._detected_device_name}, VRAM={total_gb:.1f}GB"
             )
 
         return GPUMemory(
@@ -316,7 +316,7 @@ class AMDBackend:
             device_name=self._detected_device_name,
         )
 
-    def _read_sysfs_memory(self, path: str) -> Optional[int]:
+    def _read_sysfs_memory(self, path: str) -> int | None:
         """Read a memory value from sysfs path.
 
         Returns bytes as integer, or None if path doesn't exist or can't be read.
@@ -324,12 +324,12 @@ class AMDBackend:
         if not os.path.exists(path):
             return None
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 content = f.read().strip()
                 match = re.search(r"(\d+)", content)
                 if match:
                     return int(match.group(1))
-        except (IOError, OSError):
+        except OSError:
             pass
         return None
 
@@ -340,15 +340,15 @@ class AMDBackend:
             f"{device_path}/device/product_name",
             f"{device_path}/gpu_id",
         ]
-        
+
         for path in model_paths:
             if os.path.exists(path):
                 try:
-                    with open(path, "r") as f:
+                    with open(path) as f:
                         model = f.read().strip()
                         if model and model != "AMD":
                             return model[:30]
-                except (IOError, OSError):
+                except OSError:
                     continue
-        
+
         return "Radeon Graphics"

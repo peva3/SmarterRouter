@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -57,14 +57,14 @@ def get_all_benchmarks() -> list[dict]:
 def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
     if not model_names:
         return []
-    
+
     cache_key = frozenset(model_names)
     now = time.monotonic()
     if cache_key in _benchmarks_for_models_cache:
         cached_time, cached_result = _benchmarks_for_models_cache[cache_key]
         if (now - cached_time) < _BENCHMARK_CACHE_TTL:
             return cached_result
-    
+
     with get_session() as session:
         benchmarks = (
             session.execute(
@@ -93,13 +93,13 @@ def upsert_benchmark(data: dict[str, Any]) -> None:
 
 def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
     """Bulk upsert benchmarks using efficient single-transaction approach.
-    
+
     Returns the number of benchmarks that were processed.
     """
     if not benchmarks:
         return 0
 
-    ALLOWED_BENCHMARK_FIELDS = {
+    allowed_benchmark_fields = {
         "ollama_name",
         "full_name",
         "parameters",
@@ -132,13 +132,13 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                 continue
             if isinstance(v, (dict, list)) and k != "extra_data":
                 continue
-            if k not in ALLOWED_BENCHMARK_FIELDS:
+            if k not in allowed_benchmark_fields:
                 logger.warning(f"Skipping unknown benchmark field: {k}")
                 continue
             cleaned[k] = v
-        
+
         if cleaned and "ollama_name" in cleaned:
-            cleaned["last_updated"] = datetime.now(timezone.utc)
+            cleaned["last_updated"] = datetime.now(UTC)
             processed.append(cleaned)
 
     if not processed:
@@ -148,21 +148,23 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
     with get_session() as session:
         for cleaned in processed:
             try:
-                existing = session.query(ModelBenchmark).filter(
-                    ModelBenchmark.ollama_name == cleaned.get("ollama_name")
-                ).first()
-                
+                existing = (
+                    session.query(ModelBenchmark)
+                    .filter(ModelBenchmark.ollama_name == cleaned.get("ollama_name"))
+                    .first()
+                )
+
                 if existing:
                     for k, v in cleaned.items():
                         if k not in ("ollama_name",):
                             setattr(existing, k, v)
                 else:
-                    safe_data = {k: v for k, v in cleaned.items() if k in ALLOWED_BENCHMARK_FIELDS}
+                    safe_data = {k: v for k, v in cleaned.items() if k in allowed_benchmark_fields}
                     session.add(ModelBenchmark(**safe_data))
                 count += 1
             except Exception as e:
                 logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
-        
+
         session.commit()
 
     return count
@@ -179,7 +181,7 @@ def get_last_sync() -> datetime | None:
 def update_sync_status(status: str, models_count: int = 0) -> None:
     with get_session() as session:
         sync = BenchmarkSync(
-            last_sync=datetime.now(timezone.utc),
+            last_sync=datetime.now(UTC),
             models_count=models_count,
             status=status,
         )

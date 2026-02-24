@@ -65,7 +65,7 @@ class OllamaBackend(LLMBackend):
         url = f"{self.base_url}{path}"
         effective_timeout = timeout if timeout is not None else self.timeout
         client = await self._get_client()
-        
+
         # Create a new client with specific timeout if needed
         if effective_timeout != self.generation_timeout:
             async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
@@ -76,7 +76,7 @@ class OllamaBackend(LLMBackend):
                     logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
                     return {}
                 return data
-        
+
         response = await client.request(method, url, **kwargs)
         response.raise_for_status()
         data = response.json()
@@ -87,18 +87,18 @@ class OllamaBackend(LLMBackend):
 
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests.
-        
+
         Results are cached for models_cache_ttl seconds (default 30s).
         """
         now = time.monotonic()
-        
+
         # Check cache
         if self._models_cache is not None:
             models, cached_at = self._models_cache
             if now - cached_at < self.models_cache_ttl:
                 logger.debug(f"Returning cached model list ({len(models)} models)")
                 return models
-        
+
         # Fetch fresh models
         try:
             data = await self._request("GET", "/api/tags")
@@ -111,7 +111,7 @@ class OllamaBackend(LLMBackend):
                         modified_at=m.get("modified_at", ""),
                     )
                 )
-            
+
             # Update cache
             self._models_cache = (models, now)
             logger.debug(f"Refreshed model list cache ({len(models)} models)")
@@ -260,7 +260,7 @@ class OllamaBackend(LLMBackend):
 
     async def get_running_models(self) -> dict[str, dict[str, Any]]:
         """Get currently loaded models with their VRAM usage from Ollama.
-        
+
         Returns:
             Dict mapping model names to their info including:
             - vram_bytes: VRAM usage in bytes
@@ -285,10 +285,10 @@ class OllamaBackend(LLMBackend):
 
     async def get_model_vram_usage(self, model_name: str) -> float | None:
         """Get VRAM usage for a specific model in GB.
-        
+
         Args:
             model_name: Name of the model to check
-            
+
         Returns:
             VRAM usage in GB, or None if model not loaded or error
         """
@@ -297,13 +297,13 @@ class OllamaBackend(LLMBackend):
         if model_name in running:
             vram_bytes = running[model_name].get("vram_bytes", 0)
             if vram_bytes and isinstance(vram_bytes, (int, float)) and vram_bytes > 0:
-                return float(vram_bytes) / (1024 ** 3)  # Convert bytes to GB
-        
+                return float(vram_bytes) / (1024**3)  # Convert bytes to GB
+
         # Try with prefix if configured
         full_name = self._full_model_name(model_name)
         if full_name in running:
             vram_bytes = running[full_name].get("vram_bytes", 0)
             if vram_bytes and isinstance(vram_bytes, (int, float)) and vram_bytes > 0:
-                return float(vram_bytes) / (1024 ** 3)
-        
+                return float(vram_bytes) / (1024**3)
+
         return None

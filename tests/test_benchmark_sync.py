@@ -1,6 +1,6 @@
 """Tests for benchmark synchronization orchestration."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -26,9 +26,6 @@ class MockProvider(BenchmarkProvider):
 @pytest.mark.asyncio
 async def test_sync_benchmarks_single_provider():
     """Test sync with a single provider."""
-    mock_data = [
-        {"ollama_name": "llama3", "mmlu": 70.0, "elo_rating": 1200},
-    ]
 
     with patch("router.benchmark_sync.bulk_upsert_benchmarks") as mock_upsert:
         with patch("router.benchmark_sync.update_sync_status"):

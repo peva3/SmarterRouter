@@ -1,4 +1,88 @@
-## [2.1.2] - 2026-02-22
+## [2.2.0] - 2026-02-24
+
+### External Provider Support (provider.db + External APIs)
+
+Added support for external/cloud LLM providers (OpenAI, Anthropic, Google, etc.) via:
+- **provider.db**: Benchmark database with 400+ models for intelligent routing
+- **External API Integration**: Actually route requests to external providers
+
+#### External API Features
+
+**Supported Providers:**
+- OpenAI (openai/gpt-4, openai/gpt-4o, etc.)
+- Anthropic (anthropic/claude-3-opus, anthropic/claude-3-sonnet, etc.)
+- Google (google/gemini-1.5-pro, etc.)
+- Cohere (cohere/command-r-plus, etc.)
+- Mistral (mistral/mistral-large, etc.)
+
+**New Configuration:**
+```bash
+# Enable external provider routing
+ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
+ROUTER_EXTERNAL_PROVIDERS=openai,anthropic,google
+
+# API Keys (at least one required)
+ROUTER_OPENAI_API_KEY=sk-...
+ROUTER_ANTHROPIC_API_KEY=sk-ant-...
+ROUTER_GOOGLE_API_KEY=...
+
+# Optional: Custom base URLs (for proxies/self-hosted)
+ROUTER_ANTHROPIC_BASE_URL=https://custom endpoint.com
+```
+
+**How It Works:**
+1. Use model names with provider prefix: `openai/gpt-4`, `anthropic/claude-3-opus`
+2. BackendRegistry automatically routes to the correct provider
+3. Benchmark data from provider.db enhances routing decisions
+
+#### New Features
+
+**provider.db Integration:**
+- Downloads and queries benchmark data from provider.db for external models
+- Supports 400+ models from OpenRouter with benchmark scores
+- Merges external benchmarks with local Ollama benchmarks seamlessly
+
+**New Settings:**
+- `ROUTER_PROVIDER_DB_ENABLED` - Enable/disable provider.db (default: true)
+- `ROUTER_PROVIDER_DB_PATH` - Path to provider.db file (default: data/provider.db)
+- `ROUTER_EXTERNAL_PROVIDERS_ENABLED` - Enable routing to external providers (default: false)
+- `ROUTER_EXTERNAL_PROVIDERS` - List of enabled external providers
+
+**BackendRegistry:**
+- New `BackendRegistry` class manages multiple backends
+- Automatic model discovery from both local and external providers
+- Intelligent routing between local Ollama and external providers
+
+**Auto-Update:**
+- Built-in auto-update in background sync task (no crontab needed!)
+- Configurable via `ROUTER_PROVIDER_DB_AUTO_UPDATE_HOURS` (default: 4 hours)
+- Downloads from https://github.com/peva3/smarterrouter-provider
+- Set to 0 to disable auto-updates
+
+**Examples:**
+```bash
+# Enable external provider routing
+ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
+
+# Use custom provider.db location
+ROUTER_PROVIDER_DB_PATH=/custom/path/provider.db
+```
+
+#### Bug Fixes & Improvements
+
+- Router now checks both local router.db and provider.db for benchmarks
+- Cache invalidation properly clears provider.db cache
+- External model names (with `/` like `openai/gpt-4`) properly detected
+
+#### Test Coverage
+
+- Added `tests/test_provider_db.py` (14 tests)
+- Added `tests/test_backend_registry.py` (9 tests)
+- Test count: 391 tests passing
+
+---
+
+## [2.1.3] - 2026-02-23
 
 ### Model Filtering
 
@@ -26,6 +110,54 @@ ROUTER_MODEL_FILTER_EXCLUDE=*qwen*,*deepseek*
 ROUTER_MODEL_FILTER_INCLUDE=gemma*,mistral*
 ROUTER_MODEL_FILTER_EXCLUDE=*q4_*,*q5_*
 ```
+
+### Bug Fixes & Codebase Improvements
+
+- **Pydantic Validation Error for Empty `.env` Variables**: Fixed a critical bug where empty strings in the `.env` file (e.g. `ROUTER_VRAM_MAX_TOTAL_GB=""`) would cause Pydantic v2 to throw a `float_parsing` ValidationError and crash the server on startup. Implemented a robust global `model_validator` that intercepts empty strings for numeric settings and safely falls back to the defined default values while preserving intentional empty strings for text fields.
+
+- **Embedding Cache Memory Leak**: Fixed a potential memory leak in the `SemanticCache` by replacing the unbounded Python `dict` for embeddings with a bounded `OrderedDict`. The embedding cache now correctly enforces a maximum size (5x the `cache_max_size`) and evicts the oldest items using LRU logic, preventing memory bloat in high-traffic environments.
+
+- **Lock Access Error in Admin Cache Invalidation**: Fixed a bug in the `/admin/cache/invalidate` endpoint that crashed with `AttributeError: 'SemanticCache' object has no attribute '_lock'` due to the previous lock-splitting optimization. Added a thread-safe `cache.clear()` method that correctly acquires all split locks (`_routing_lock`, `_response_lock`, `_embedding_lock`) before wiping data.
+
+- **Type Hinting**: Resolved static analysis warnings (LSP and MyPy) across `router.py`, `main.py`, and `artificial_analysis.py` related to generic types and dictionary value assignments.
+
+- **Stats Reporting**: Upgraded the `get_stats()` method to include performance and hit-rate metrics for the new `embedding_cache` alongside existing routing and response stats.
+
+### Test Coverage
+
+- Test count: 374 tests passing (updated after code quality fixes)
+- Added `tests/test_model_filter.py` (24 tests) covering all filtering scenarios and pattern edge cases.
+
+### Code Quality & Linting
+
+This release also includes comprehensive code quality improvements:
+
+- **Ruff Linting**: Full compliance with Ruff linter rules including:
+  - Fixed duplicate imports (`sanitize_for_logging`)
+  - Fixed unused imports across main.py, router.py, and test files
+  - Fixed variable naming conventions (N806: uppercase constants in functions)
+  - Fixed blank line whitespace (W293)
+  - Fixed trailing whitespace (W291)
+  - Fixed f-strings without placeholders (F541)
+  - Fixed implicit Optional type hints
+
+- **Type Safety**:
+  - Fixed duplicate attribute definitions in ProviderDB
+  - Fixed implicit Optional parameters in router.py
+  - Fixed yaml import type stubs
+  - Fixed IntegrityError import in tests
+
+- **Exception Handling**:
+  - Fixed B904: Proper exception chaining with `raise ... from None`
+  - Fixed B905: Added `strict=True` to `zip()` calls
+
+- **Test Improvements**:
+  - Fixed test patches referencing wrong module paths
+  - Fixed B017: Changed generic `Exception` to specific `IntegrityError`
+
+---
+
+## [2.1.2] - 2026-02-22
 
 ### AMD APU Unified Memory Support
 
@@ -57,16 +189,11 @@ This release adds comprehensive support for AMD APUs (Accelerated Processing Uni
 
 - **Architecture Deep Dive**: Added unified memory architecture explanation to `DEEPDIVE.md`.
 
-### Bug Fixes
+### Docker Compose Updates
 
-- **Empty String Env Vars**: Fixed pydantic validation error when environment variables are set to empty strings (e.g., `ROUTER_VRAM_MAX_TOTAL_GB=`). Field validator now converts empty strings to `None`.
+- **AMD GPU Group Permissions**: Updated `docs/docker-compose.amd.yml` and `docs/docker-compose.multi-gpu.yml` to include `group_add` for render/video groups, ensuring proper GPU device permissions in containers.
 
-- **Benchmark DB Upsert**: Fixed `bulk_upsert_benchmarks()` error with `None` values for optional fields. Now properly handles missing benchmark data.
-
-### Test Coverage
-
-- Test count: 333 tests passing
-- Added `tests/test_amd_backend.py` (16 tests) covering APU detection, GTT pool querying, and manual override functionality
+- **APU Setup Guidance**: Added unified memory setup instructions to docker-compose templates.
 
 ---
 

@@ -1,10 +1,11 @@
 """Tests for Judge scoring system."""
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from router.judge import JudgeClient, JUDGE_PROMPT_TEMPLATE
+import pytest
+
+from router.judge import JUDGE_PROMPT_TEMPLATE, JudgeClient
 
 
 class TestJudgeClient:
@@ -90,12 +91,9 @@ class TestJudgeClient:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 return_value=mock_response
             )
-            
-            score = await judge_enabled.score_response(
-                "What is 2+2?",
-                "The answer is 4."
-            )
-            
+
+            score = await judge_enabled.score_response("What is 2+2?", "The answer is 4.")
+
             assert score == 0.85
 
     @pytest.mark.asyncio
@@ -113,9 +111,9 @@ class TestJudgeClient:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 return_value=mock_response
             )
-            
+
             score = await judge_enabled.score_response("Test", "Response")
-            
+
             assert score == 1.0
 
     @pytest.mark.asyncio
@@ -123,9 +121,7 @@ class TestJudgeClient:
         """Test that negative scores are clamped."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": json.dumps({"score": -0.5, "reasoning": "Poor"})}}
-            ]
+            "choices": [{"message": {"content": json.dumps({"score": -0.5, "reasoning": "Poor"})}}]
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -133,9 +129,9 @@ class TestJudgeClient:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 return_value=mock_response
             )
-            
+
             score = await judge_enabled.score_response("Test", "Response")
-            
+
             assert score == 0.0
 
     @pytest.mark.asyncio
@@ -143,9 +139,7 @@ class TestJudgeClient:
         """Test handling missing score field in response."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": json.dumps({"reasoning": "No score provided"})}}
-            ]
+            "choices": [{"message": {"content": json.dumps({"reasoning": "No score provided"})}}]
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -153,9 +147,9 @@ class TestJudgeClient:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 return_value=mock_response
             )
-            
+
             score = await judge_enabled.score_response("Test", "Response")
-            
+
             assert score == 0.0
 
     @pytest.mark.asyncio
@@ -165,29 +159,25 @@ class TestJudgeClient:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 side_effect=Exception("API error")
             )
-            
+
             score = await judge_enabled.score_response("Test", "Valid response")
-            
+
             assert score == 0.5
 
     @pytest.mark.asyncio
     async def test_score_response_invalid_json(self, judge_enabled):
         """Test handling invalid JSON in response."""
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": "not valid json"}}
-            ]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "not valid json"}}]}
         mock_response.raise_for_status = MagicMock()
 
         with patch("httpx.AsyncClient") as mock_client:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(
                 return_value=mock_response
             )
-            
+
             score = await judge_enabled.score_response("Test", "Response")
-            
+
             assert score == 0.5
 
     @pytest.mark.asyncio
@@ -195,18 +185,16 @@ class TestJudgeClient:
         """Test that API key is included in request headers."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "choices": [
-                {"message": {"content": json.dumps({"score": 0.9})}}
-            ]
+            "choices": [{"message": {"content": json.dumps({"score": 0.9})}}]
         }
         mock_response.raise_for_status = MagicMock()
 
         with patch("httpx.AsyncClient") as mock_client:
             mock_instance = mock_client.return_value.__aenter__.return_value
             mock_instance.post = AsyncMock(return_value=mock_response)
-            
+
             await judge_enabled.score_response("Test", "Response")
-            
+
             call_args = mock_instance.post.call_args
             headers = call_args.kwargs.get("headers", {})
             assert "Authorization" in headers
@@ -220,21 +208,19 @@ class TestJudgeClient:
             mock_settings.judge_model = "local-model"
             mock_settings.judge_base_url = "http://localhost:11434/v1"
             mock_settings.judge_api_key = None
-            
+
             client = JudgeClient()
-            
+
             mock_response = MagicMock()
             mock_response.json.return_value = {
-                "choices": [
-                    {"message": {"content": json.dumps({"score": 0.7})}}
-                ]
+                "choices": [{"message": {"content": json.dumps({"score": 0.7})}}]
             }
             mock_response.raise_for_status = MagicMock()
 
             with patch("httpx.AsyncClient") as mock_client:
                 mock_instance = mock_client.return_value.__aenter__.return_value
                 mock_instance.post = AsyncMock(return_value=mock_response)
-                
+
                 score = await client.score_response("Test", "Response")
-                
+
                 assert score == 0.7

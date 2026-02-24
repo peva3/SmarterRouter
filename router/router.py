@@ -6,26 +6,81 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from router.backends.base import LLMBackend
 from router.benchmark_db import (
-    get_all_benchmarks,
     get_benchmarks_for_models,
     invalidate_all_caches,
-    invalidate_profiles_cache,
 )
 from router.config import settings
 from router.database import get_session
 from router.model_filter import filter_model_infos, log_filter_summary
-from router.models import ModelBenchmark, ModelFeedback, ModelProfile, RoutingDecision
+from router.models import ModelFeedback, ModelProfile, RoutingDecision
+from router.provider_db import get_provider_db
 
 logger = logging.getLogger(__name__)
 
 _PROFILE_CACHE_TTL = 60.0
+
+
+def get_benchmarks_for_models_with_external(
+    model_names: list[str],
+) -> list[dict]:
+    """
+    Get benchmarks for models from both local router.db and provider.db.
+
+    This function merges benchmark data from:
+    1. Local router.db - for Ollama models
+    2. provider.db - for external models (OpenAI, Anthropic, etc.)
+
+    Returns a list of benchmark dicts compatible with _calculate_combined_scores.
+    """
+    # Get local benchmarks (from router.db)
+    local_benchmarks = get_benchmarks_for_models(model_names)
+
+    # Get external benchmarks (from provider.db) if enabled
+    external_benchmarks: dict[str, dict] = {}
+    if settings.provider_db_enabled:
+        try:
+            provider_db = get_provider_db()
+            if provider_db.is_available():
+                # Get benchmarks for the requested models
+                external_benchmarks = provider_db.get_benchmarks_for_models(model_names)
+
+                # Convert to same format as local benchmarks
+                # provider.db uses "model_id" instead of "ollama_name"
+                for model_id, bench in external_benchmarks.items():
+                    bench["ollama_name"] = model_id  # Map to expected key
+
+                if external_benchmarks:
+                    logger.debug(
+                        f"Found {len(external_benchmarks)} external benchmarks from provider.db"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to get external benchmarks from provider.db: {e}")
+
+    # Merge: local benchmarks take precedence, then external
+    # Create a map of all benchmarks by model name
+    merged: dict[str, dict] = {}
+
+    # Add local benchmarks first
+    for bench in local_benchmarks:
+        name = bench.get("ollama_name")
+        if name:
+            merged[name] = bench
+
+    # Add external benchmarks for models not in local
+    for model_name in model_names:
+        if model_name not in merged and model_name in external_benchmarks:
+            merged[model_name] = external_benchmarks[model_name]
+
+    return list(merged.values())
+
+
 _profiles_cache: list[dict] | None = None
 _profiles_cache_time: float = 0.0
 
@@ -49,7 +104,7 @@ CATEGORY_MIN_SIZES = {
 
 class SemanticCache:
     """Smart LRU cache for routing decisions with semantic similarity and response caching.
-    
+
     Optimized with numpy for vectorized similarity search and separate locks for
     routing and response caches to minimize contention.
     """
@@ -63,9 +118,9 @@ class SemanticCache:
         response_max_size: int = 50,
         embedding_ttl_seconds: int = 86400,  # 24 hours for embeddings
     ):
-        self.cache: OrderedDict[str, tuple[RoutingResult, float, list[float] | None, float | None]] = (
-            OrderedDict()
-        )
+        self.cache: OrderedDict[
+            str, tuple[RoutingResult, float, list[float] | None, float | None]
+        ] = OrderedDict()
         self.max_size = max_size
         self.ttl = ttl_seconds
         self.similarity_threshold = similarity_threshold
@@ -79,11 +134,12 @@ class SemanticCache:
         self.response_cache: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
         self.response_max_size = response_max_size
         self.response_ttl = ttl_seconds
-        
+
         # Separate embedding cache with longer TTL (24h default)
         # Key: prompt hash, Value: (embedding, magnitude, timestamp)
-        self.embedding_cache: dict[str, tuple[list[float], float, float]] = {}
+        self.embedding_cache: OrderedDict[str, tuple[list[float], float, float]] = OrderedDict()
         self.embedding_ttl = embedding_ttl_seconds
+        self.embedding_max_size = max_size * 5  # Allow more embeddings than routing decisions
 
         self.stats = {
             "routing_hits": 0,
@@ -94,92 +150,93 @@ class SemanticCache:
             "embedding_cache_hits": 0,
             "embedding_cache_misses": 0,
         }
-        
+
         self._model_frequency: dict[str, int] = {}
 
     def _hash_prompt(self, prompt: str) -> str:
         return hashlib.sha256(prompt.encode()).hexdigest()[:32]
 
-    def _cosine_similarity(self, a: list[float], b: list[float], mag_a: float, mag_b: float) -> float:
+    def _cosine_similarity(
+        self, a: list[float], b: list[float], mag_a: float, mag_b: float
+    ) -> float:
         if not a or not b or mag_a == 0 or mag_b == 0:
             return 0.0
-        dot_product = sum(x * y for x, y in zip(a, b))
+        dot_product = sum(x * y for x, y in zip(a, b, strict=False))
         return dot_product / (mag_a * mag_b)
 
     def _cosine_similarity_batch(
-        self, 
-        query: list[float], 
-        query_mag: float,
-        candidates: list[tuple[str, list[float], float]]
+        self, query: list[float], query_mag: float, candidates: list[tuple[str, list[float], float]]
     ) -> list[tuple[str, float]]:
         """Vectorized batch cosine similarity using numpy for better performance.
-        
+
         Args:
             query: Query embedding vector
             query_mag: Magnitude of query vector
             candidates: List of (key, embedding, magnitude) tuples
-            
+
         Returns:
             List of (key, similarity) tuples sorted by similarity descending
         """
         if not candidates:
             return []
-        
+
         try:
             import numpy as np
+
             query_arr = np.array(query, dtype=np.float32)
             candidate_matrix = np.array([c[1] for c in candidates], dtype=np.float32)
             mags = np.array([c[2] for c in candidates], dtype=np.float32)
             keys = [c[0] for c in candidates]
-            
+
             dot_products = candidate_matrix @ query_arr
             similarities = dot_products / (mags * query_mag + 1e-10)
-            
-            results = [(keys[i], float(similarities[i])) for i in range(len(keys))]
+
+            results = [(key, float(sim)) for key, sim in zip(keys, similarities, strict=True)]
             results.sort(key=lambda x: x[1], reverse=True)
             return results
         except ImportError:
             results = [
-                (c[0], self._cosine_similarity(query, c[1], query_mag, c[2]))
-                for c in candidates
+                (c[0], self._cosine_similarity(query, c[1], query_mag, c[2])) for c in candidates
             ]
             results.sort(key=lambda x: x[1], reverse=True)
             return results
 
     async def _get_embedding(self, client: LLMBackend, text: str) -> list[float] | None:
         """Get embedding for text, using cache if available.
-        
+
         Embeddings are cached for 24 hours by default to avoid repeated
         expensive embedding API calls for the same prompts.
         """
         if not self.embed_model:
             return None
-        
+
         key = self._hash_prompt(text[:8192])
         current_time = time.time()
-        
+
         async with self._embedding_lock:
             if key in self.embedding_cache:
                 emb, mag, timestamp = self.embedding_cache[key]
                 if current_time - timestamp < self.embedding_ttl:
+                    self.embedding_cache.move_to_end(key)
                     self.stats["embedding_cache_hits"] += 1
                     return emb
                 else:
                     del self.embedding_cache[key]
-        
+
         try:
             result = await client.embed(self.embed_model, text[:8192])
             embeddings = result.get("embeddings") or result.get("embedding")
             if embeddings:
                 emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings
-                if embeddings:
-                    emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings[0] if embeddings else None
-                    if emb:
-                        mag = sum(x * x for x in emb) ** 0.5
-                        async with self._embedding_lock:
-                            self.embedding_cache[key] = (emb, mag, current_time)
-                        self.stats["embedding_cache_misses"] += 1
-                        return emb
+                if emb and isinstance(emb, list):
+                    mag = sum(x * x for x in emb) ** 0.5
+                    async with self._embedding_lock:
+                        self.embedding_cache[key] = (emb, mag, current_time)
+                        self.embedding_cache.move_to_end(key)
+                        if len(self.embedding_cache) > self.embedding_max_size:
+                            self.embedding_cache.popitem(last=False)
+                    self.stats["embedding_cache_misses"] += 1
+                    return emb
         except Exception as e:
             logger.debug(f"Embedding failed: {e}")
         return None
@@ -206,12 +263,12 @@ class SemanticCache:
                     for cache_key, (_, timestamp, cache_emb, cache_mag) in self.cache.items()
                     if cache_emb and cache_mag and current_time - timestamp < self.ttl
                 ]
-                
+
                 if candidates:
                     similarities = self._cosine_similarity_batch(
                         embedding, embedding_mag, candidates
                     )
-                    
+
                     for cache_key, similarity in similarities:
                         if similarity >= self.similarity_threshold:
                             result = self.cache[cache_key][0]
@@ -244,9 +301,11 @@ class SemanticCache:
                 old = self.recent_selections.pop(0)
                 if old[0] in self._model_frequency:
                     self._model_frequency[old[0]] = max(0, self._model_frequency[old[0]] - 1)
-            
-            self._model_frequency[result.selected_model] = self._model_frequency.get(result.selected_model, 0) + 1
-            
+
+            self._model_frequency[result.selected_model] = (
+                self._model_frequency.get(result.selected_model, 0) + 1
+            )
+
         logger.debug(f"Cached routing decision for: {key[:8]}...")
 
     def _make_response_key(self, model: str, prompt: str, params: dict | None = None) -> tuple:
@@ -254,10 +313,24 @@ class SemanticCache:
         prompt_hash = self._hash_prompt(prompt)
         if params:
             # Include relevant generation parameters that affect output
-            param_tuple = tuple(sorted([
-                (k, v) for k, v in params.items()
-                if v is not None and k in ('temperature', 'top_p', 'max_tokens', 'seed', 'presence_penalty', 'frequency_penalty')
-            ]))
+            param_tuple = tuple(
+                sorted(
+                    [
+                        (k, v)
+                        for k, v in params.items()
+                        if v is not None
+                        and k
+                        in (
+                            "temperature",
+                            "top_p",
+                            "max_tokens",
+                            "seed",
+                            "presence_penalty",
+                            "frequency_penalty",
+                        )
+                    ]
+                )
+            )
             return (model, prompt_hash, param_tuple)
         return (model, prompt_hash)
 
@@ -279,7 +352,9 @@ class SemanticCache:
             self.stats["response_misses"] += 1
             return None
 
-    async def set_response(self, model: str, prompt: str, response: str, params: dict | None = None) -> None:
+    async def set_response(
+        self, model: str, prompt: str, response: str, params: dict | None = None
+    ) -> None:
         key = self._make_response_key(model, prompt, params)
         async with self._response_lock:
             self.response_cache[key] = (response, time.time())
@@ -310,9 +385,20 @@ class SemanticCache:
                 return 0.0
             return self._model_frequency.get(model_name, 0) / total
 
+    async def clear(self) -> None:
+        """Clear all caches safely using their respective locks."""
+        async with self._routing_lock:
+            self.cache.clear()
+            self.recent_selections.clear()
+            self._model_frequency.clear()
+        async with self._response_lock:
+            self.response_cache.clear()
+        async with self._embedding_lock:
+            self.embedding_cache.clear()
+
     async def get_stats(self) -> dict[str, Any]:
         async with self._routing_lock:
-            routing_stats = {
+            routing_stats: dict[str, int | float] = {
                 "size": len(self.cache),
                 "max_size": self.max_size,
                 "hits": self.stats["routing_hits"],
@@ -323,9 +409,9 @@ class SemanticCache:
             routing_stats["hit_rate"] = round(
                 self.stats["routing_hits"] / total_routing if total_routing > 0 else 0.0, 3
             )
-            
+
         async with self._response_lock:
-            response_stats = {
+            response_stats: dict[str, int | float] = {
                 "size": len(self.response_cache),
                 "max_size": self.response_max_size,
                 "hits": self.stats["response_hits"],
@@ -336,9 +422,27 @@ class SemanticCache:
                 self.stats["response_hits"] / total_response if total_response > 0 else 0.0, 3
             )
 
+        async with self._embedding_lock:
+            embedding_stats: dict[str, int | float] = {
+                "size": len(self.embedding_cache),
+                "max_size": self.embedding_max_size,
+                "hits": self.stats["embedding_cache_hits"],
+                "misses": self.stats["embedding_cache_misses"],
+            }
+            total_embedding = (
+                self.stats["embedding_cache_hits"] + self.stats["embedding_cache_misses"]
+            )
+            embedding_stats["hit_rate"] = round(
+                self.stats["embedding_cache_hits"] / total_embedding
+                if total_embedding > 0
+                else 0.0,
+                3,
+            )
+
         return {
             "routing": routing_stats,
             "response": response_stats,
+            "embedding": embedding_stats,
         }
 
 
@@ -379,12 +483,18 @@ class RouterEngine:
 
         self._get_all_profiles()
         if model_names:
+            # Warm both local and external benchmarks
             get_benchmarks_for_models(model_names)
+            get_benchmarks_for_models_with_external(model_names)
         logger.info("Router caches pre-warmed")
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches (call when models change)."""
         invalidate_all_caches()
+        # Also invalidate provider.db cache
+        from router.provider_db import invalidate_provider_cache
+
+        invalidate_provider_cache()
         logger.info("Router caches invalidated")
 
     async def select_model(
@@ -402,7 +512,7 @@ class RouterEngine:
                 return cached
 
         available_models = await self.client.list_models()
-        
+
         # Apply model filtering if configured
         include = settings.model_filter_include
         exclude = settings.model_filter_exclude
@@ -410,12 +520,13 @@ class RouterEngine:
             original_count = len(available_models)
             available_models = filter_model_infos(available_models, include, exclude)
             excluded_count = original_count - len(available_models)
-            log_filter_summary(original_count, len(available_models), excluded_count, include, exclude)
-        
+            log_filter_summary(
+                original_count, len(available_models), excluded_count, include, exclude
+            )
+
         if not available_models:
             raise ValueError(
-                f"No models available after filtering "
-                f"(include={include}, exclude={exclude})"
+                f"No models available after filtering (include={include}, exclude={exclude})"
             )
 
         model_names = [m.name for m in available_models]
@@ -448,7 +559,7 @@ class RouterEngine:
 
     async def _llm_dispatch(self, prompt: str, model_names: list[str]) -> RoutingResult:
         # ... existing implementation ... (no changes needed here for now as it's string based)
-        benchmarks = get_benchmarks_for_models(model_names)
+        benchmarks = get_benchmarks_for_models_with_external(model_names)
 
         if not benchmarks:
             logger.warning("No benchmark data, falling back to keyword dispatch")
@@ -544,11 +655,11 @@ Select the model that best matches the user's prompt needs."""
         try:
             with get_session() as session:
                 from sqlalchemy import func
+
                 # Use SQL aggregation for O(1) database load instead of O(N) full table scan
                 results = (
                     session.query(
-                        ModelFeedback.model_name,
-                        func.avg(ModelFeedback.score).label('avg_score')
+                        ModelFeedback.model_name, func.avg(ModelFeedback.score).label("avg_score")
                     )
                     .group_by(ModelFeedback.model_name)
                     .all()
@@ -562,7 +673,7 @@ Select the model that best matches the user's prompt needs."""
         self, prompt: str, model_names: list[str], request_obj: Any = None
     ) -> RoutingResult:
         profiles = self._get_all_profiles()
-        benchmarks = get_benchmarks_for_models(model_names)
+        benchmarks = get_benchmarks_for_models_with_external(model_names)
         feedback_scores = self._get_model_feedback_scores()
 
         if not profiles and not benchmarks:
@@ -581,7 +692,7 @@ Select the model that best matches the user's prompt needs."""
         if self.semantic_cache:
             freq_tasks = [self.semantic_cache.get_model_frequency(m) for m in model_names]
             freq_results = await asyncio.gather(*freq_tasks)
-            model_frequencies = {m: f for m, f in zip(model_names, freq_results)}
+            model_frequencies = dict(zip(model_names, freq_results, strict=False))
 
         scores = self._calculate_combined_scores(
             profiles, benchmarks, analysis, model_names, feedback_scores, model_frequencies
@@ -600,7 +711,7 @@ Select the model that best matches the user's prompt needs."""
             for m, s in sorted_scores[:8]
         ]
         logger.info(f"Model scores (top 8): {top5}")
-        logger.info(f"  (format: model, total_score, base_score, coding, creativity)")
+        logger.info("  (format: model, total_score, base_score, coding, creativity)")
 
         # Determine dominant category (threshold > 0.5) - but exclude complexity!
         task_categories = {k: v for k, v in analysis.items() if k != "complexity"}
@@ -715,9 +826,13 @@ Select the model that best matches the user's prompt needs."""
         benchmarks: list[dict],
         analysis: dict[str, float],
         model_names: list[str],
-        feedback_scores: dict[str, float] = {},
-        model_frequencies: dict[str, float] = {},
+        feedback_scores: dict[str, float] | None = None,
+        model_frequencies: dict[str, float] | None = None,
     ) -> dict[str, dict[str, float]]:
+        if model_frequencies is None:
+            model_frequencies = {}
+        if feedback_scores is None:
+            feedback_scores = {}
         scores: dict[str, dict[str, float]] = {}
 
         profile_map = {p["name"]: p for p in profiles}
@@ -734,7 +849,7 @@ Select the model that best matches the user's prompt needs."""
             base = name.split(":")[0].lower().replace("-", "").replace("_", "").replace(".", "")
 
             # Also try with just the first part before numbers
-            base_parts = base.split("2")[0] if "2" in base else base
+            base.split("2")[0] if "2" in base else base
 
             best_match = None
             best_score = 0.0
@@ -788,7 +903,9 @@ Select the model that best matches the user's prompt needs."""
         )
 
         # Determine dominant category (exclude complexity which is a meta-category)
-        task_categories = {k: v for k, v in analysis.items() if k not in ("complexity", "vision", "tools")}
+        task_categories = {
+            k: v for k, v in analysis.items() if k not in ("complexity", "vision", "tools")
+        }
         if task_categories:
             top_category = max(task_categories.items(), key=lambda x: x[1])
             dominant_category = top_category[0] if top_category[1] > 0.5 else None
@@ -848,7 +965,9 @@ Select the model that best matches the user's prompt needs."""
                     (benchmark_score * 1.5 * quality_weight)
                     + (elo_signal * 1.0 * quality_weight)
                     + (inference_score * 0.4 * quality_weight)
-                    + (profile_score * 0.8 * quality_weight)  # Profile is more reliable than name inference
+                    + (
+                        profile_score * 0.8 * quality_weight
+                    )  # Profile is more reliable than name inference
                 )
 
                 # If this is the dominant category, apply the 20x Category-First boost
@@ -981,7 +1100,7 @@ Select the model that best matches the user's prompt needs."""
             # This prevents one model from dominating and encourages exploration
             model_frequency = model_frequencies.get(model_name, 0.0)
             diversity_penalty = 0.0
-            
+
             if model_frequency > 0.5:
                 # Apply multiplicative penalty to base_score
                 # freq 0.5 -> 0.65x (35% reduction)
@@ -991,7 +1110,9 @@ Select the model that best matches the user's prompt needs."""
                 multiplier = max(0.3, 1.0 - reduction)
                 base_score = base_score * multiplier
                 # For logging, compute an approximate additive equivalent
-                diversity_penalty = -base_score * (1.0 - multiplier) / (multiplier if multiplier > 0 else 1)
+                diversity_penalty = (
+                    -base_score * (1.0 - multiplier) / (multiplier if multiplier > 0 else 1)
+                )
             elif model_frequency > 0:
                 # Small frequency gets tiny penalty to nudge exploration
                 diversity_penalty = -model_frequency * 0.2
@@ -1110,9 +1231,9 @@ Select the model that best matches the user's prompt needs."""
         # Handle both timezone-aware and naive datetimes
         if isinstance(first_seen, datetime):
             if first_seen.tzinfo is None:
-                first_seen = first_seen.replace(tzinfo=timezone.utc)
+                first_seen = first_seen.replace(tzinfo=UTC)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age = now - first_seen
         days_old = age.days
 

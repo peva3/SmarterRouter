@@ -3,11 +3,11 @@
 from typing import cast
 
 from prometheus_client import (
+    REGISTRY,
     Counter,
     Gauge,
     Histogram,
     generate_latest,
-    REGISTRY,
 )
 
 # Request metrics
@@ -67,6 +67,7 @@ VRAM_UTILIZATION_PCT = Gauge(
     "GPU VRAM utilization percentage",
 )
 
+
 # Per-GPU metrics (dynamic, will be registered per GPU index)
 def create_gpu_metrics():
     """Create per-GPU metrics with labels."""
@@ -75,6 +76,7 @@ def create_gpu_metrics():
         "used": Gauge("smarterrouter_gpu_used_gb", "Used VRAM per GPU", ["gpu_index", "vendor"]),
         "free": Gauge("smarterrouter_gpu_free_gb", "Free VRAM per GPU", ["gpu_index", "vendor"]),
     }
+
 
 gpu_metrics = create_gpu_metrics()
 

@@ -1,7 +1,7 @@
 """Base classes and protocols for GPU backends."""
 
 from dataclasses import dataclass
-from typing import List, Protocol
+from typing import Protocol
 
 
 @dataclass
@@ -16,6 +16,7 @@ class GPUMemory:
         vendor: GPU vendor identifier ("nvidia", "amd", "intel", "apple")
         device_name: Human-readable GPU device name (e.g., "NVIDIA RTX 4090")
     """
+
     index: int
     total_gb: float
     used_gb: float
@@ -59,7 +60,7 @@ class GPUBackend(Protocol):
         """
         ...
 
-    def get_memory_info(self) -> List[GPUMemory]:
+    def get_memory_info(self) -> list[GPUMemory]:
         """Get current VRAM memory information for all GPUs from this vendor.
 
         Returns:

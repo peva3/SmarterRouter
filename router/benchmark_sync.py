@@ -1,27 +1,25 @@
 import asyncio
 import logging
-import re
 from typing import Any
 
 from router.benchmark_db import (
     bulk_upsert_benchmarks,
-    remove_benchmarks_not_in,
     update_sync_status,
 )
+from router.providers.artificial_analysis import ArtificialAnalysisProvider
 from router.providers.base import BenchmarkProvider
 from router.providers.huggingface import HuggingFaceProvider
 from router.providers.lmsys import LMSYSProvider
-from router.providers.artificial_analysis import ArtificialAnalysisProvider
 
 logger = logging.getLogger(__name__)
 
 
 async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
     """Sync benchmarks from all enabled providers in parallel.
-    
+
     Args:
         ollama_models: List of model names to match against benchmarks
-        
+
     Returns:
         Tuple of (count of synced models, list of matched model names)
     """
@@ -46,11 +44,8 @@ async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
     async def fetch_provider_data(provider: BenchmarkProvider) -> list[dict[str, Any]]:
         """Fetch data from a single provider with timeout protection."""
         try:
-            return await asyncio.wait_for(
-                provider.fetch_data(ollama_models),
-                timeout=120.0
-            )
-        except asyncio.TimeoutError:
+            return await asyncio.wait_for(provider.fetch_data(ollama_models), timeout=120.0)
+        except TimeoutError:
             logger.error(f"Provider {provider.name} timed out after 120s")
             return []
         except Exception as e:
@@ -59,7 +54,7 @@ async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
 
     results = await asyncio.gather(*[fetch_provider_data(p) for p in providers])
 
-    for provider, data in zip(providers, results):
+    for provider, data in zip(providers, results, strict=False):
         logger.info(f"Provider {provider.name} returned {len(data)} records")
         for item in data:
             name = item["ollama_name"]

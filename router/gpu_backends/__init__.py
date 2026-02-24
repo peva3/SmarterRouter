@@ -1,13 +1,12 @@
 """GPU backend manager that auto-detects and aggregates all available GPUs."""
 
 import logging
-from typing import List, Optional
 
-from router.gpu_backends.base import GPUBackend, GPUMemory
-from router.gpu_backends.nvidia import NVIDIABackend
 from router.gpu_backends.amdgpu import AMDBackend
-from router.gpu_backends.intel import IntelBackend
 from router.gpu_backends.apple import AppleBackend
+from router.gpu_backends.base import GPUBackend, GPUMemory
+from router.gpu_backends.intel import IntelBackend
+from router.gpu_backends.nvidia import NVIDIABackend
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,8 @@ class GPUBackendManager:
 
     def __init__(
         self,
-        apple_unified_memory_gb: Optional[float] = None,
-        amd_unified_memory_gb: Optional[float] = None,
+        apple_unified_memory_gb: float | None = None,
+        amd_unified_memory_gb: float | None = None,
     ):
         """Initialize backend manager.
 
@@ -49,7 +48,7 @@ class GPUBackendManager:
             amd_unified_memory_gb: For AMD APUs with unified memory - override auto-detected
                                    GTT size. Useful when sysfs reports incorrect values.
         """
-        self.backends: List[GPUBackend] = []
+        self.backends: list[GPUBackend] = []
         self._apple_unified_memory_gb = apple_unified_memory_gb
         self._amd_unified_memory_gb = amd_unified_memory_gb
         self._detect_all_backends()
@@ -101,7 +100,7 @@ class GPUBackendManager:
                 f"Detected {len(self.backends)} GPU backend(s): {', '.join(detected_vendors)}"
             )
 
-    def get_all_memory_info(self) -> List[GPUMemory]:
+    def get_all_memory_info(self) -> list[GPUMemory]:
         """Get memory info from all GPUs across all vendors.
 
         Returns:
@@ -111,7 +110,7 @@ class GPUBackendManager:
                 GPU 1 = second GPU (from any vendor)
                 etc.
         """
-        all_gpus: List[GPUMemory] = []
+        all_gpus: list[GPUMemory] = []
         global_index = 0
 
         for backend in self.backends:
@@ -166,6 +165,6 @@ class GPUBackendManager:
         """Get total number of detected GPUs across all vendors."""
         return len(self.get_all_memory_info())
 
-    def get_vendor_info(self) -> List[str]:
+    def get_vendor_info(self) -> list[str]:
         """Get list of detected vendor names for logging."""
         return [f"{backend.vendor}:{backend.device_name}" for backend in self.backends]

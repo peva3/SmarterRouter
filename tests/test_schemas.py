@@ -1,8 +1,6 @@
 """Tests for schema helper functions."""
 
-import pytest
-
-from router.schemas import is_unclosed_code_block, close_unclosed_code_block
+from router.schemas import close_unclosed_code_block, is_unclosed_code_block
 
 
 class TestCodeBlockHandling:

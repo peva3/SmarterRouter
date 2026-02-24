@@ -74,4 +74,5 @@ class LLMBackend(Protocol):
 def supports_unload(backend: LLMBackend) -> bool:
     """Check if backend supports model unloading."""
     from router.backends.ollama import OllamaBackend
+
     return isinstance(backend, OllamaBackend)

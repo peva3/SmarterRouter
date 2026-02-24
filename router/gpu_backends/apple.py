@@ -22,14 +22,11 @@ Configuration:
 """
 
 import logging
-import os
 import platform
 import re
 import subprocess
-import sys
-from typing import List, Optional
 
-from router.gpu_backends.base import GPUBackend, GPUMemory
+from router.gpu_backends.base import GPUMemory
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +38,7 @@ class AppleBackend:
     Optionally uses powermetrics for detailed usage tracking.
     """
 
-    def __init__(self, unified_memory_gb: Optional[float] = None):
+    def __init__(self, unified_memory_gb: float | None = None):
         """Initialize Apple Silicon backend.
 
         Args:
@@ -50,7 +47,7 @@ class AppleBackend:
                               auto-detection fails.
         """
         self._unified_memory_gb = unified_memory_gb
-        self._chip_name: Optional[str] = None
+        self._chip_name: str | None = None
         self._detect_chip()
 
         # Configuration: percentage of unified memory available for GPU
@@ -106,7 +103,7 @@ class AppleBackend:
             )
             if result.returncode == 0:
                 bytes_ram = int(result.stdout.strip())
-                return bytes_ram / (1024 ** 3)
+                return bytes_ram / (1024**3)
         except Exception as e:
             logger.warning(f"Failed to detect total RAM: {e}")
 
@@ -118,7 +115,7 @@ class AppleBackend:
         # Default fallback: 16GB (minimum for AI workloads)
         return 16.0
 
-    def get_memory_info(self) -> List[GPUMemory]:
+    def get_memory_info(self) -> list[GPUMemory]:
         """Get GPU memory info for Apple Silicon.
 
         Returns:
@@ -167,7 +164,7 @@ class AppleBackend:
         """Update estimated GPU usage (called by VRAMManager)."""
         self._estimated_used_gb = used_gb
 
-    def _try_powermetrics(self) -> Optional[float]:
+    def _try_powermetrics(self) -> float | None:
         """Try to get GPU usage from powermetrics (requires sudo)."""
         try:
             # powermetrics requires sudo on most systems

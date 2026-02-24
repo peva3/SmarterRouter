@@ -5,15 +5,14 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
-
 
 from router.backends import create_backend
 from router.backends.base import LLMBackend, supports_unload
@@ -21,19 +20,13 @@ from router.benchmark_db import get_last_sync
 from router.benchmark_sync import sync_benchmarks
 from router.config import Settings, init_logging, settings
 from router.database import get_session, init_db
-from router.logging_config import get_request_id, sanitize_for_logging, set_request_id
+from router.logging_config import sanitize_for_logging, set_request_id
 from router.metrics import (
-    CACHE_HITS_TOTAL,
-    CACHE_MISSES_TOTAL,
     ERRORS_TOTAL,
-    MODEL_SELECTIONS_TOTAL,
     REQUEST_DURATION,
     REQUESTS_TOTAL,
-    VRAM_TOTAL_GB,
-    VRAM_USED_GB,
-    VRAM_UTILIZATION_PCT,
-    gpu_metrics,
 )
+from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import (
     BenchmarkSync,
     ModelBenchmark,
@@ -41,24 +34,22 @@ from router.models import (
     ModelProfile,
     RoutingDecision,
 )
-from router.profiler import ModelProfiler, profile_all_models
+from router.profiler import profile_all_models
 from router.router import RouterEngine
-from router.model_filter import filter_model_infos, log_filter_summary
-from router.vram_monitor import VRAMMonitor
-from router.vram_manager import VRAMManager, VRAMExceededError
 from router.schemas import (
     ChatCompletionRequest,
-    ChatMessage,
-    FeedbackRequest,
-    sanitize_prompt,
-    sanitize_for_logging,
-    strip_signature,
-    close_unclosed_code_block,
+    EmbeddingData,
     EmbeddingsRequest,
     EmbeddingsResponse,
-    EmbeddingData,
+    FeedbackRequest,
     UsageInfo,
+    close_unclosed_code_block,
+    sanitize_prompt,
+    strip_signature,
 )
+from router.skills import skills_registry
+from router.vram_manager import VRAMManager
+from router.vram_monitor import VRAMMonitor
 
 
 def get_model_vram_estimate(model_name: str) -> float:
@@ -76,23 +67,20 @@ def get_model_vram_estimate(model_name: str) -> float:
     return settings.vram_default_estimate_gb
 
 
-async def list_models_with_timeout(
-    backend: LLMBackend, 
-    timeout: float = 10.0
-) -> list:
+async def list_models_with_timeout(backend: LLMBackend, timeout: float = 10.0) -> list:
     """
     List models with timeout protection.
-    
+
     Args:
         backend: The LLM backend to query
         timeout: Maximum time to wait (default 10s)
-        
+
     Returns:
         List of ModelInfo objects, or empty list on timeout/error
     """
     try:
         return await asyncio.wait_for(backend.list_models(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(f"Timeout ({timeout}s) waiting for backend.list_models()")
         return []
     except Exception as e:
@@ -100,12 +88,9 @@ async def list_models_with_timeout(
         return []
 
 
-from router.skills import skills_registry
-
-
 class AppState:
     def __init__(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         self.backend: LLMBackend | None = None
         self.router_engine: RouterEngine | None = None
@@ -119,7 +104,7 @@ class AppState:
         self.vram_manager: VRAMManager | None = None
 
         # Health and stats tracking
-        self.start_time: datetime = datetime.now(timezone.utc)
+        self.start_time: datetime = datetime.now(UTC)
         self.total_requests: int = 0
         self.total_errors: int = 0
         self.requests_by_model: dict[str, int] = {}
@@ -230,7 +215,7 @@ async def startup_event():
 
         try:
             available_models = await list_models_with_timeout(app_state.backend)
-            
+
             # Apply model filtering if configured
             include = settings.model_filter_include
             exclude = settings.model_filter_exclude
@@ -238,8 +223,14 @@ async def startup_event():
                 original_count = len(available_models) if available_models else 0
                 available_models = filter_model_infos(available_models, include, exclude)
                 excluded_count = original_count - (len(available_models) if available_models else 0)
-                log_filter_summary(original_count, len(available_models) if available_models else 0, excluded_count, include, exclude)
-            
+                log_filter_summary(
+                    original_count,
+                    len(available_models) if available_models else 0,
+                    excluded_count,
+                    include,
+                    exclude,
+                )
+
             model_names = [m.name for m in available_models] if available_models else []
             app_state.router_engine.warmup_caches(model_names)
         except Exception as e:
@@ -287,7 +278,7 @@ async def startup_event():
         app_state.router_engine.vram_manager = vram_manager
     if app_state.backend:
         vram_manager.set_backend(app_state.backend)
-        
+
         # Pre-load pinned model if configured (improves first-response latency)
         if settings.pinned_model:
             logger.info(f"Pre-loading pinned model: {settings.pinned_model}")
@@ -300,7 +291,12 @@ async def startup_event():
                 logger.warning(f"Failed to pre-load pinned model {settings.pinned_model}: {e}")
 
     # Start background sync task
-    if settings.provider == "ollama":
+    # Should run if:
+    # 1. We're using Ollama (needs profiling + sync)
+    # 2. OR provider.db auto-update is enabled (needs download)
+    if settings.provider == "ollama" or (
+        settings.provider_db_enabled and settings.provider_db_auto_update_hours > 0
+    ):
         task = asyncio.create_task(background_sync_task())
         app_state.background_tasks.add(task)
         task.add_done_callback(app_state.background_tasks.discard)
@@ -317,7 +313,7 @@ async def shutdown_event():
             await app_state.backend.unload_model(settings.pinned_model)
 
     # Close backend HTTP client for connection cleanup
-    if app_state.backend and hasattr(app_state.backend, 'close'):
+    if app_state.backend and hasattr(app_state.backend, "close"):
         try:
             await app_state.backend.close()
         except Exception as e:
@@ -325,28 +321,66 @@ async def shutdown_event():
 
 
 async def background_sync_task():
-    """Background task to sync benchmarks and profile new models."""
+    """Background task to sync benchmarks, download provider.db, and profile new models."""
+    provider_db_last_download: float | None = None
+    provider_db_failures = 0
+    backoff_base = 60  # seconds
+
     while True:
         try:
+            # 1. Download provider.db if enabled
+            if settings.provider_db_enabled and settings.provider_db_auto_update_hours > 0:
+                # Calculate backoff if previously failed
+                backoff = (
+                    min(backoff_base * (2**provider_db_failures), 3600)
+                    if provider_db_failures > 0
+                    else 0
+                )
+
+                hours_since_download = (
+                    (time.time() - provider_db_last_download) / 3600
+                    if provider_db_last_download
+                    else float("inf")
+                )
+
+                # Check if it's time to download (considering backoff)
+                if (
+                    hours_since_download >= settings.provider_db_auto_update_hours
+                    and time.time() > (provider_db_last_download or 0) + backoff
+                ):
+                    logger.info("Downloading latest provider.db...")
+                    success = await download_provider_db()
+                    if success:
+                        provider_db_last_download = time.time()
+                        provider_db_failures = 0
+                        # Invalidate caches to pick up new benchmarks
+                        if app_state.router_engine:
+                            app_state.router_engine.invalidate_caches()
+                    else:
+                        provider_db_failures += 1
+                        wait_time = min(backoff_base * (2**provider_db_failures), 3600)
+                        logger.warning(
+                            f"Provider.db download failed (attempt {provider_db_failures}), backing off for {wait_time}s"
+                        )
+                        # We don't sleep here, we just won't try again until backoff expires
+
             if app_state.backend:
-                # 1. Sync Benchmarks (once per day or on startup)
+                # 2. Sync Benchmarks (once per day or on startup)
                 # For simplicity, we run it on startup and then rely on restart
                 # But here we can check if it's needed
-                with get_session() as session:
+                with get_session():
                     last_sync = get_last_sync()
                     should_sync = False
                     if not last_sync:
                         should_sync = True
-                    elif (
-                        datetime.now(timezone.utc) - last_sync.replace(tzinfo=timezone.utc)
-                    ).days >= 1:
+                    elif (datetime.now(UTC) - last_sync.replace(tzinfo=UTC)).days >= 1:
                         should_sync = True
 
                 if should_sync:
                     logger.info("Starting benchmark sync...")
                     # Get available model names to match against benchmarks
                     models = await list_models_with_timeout(app_state.backend)
-                    
+
                     # Apply model filtering if configured
                     include = settings.model_filter_include
                     exclude = settings.model_filter_exclude
@@ -354,15 +388,17 @@ async def background_sync_task():
                         original_count = len(models)
                         models = filter_model_infos(models, include, exclude)
                         excluded_count = original_count - len(models)
-                        log_filter_summary(original_count, len(models), excluded_count, include, exclude)
-                    
+                        log_filter_summary(
+                            original_count, len(models), excluded_count, include, exclude
+                        )
+
                     model_names = [m.name for m in models]
                     await sync_benchmarks(model_names)
                     # Invalidate router caches after benchmark sync
                     if app_state.router_engine:
                         app_state.router_engine.invalidate_caches()
 
-                # 2. Profile New Models
+                # 3. Profile New Models
                 # This will only profile models that haven't been profiled yet
                 await profile_all_models(app_state.backend)
 
@@ -370,6 +406,56 @@ async def background_sync_task():
             logger.error(f"Background sync task failed: {e}")
 
         await asyncio.sleep(settings.polling_interval)
+
+
+async def download_provider_db() -> bool:
+    """Download the latest provider.db from GitHub."""
+    import httpx
+
+    db_path = settings.provider_db_path
+    download_url = settings.provider_db_download_url
+
+    try:
+        # Create parent directory if needed
+        from pathlib import Path
+
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(download_url)
+            response.raise_for_status()
+
+            # Write to temp file first
+            temp_path = f"{db_path}.tmp"
+            with open(temp_path, "wb") as f:
+                f.write(response.content)
+
+            # Verify it's a valid SQLite database
+            import sqlite3
+
+            conn = sqlite3.connect(temp_path)
+            conn.execute("SELECT COUNT(*) FROM model_benchmarks")
+            conn.close()
+
+            # Atomic rename
+            import shutil
+
+            shutil.move(temp_path, db_path)
+
+            logger.info("provider.db updated successfully")
+            return True
+
+    except Exception as e:
+        logger.error(f"Failed to download provider.db: {e}")
+        # Clean up temp file if it exists
+        try:
+            import os
+
+            if os.path.exists(f"{db_path}.tmp"):
+                os.remove(f"{db_path}.tmp")
+        except Exception:
+            pass
+        return False
 
 
 @asynccontextmanager
@@ -390,20 +476,27 @@ app = FastAPI(
 @app.middleware("http")
 async def request_size_middleware(request: Request, call_next):
     """Limit request body size to prevent memory exhaustion (10MB default)."""
-    MAX_SIZE = 10 * 1024 * 1024  # 10MB
-    
+    max_size = 10 * 1024 * 1024  # 10MB
+
     if request.method in ("POST", "PUT", "PATCH"):
         body = await request.body()
-        if len(body) > MAX_SIZE:
+        if len(body) > max_size:
             return JSONResponse(
-                {"error": {"message": "Request body too large (max 10MB)", "type": "invalid_request_error"}},
-                status_code=413
+                {
+                    "error": {
+                        "message": "Request body too large (max 10MB)",
+                        "type": "invalid_request_error",
+                    }
+                },
+                status_code=413,
             )
+
         # Re-create request with body for next middleware
         async def receive():
             return {"type": "http.request", "body": body}
+
         request = Request(request.scope, receive, request._send)
-    
+
     return await call_next(request)
 
 
@@ -455,20 +548,56 @@ async def metrics():
 
 @app.get("/v1/models")
 async def list_models(config: Annotated[Settings, Depends(get_settings)]):
-    """List available models. Returns the router itself as a single model for external UIs."""
+    """
+    List available models.
+
+    Always returns the 'router' model.
+    If external providers are enabled, also returns available external models from provider.db.
+    If expose_all_models is True (default False), returns all local models too.
+    """
+
+    # 1. The main router model
+    router_model = {
+        "id": config.router_external_model_name,
+        "object": "model",
+        "created": int(datetime.now(UTC).timestamp()),
+        "owned_by": "local",
+        "description": "An intelligent router that selects the best LLM based on prompt analysis and model capabilities.",
+        "admin_auth_required": config.admin_api_key is not None,
+    }
+
+    data = [router_model]
+
+    # 2. External models (if enabled)
+    # We fetch these from provider.db which is fast (local SQLite)
+    if config.external_providers_enabled and app_state.backend:
+        try:
+            # If backend is a registry, we can list models efficiently
+            # Note: registry.list_models() might be slow if it queries local backend
+            # But we want specifically external ones or all?
+            # Let's just use what registry returns, which includes provider.db models
+            if hasattr(app_state.backend, "list_models"):
+                all_models = await app_state.backend.list_models()
+
+                # Filter for external models only (contain "/") to avoid cluttering with local ones
+                # unless explicitly requested? For now, just show external ones as they are "new" features
+                for m in all_models:
+                    if "/" in m.name:  # Heuristic for external models
+                        data.append(
+                            {
+                                "id": m.name,
+                                "object": "model",
+                                "created": int(datetime.now(UTC).timestamp()),
+                                "owned_by": m.name.split("/")[0],
+                                "permission": [],
+                            }
+                        )
+        except Exception as e:
+            logger.warning(f"Failed to list external models: {e}")
 
     return {
         "object": "list",
-        "data": [
-            {
-                "id": config.router_external_model_name,
-                "object": "model",
-                "created": datetime.now(timezone.utc).timestamp(),
-                "owned_by": "local",
-                "description": "An intelligent router that selects the best LLM based on prompt analysis and model capabilities.",
-                "admin_auth_required": config.admin_api_key is not None,
-            }
-        ],
+        "data": data,
     }
 
 
@@ -675,9 +804,9 @@ async def chat_completions(
     vram_estimate_map: dict[str, float] = {}
     if app_state.vram_manager:
         with get_session() as session:
-            profiles = session.query(ModelProfile).filter(
-                ModelProfile.name.in_(fallback_list)
-            ).all()
+            profiles = (
+                session.query(ModelProfile).filter(ModelProfile.name.in_(fallback_list)).all()
+            )
             vram_estimate_map = {
                 p.name: (
                     p.vram_required_gb
@@ -707,7 +836,7 @@ async def chat_completions(
             return {
                 "id": response_id,
                 "object": "chat.completion",
-                "created": int(datetime.now(timezone.utc).timestamp()),
+                "created": int(datetime.now(UTC).timestamp()),
                 "model": selected_model,
                 "choices": [
                     {
@@ -765,7 +894,7 @@ async def chat_completions(
             if app_state.vram_manager and app_state.vram_manager.is_loaded(try_model):
                 await app_state.vram_manager.unload_model(try_model)
             last_error = try_error
-            
+
             # Get VRAM state for error context
             vram_context = ""
             if app_state.vram_manager:
@@ -775,12 +904,12 @@ async def chat_completions(
                     vram_context = f" | VRAM: {available_vram:.1f}GB/{max_vram:.1f}GB free"
                 except Exception:
                     vram_context = " | VRAM: unknown"
-            
+
             logger.warning(
                 f"Model {try_model} failed, trying next: {try_error} | "
                 f"Prompt: {sanitize_for_logging(prompt)[:100]}... | "
                 f"Response ID: {response_id}{vram_context}",
-                exc_info=True
+                exc_info=True,
             )
             continue
 
@@ -862,7 +991,7 @@ async def chat_completions(
     return {
         "id": response_id,
         "object": "chat.completion",
-        "created": datetime.now(timezone.utc).timestamp(),
+        "created": datetime.now(UTC).timestamp(),
         "model": final_model,
         "choices": [
             {
@@ -891,25 +1020,25 @@ async def stream_chat(
     chunk_id: str,
     **kwargs: Any,
 ) -> AsyncIterator[str]:
-    created = datetime.now(timezone.utc).timestamp()
+    created = datetime.now(UTC).timestamp()
 
     try:
         stream, latency = await client.chat_streaming(model, messages, **kwargs)
 
         # Initial chunk with metadata
         initial_chunk = {
-            'id': chunk_id,
-            'object': 'chat.completion.chunk',
-            'created': created,
-            'model': model,
-            'choices': [
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
                 {
-                    'index': 0,
-                    'delta': {'role': 'assistant', 'content': ''},
-                    'finish_reason': None,
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
                 }
             ],
-            'router': {'reasoning': reasoning},
+            "router": {"reasoning": reasoning},
         }
         yield f"data: {json.dumps(initial_chunk)}\n\n"
 
@@ -919,15 +1048,13 @@ async def stream_chat(
             content = chunk.get("message", {}).get("content", "")
             if content:
                 accumulated_content += content
-                
+
                 content_chunk = {
-                    'id': chunk_id,
-                    'object': 'chat.completion.chunk',
-                    'created': created,
-                    'model': model,
-                    'choices': [
-                        {'index': 0, 'delta': {'content': content}, 'finish_reason': None}
-                    ],
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
                 }
                 yield f"data: {json.dumps(content_chunk)}\n\n"
 
@@ -935,26 +1062,30 @@ async def stream_chat(
                 # Use schemas.py function to handle code blocks properly
                 # This handles both unclosed blocks and stray fences
                 from router.schemas import close_unclosed_code_block
-                
+
                 closed_content = close_unclosed_code_block(accumulated_content)
-                
+
                 # If content was modified (fence added or removed), emit the difference
                 if closed_content != accumulated_content:
                     # Find what was added (closing fence or removal)
-                    diff = closed_content[len(accumulated_content):] if closed_content.startswith(accumulated_content) else ""
-                    
+                    diff = (
+                        closed_content[len(accumulated_content) :]
+                        if closed_content.startswith(accumulated_content)
+                        else ""
+                    )
+
                     # If we need to add a closing fence (not just remove stray)
                     if diff.strip():
                         fence_chunk = {
-                            'id': chunk_id,
-                            'object': 'chat.completion.chunk',
-                            'created': created,
-                            'model': model,
-                            'choices': [
+                            "id": chunk_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model,
+                            "choices": [
                                 {
-                                    'index': 0,
-                                    'delta': {'content': diff},
-                                    'finish_reason': None,
+                                    "index": 0,
+                                    "delta": {"content": diff},
+                                    "finish_reason": None,
                                 }
                             ],
                         }
@@ -964,26 +1095,26 @@ async def stream_chat(
                 if config.signature_enabled:
                     signature = config.signature_format.format(model=model)
                     signature_chunk = {
-                        'id': chunk_id,
-                        'object': 'chat.completion.chunk',
-                        'created': created,
-                        'model': model,
-                        'choices': [
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
                             {
-                                'index': 0,
-                                'delta': {'content': signature},
-                                'finish_reason': 'stop',
+                                "index": 0,
+                                "delta": {"content": signature},
+                                "finish_reason": "stop",
                             }
                         ],
                     }
                     yield f"data: {json.dumps(signature_chunk)}\n\n"
                 else:
                     done_chunk = {
-                        'id': chunk_id,
-                        'object': 'chat.completion.chunk',
-                        'created': created,
-                        'model': model,
-                        'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     }
                     yield f"data: {json.dumps(done_chunk)}\n\n"
     except Exception as e:
@@ -1011,13 +1142,13 @@ async def get_profiles(
     offset: int = 0,
 ):
     """Get model profiles (requires admin API key if configured).
-    
+
     Args:
         limit: Maximum number of profiles to return (default 100, max 1000)
         offset: Number of profiles to skip (for pagination)
     """
     await rate_limit_request(request, config, is_admin=True)
-    
+
     # Clamp limit to prevent memory exhaustion
     limit = min(max(1, limit), 1000)
     offset = max(0, offset)
@@ -1025,8 +1156,9 @@ async def get_profiles(
     with get_session() as session:
         # Get total count for pagination info
         from sqlalchemy import func
+
         total = session.query(func.count(ModelProfile.id)).scalar()
-        
+
         profiles = (
             session.query(ModelProfile)
             .order_by(ModelProfile.name)
@@ -1051,7 +1183,7 @@ async def get_profiles(
                     "last_profiled": p.last_profiled.isoformat() if p.last_profiled else None,
                 }
                 for p in profiles
-            ]
+            ],
         }
 
 
@@ -1064,13 +1196,13 @@ async def get_benchmarks(
     offset: int = 0,
 ):
     """Get benchmark data (requires admin API key if configured).
-    
+
     Args:
         limit: Maximum number of benchmarks to return (default 100, max 1000)
         offset: Number of benchmarks to skip (for pagination)
     """
     await rate_limit_request(request, config, is_admin=True)
-    
+
     # Clamp limit to prevent memory exhaustion
     limit = min(max(1, limit), 1000)
     offset = max(0, offset)
@@ -1078,8 +1210,9 @@ async def get_benchmarks(
     with get_session() as session:
         # Get total count for pagination info
         from sqlalchemy import func
+
         total = session.query(func.count(ModelBenchmark.id)).scalar()
-        
+
         benchmarks = (
             session.query(ModelBenchmark)
             .order_by(ModelBenchmark.ollama_name)
@@ -1130,14 +1263,14 @@ async def get_stats(
     config: Annotated[Settings, Depends(get_settings)],
 ):
     """Get router statistics (requires admin API key if configured)."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     await rate_limit_request(request, config, is_admin=True)
 
     # Calculate uptime
     uptime_seconds: float = 0.0
     if hasattr(app_state, "start_time"):
-        uptime_seconds = (datetime.now(timezone.utc) - app_state.start_time).total_seconds()
+        uptime_seconds = (datetime.now(UTC) - app_state.start_time).total_seconds()
 
     # Get cache stats from router engine
     cache_stats = {}
@@ -1194,9 +1327,7 @@ async def invalidate_cache(
     if response_cache_only or model:
         invalidated = await cache.invalidate_response(model)
     else:
-        async with cache._lock:
-            cache.cache.clear()
-            cache.response_cache.clear()
+        await cache.clear()
         invalidated = "all"
 
     return {
@@ -1215,14 +1346,14 @@ async def sync_benchmarks_endpoint(
     """Manually trigger benchmark sync from all configured sources (requires admin API key if configured)."""
     if not app_state.backend:
         return JSONResponse({"error": "Backend not initialized"}, status_code=503)
-    
+
     await rate_limit_request(request, config, is_admin=True)
-    
+
     models = await list_models_with_timeout(app_state.backend)
     model_names = [m.name for m in models]
-    
+
     count, matched = await sync_benchmarks(model_names)
-    
+
     return {
         "synced": count,
         "matched_models": matched,
@@ -1343,13 +1474,18 @@ async def explain_routing(
                 if name == model_override or model_override.lower() in name.lower():
                     selected_model = name
                     break
-            
+
             if not selected_model:
                 return JSONResponse(
-                    {"error": {"message": f"Model '{model_override}' not found", "type": "invalid_request_error"}},
+                    {
+                        "error": {
+                            "message": f"Model '{model_override}' not found",
+                            "type": "invalid_request_error",
+                        }
+                    },
                     status_code=400,
                 )
-            
+
             return {
                 "prompt": prompt,
                 "selected_model": selected_model,
@@ -1361,12 +1497,12 @@ async def explain_routing(
 
         # Otherwise, run the full routing logic to get scoring breakdown
         model_list = [m.name for m in available_models]
-        
+
         # Check routing cache first
         cached_result = None
         if app_state.router_engine.semantic_cache:
             cached_result = await app_state.router_engine.semantic_cache.get(prompt)
-        
+
         if cached_result:
             return {
                 "prompt": prompt,
@@ -1379,7 +1515,7 @@ async def explain_routing(
 
         # Get routing decision
         result = await app_state.router_engine.select_model(prompt, model_list)
-        
+
         if result is None:
             return JSONResponse(
                 {"error": {"message": "Could not select model", "type": "internal_error"}},
@@ -1389,27 +1525,29 @@ async def explain_routing(
         selected_model = result.selected_model
         confidence = result.confidence
         reasoning = result.reasoning
-        
+
         # Get all model scores
         with get_session() as session:
-            profiles = session.query(ModelProfile).filter(
-                ModelProfile.name.in_(model_list)
-            ).all()
-            
+            profiles = session.query(ModelProfile).filter(ModelProfile.name.in_(model_list)).all()
+
             model_scores = []
             for profile in profiles:
-                model_scores.append({
-                    "name": profile.name,
-                    "reasoning": profile.reasoning,
-                    "coding": profile.coding,
-                    "creativity": profile.creativity,
-                    "speed": profile.speed,
-                    "vram_gb": profile.vram_required_gb,
-                })
+                model_scores.append(
+                    {
+                        "name": profile.name,
+                        "reasoning": profile.reasoning,
+                        "coding": profile.coding,
+                        "creativity": profile.creativity,
+                        "speed": profile.speed,
+                        "vram_gb": profile.vram_required_gb,
+                    }
+                )
 
         return {
             "prompt": prompt,
-            "prompt_preview": sanitize_for_logging(prompt)[:100] + "..." if len(prompt) > 100 else prompt,
+            "prompt_preview": sanitize_for_logging(prompt)[:100] + "..."
+            if len(prompt) > 100
+            else prompt,
             "selected_model": selected_model,
             "confidence": confidence,
             "reasoning": reasoning,

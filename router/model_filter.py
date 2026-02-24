@@ -42,7 +42,9 @@ def matches_patterns_case_insensitive(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(name_lower, pat.lower()) for pat in patterns)
 
 
-def filter_model_infos(models: list["ModelInfo"], include: list[str], exclude: list[str]) -> list["ModelInfo"]:
+def filter_model_infos(
+    models: list["ModelInfo"], include: list[str], exclude: list[str]
+) -> list["ModelInfo"]:
     """Filter list of ModelInfo based on include/exclude patterns.
 
     Filtering logic:
@@ -62,7 +64,7 @@ def filter_model_infos(models: list["ModelInfo"], include: list[str], exclude: l
     if not models:
         return []
 
-    filtered: list["ModelInfo"] = []
+    filtered: list[ModelInfo] = []
 
     for model in models:
         # First check exclude patterns (always applied)

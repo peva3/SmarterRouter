@@ -58,6 +58,34 @@ That's it! SmarterRouter will:
 
 SmarterRouter will automatically select the best model for each prompt!
 
+### Using External Providers (OpenAI, Anthropic, etc.)
+
+SmarterRouter can also route to external cloud providers. Use the provider prefix in model names:
+
+**Available providers:** `openai/`, `anthropic/`, `google/`, `cohere/`, `mistral/`
+
+**Example usage with external providers:**
+
+```bash
+# 1. Set your API keys in .env
+ROUTER_OPENAI_API_KEY=sk-...
+ROUTER_ANTHROPIC_API_KEY=sk-ant-...
+
+# 2. Enable external providers
+ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
+ROUTER_EXTERNAL_PROVIDERS=openai,anthropic
+
+# 3. Use models with provider prefix
+# In OpenWebUI, select: openai/gpt-4o or anthropic/claude-3-opus
+```
+
+**Benefits:**
+- Same intelligent routing as local models
+- Benchmark data from 400+ models via provider.db
+- Can mix local Ollama and external providers
+
+See [External Provider Setup](docs/external-providers.md) for complete instructions.
+
 ---
 
 ## What Gets Automated?

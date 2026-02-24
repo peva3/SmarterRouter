@@ -48,28 +48,28 @@ class WebSearchSkill(Skill):
 
 class CalculatorSkill(Skill):
     """Safely evaluate mathematical expressions with proper security."""
-    
+
     # Maximum result magnitude to prevent DoS
     MAX_RESULT = 1e15
-    
+
     # Only allow these operators (no exponentiation to prevent DoS)
     ALLOWED_OPERATORS = {"+", "-", "*", "/"}
 
     async def execute(self, **kwargs: Any) -> str:
         """Safely evaluate a mathematical expression using ast parsing."""
         expression = kwargs.get("expression", "")
-        
+
         if not expression:
             return "Error: expression parameter is required."
-        
+
         # Security: limit expression length
         if len(expression) > 100:
             return "Error: expression too long (max 100 characters)."
-        
+
         try:
             import ast
             import operator
-            
+
             # Define allowed operations
             operators = {
                 ast.Add: operator.add,
@@ -78,45 +78,45 @@ class CalculatorSkill(Skill):
                 ast.Div: operator.truediv,
                 ast.USub: operator.neg,  # Unary minus
             }
-            
+
             def safe_eval(node):
                 """Recursively evaluate AST node with safety checks."""
                 if isinstance(node, ast.Constant):
                     if isinstance(node.value, (int, float)):
                         return float(node.value)
                     raise ValueError("Only numeric values allowed")
-                
+
                 elif isinstance(node, ast.BinOp):
                     if type(node.op) not in operators:
                         raise ValueError(f"Operator not allowed: {type(node.op).__name__}")
-                    
+
                     left = safe_eval(node.left)
                     right = safe_eval(node.right)
                     result = operators[type(node.op)](left, right)
-                    
+
                     # Prevent overflow/DoS
                     if abs(result) > self.MAX_RESULT:
                         raise ValueError("Result too large")
                     return result
-                
+
                 elif isinstance(node, ast.UnaryOp):
                     if type(node.op) not in operators:
-                        raise ValueError(f"Unary operator not allowed")
+                        raise ValueError("Unary operator not allowed")
                     operand = safe_eval(node.operand)
                     return operators[type(node.op)](operand)
-                
+
                 else:
                     raise ValueError(f"Expression type not allowed: {type(node).__name__}")
-            
+
             # Parse and validate expression
             tree = ast.parse(expression, mode="eval")
             result = safe_eval(tree.body)
-            
+
             # Format result nicely
             if result == int(result):
                 return str(int(result))
             return str(round(result, 10))
-            
+
         except ValueError as e:
             return f"Error: {e}"
         except SyntaxError:

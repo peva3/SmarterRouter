@@ -1,11 +1,9 @@
 """Integration tests for the SmarterRouter system."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import Depends
 
 from main import app, app_state, get_settings
 from router.config import Settings
@@ -62,7 +60,7 @@ class TestModelEndpoints:
         response = client.get("/v1/models")
         assert response.status_code == 200
         data = response.json()
-        assert data["data"][0]["admin_auth_required"] == False
+        assert not data["data"][0]["admin_auth_required"]
 
     @pytest.mark.asyncio
     async def test_list_models_auth_required(self, authed_client):
@@ -70,7 +68,7 @@ class TestModelEndpoints:
         response = authed_client.get("/v1/models")
         assert response.status_code == 200
         data = response.json()
-        assert data["data"][0]["admin_auth_required"] == True
+        assert data["data"][0]["admin_auth_required"]
 
     @pytest.mark.asyncio
     async def test_list_models_not_initialized(self, client):

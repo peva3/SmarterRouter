@@ -1,9 +1,10 @@
 """Tests for VRAMManager."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from router.vram_manager import VRAMManager, VRAMExceededError
+import pytest
+
+from router.vram_manager import VRAMExceededError, VRAMManager
 
 
 class TestVRAMManager:
@@ -104,7 +105,7 @@ class TestVRAMManager:
         """Test successful model loading."""
         vram_manager.set_backend(mock_backend)
         await vram_manager.load_model("test-model", 8.0)
-        
+
         assert "test-model" in vram_manager.loaded_models
         assert vram_manager.loaded_models["test-model"] == 8.0
         mock_backend.load_model.assert_called_once_with("test-model")
@@ -114,9 +115,9 @@ class TestVRAMManager:
         """Test loading an already loaded model."""
         vram_manager.set_backend(mock_backend)
         vram_manager.loaded_models = {"test-model": 8.0}
-        
+
         await vram_manager.load_model("test-model", 8.0)
-        
+
         mock_backend.load_model.assert_not_called()
 
     @pytest.mark.asyncio
@@ -124,7 +125,7 @@ class TestVRAMManager:
         """Test loading and pinning a model."""
         vram_manager.set_backend(mock_backend)
         await vram_manager.load_model("test-model", 8.0, pin=True)
-        
+
         assert vram_manager.pinned_model == "test-model"
 
     @pytest.mark.asyncio
@@ -132,9 +133,9 @@ class TestVRAMManager:
         """Test successful model unloading."""
         vram_manager.set_backend(mock_backend)
         vram_manager.loaded_models = {"test-model": 8.0}
-        
+
         await vram_manager.unload_model("test-model")
-        
+
         assert "test-model" not in vram_manager.loaded_models
         mock_backend.unload_model.assert_called_once_with("test-model")
 
@@ -144,9 +145,9 @@ class TestVRAMManager:
         vram_manager.set_backend(mock_backend)
         vram_manager.loaded_models = {"pinned-model": 8.0}
         vram_manager.pinned_model = "pinned-model"
-        
+
         await vram_manager.unload_model("pinned-model")
-        
+
         assert "pinned-model" in vram_manager.loaded_models
         mock_backend.unload_model.assert_not_called()
 
@@ -159,7 +160,7 @@ class TestVRAMManager:
         )
         manager.set_backend(mock_backend)
         manager.loaded_models = {"existing": 8.0}
-        
+
         with pytest.raises(VRAMExceededError):
             await manager.load_model("new-model", 5.0)
 
@@ -191,9 +192,9 @@ class TestVRAMManagerStrategies:
         )
         manager.set_backend(mock_backend)
         manager.loaded_models = {"model1": 4.0, "model2": 6.0}
-        
+
         await manager.load_model("new-model", 8.0)
-        
+
         assert "new-model" in manager.loaded_models
 
     @pytest.mark.asyncio
@@ -206,7 +207,7 @@ class TestVRAMManagerStrategies:
         )
         manager.set_backend(mock_backend)
         manager.loaded_models = {"model1": 4.0, "model2": 6.0}
-        
+
         await manager.load_model("new-model", 8.0)
-        
+
         assert "new-model" in manager.loaded_models

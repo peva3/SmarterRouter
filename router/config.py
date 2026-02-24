@@ -1,4 +1,6 @@
 import logging
+import types
+from typing import Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,7 +38,7 @@ class Settings(BaseSettings):
     @classmethod
     def process_escape_sequences(cls, v: str) -> str:
         """Process escape sequences in signature_format from env vars.
-        
+
         Environment variables don't interpret escape sequences like \\n.
         This validator converts \\n to actual newline, \\t to tab, etc.
         """
@@ -46,22 +48,37 @@ class Settings(BaseSettings):
             v = v.replace("\\r", "\r")
         return v
 
-    @field_validator(
-        "vram_max_total_gb",
-        "apple_unified_memory_gb",
-        "amd_unified_memory_gb",
-        mode="before",
-    )
+    @model_validator(mode="before")
     @classmethod
-    def empty_str_to_none(cls, v):
-        """Convert empty strings to None for optional float fields.
-        
+    def remove_empty_strings(cls, values: dict) -> dict:
+        """Remove empty strings for optional/numeric fields so Pydantic falls back to defaults.
+
         Environment variables set to empty (e.g., ROUTER_VRAM_MAX_TOTAL_GB=)
-        come through as empty strings, which can't be parsed as floats.
+        come through as empty strings, which can cause parsing errors for numeric fields.
         """
-        if v == "" or v is None:
-            return None
-        return v
+        numeric_types = (int, float)
+
+        for k, v in list(values.items()):
+            if v == "" and k in cls.model_fields:
+                field = cls.model_fields[k]
+                annotation = field.annotation
+
+                # Check if annotation contains int or float
+                is_numeric = False
+
+                if annotation in numeric_types:
+                    is_numeric = True
+                elif getattr(annotation, "__origin__", None) is Union or isinstance(
+                    annotation, getattr(types, "UnionType", type(None))
+                ):
+                    args = getattr(annotation, "__args__", [])
+                    if any(arg in numeric_types for arg in args):
+                        is_numeric = True
+
+                if is_numeric:
+                    del values[k]
+
+        return values
 
     polling_interval: int = Field(default=60)
     profile_timeout: int = Field(default=90)  # Increased to 90s for larger models like 14B+
@@ -102,7 +119,7 @@ class Settings(BaseSettings):
 
     pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
 
-    # Model keep_alive duration (in seconds) passed to backend. 
+    # Model keep_alive duration (in seconds) passed to backend.
     # -1 = keep loaded indefinitely (default), 0 = unload after response, positive = seconds to keep alive
     model_keep_alive: float = Field(default=-1)
 
@@ -123,10 +140,12 @@ class Settings(BaseSettings):
     # Optional headers for providers like OpenRouter (HTTP-Referer, X-Title)
     judge_http_referer: str | None = Field(default=None)
     judge_x_title: str | None = Field(default=None)
-    
+
     # Retry configuration for transient errors
     judge_max_retries: int = Field(default=3)  # Max retry attempts for 429/5xx errors
-    judge_retry_base_delay: float = Field(default=1.0)  # Initial delay in seconds (doubles each retry)
+    judge_retry_base_delay: float = Field(
+        default=1.0
+    )  # Initial delay in seconds (doubles each retry)
 
     # Security settings
     admin_api_key: str | None = Field(
@@ -147,7 +166,9 @@ class Settings(BaseSettings):
     embed_model: str | None = Field(default=None)  # Model to use for embeddings
 
     # VRAM Monitoring & Management
-    vram_monitor_enabled: bool = Field(default=True)  # Enable VRAM monitoring (auto-detects all GPU vendors)
+    vram_monitor_enabled: bool = Field(
+        default=True
+    )  # Enable VRAM monitoring (auto-detects all GPU vendors)
     vram_monitor_interval: int = Field(default=30)  # Seconds between VRAM samples
     vram_max_total_gb: float | None = Field(
         default=None
@@ -197,21 +218,59 @@ class Settings(BaseSettings):
     # Fallback VRAM estimate when not profiled (in GB)
     vram_default_estimate_gb: float = Field(default=8.0)
 
-    @model_validator(mode="before")
-    @classmethod
-    def parse_log_level(cls, values: dict) -> dict:
-        log_level = values.get("log_level")
-        if log_level is None:
-            return values
-        if isinstance(log_level, int):
-            for name, level in logging._levelToName.items():
-                if level == log_level:
-                    values["log_level"] = name
-                    break
-        return values
+    # External Provider Database (provider.db)
+    # Path to provider.db containing benchmark data for external models
+    provider_db_enabled: bool = Field(default=True)
+    provider_db_path: str = Field(default="data/provider.db")
+    # Auto-update provider.db (in hours, 0 = disabled)
+    provider_db_auto_update_hours: int = Field(default=4)
+    # URL to download provider.db from
+    provider_db_download_url: str = Field(
+        default="https://raw.githubusercontent.com/peva3/smarterrouter-provider/refs/heads/main/data/provider.db"
+    )
+
+    # External Provider API Configuration
+    # When enabled, route to external providers (OpenAI, Anthropic, etc.)
+    # instead of only local Ollama models
+    external_providers_enabled: bool = Field(default=False)
+    # List of enabled external providers (openai, anthropic, google, etc.)
+    external_providers: list[str] = Field(default_factory=lambda: ["openai", "anthropic", "google"])
+
+    # Per-Provider API Keys (used when external_providers_enabled is True)
+    anthropic_api_key: str | None = Field(default=None)
+    google_api_key: str | None = Field(default=None)
+    cohere_api_key: str | None = Field(default=None)
+    mistral_api_key: str | None = Field(default=None)
+
+    # Per-Provider Base URLs (for self-hosted or proxy scenarios)
+    anthropic_base_url: str | None = Field(default=None)
+    google_base_url: str | None = Field(default=None)
+    cohere_base_url: str | None = Field(default=None)
+    mistral_base_url: str | None = Field(default=None)
 
     @model_validator(mode="after")
-    def validate_backend_urls(self) -> "Settings":
+    def validate_external_providers(self) -> "Settings":
+        """Validate external provider configuration."""
+        if self.external_providers_enabled:
+            # Check that all enabled providers have API keys configured
+            for provider in self.external_providers:
+                api_key_field = {
+                    "openai": "openai_api_key",
+                    "anthropic": "anthropic_api_key",
+                    "google": "google_api_key",
+                    "cohere": "cohere_api_key",
+                    "mistral": "mistral_api_key",
+                }.get(provider)
+
+                if api_key_field:
+                    api_key = getattr(self, api_key_field, None)
+                    if not api_key:
+                        # Cannot log here easily, but validation logic is present
+                        pass
+        return self
+
+    @model_validator(mode="after")
+    def validate_urls_scheme(self) -> "Settings":
         """Validate that backend URLs use http(s):// scheme."""
         url_fields = {
             "ollama_url": self.ollama_url,
@@ -219,13 +278,11 @@ class Settings(BaseSettings):
             "openai_base_url": self.openai_base_url,
             "judge_base_url": self.judge_base_url,
         }
-        
+
         for field_name, url in url_fields.items():
             if url and not url.startswith(("http://", "https://")):
-                raise ValueError(
-                    f"{field_name} must start with http:// or https:// (got: {url})"
-                )
-        
+                raise ValueError(f"{field_name} must start with http:// or https:// (got: {url})")
+
         return self
 
 

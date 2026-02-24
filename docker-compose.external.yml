@@ -1,0 +1,79 @@
+# External Providers Only Docker Compose Configuration
+#
+# This setup uses ONLY external cloud providers (OpenAI, Anthropic, Google, etc.)
+# without requiring a local Ollama instance.
+#
+# Quick Start:
+#   1. Copy this file to docker-compose.yml (or use with -f flag)
+#   2. Set your API keys in .env file
+#   3. docker-compose up -d
+#
+# See: docs/external-providers.md for complete documentation
+
+version: '3.8'
+
+services:
+  smarterrouter:
+    image: ghcr.io/peva3/smarterrouter:latest
+    container_name: smarterrouter
+    ports:
+      - "11436:11436"
+    env_file:
+      - .env
+    environment:
+      # Basic router configuration
+      - ROUTER_PROVIDER=ollama  # Keep for compatibility; won't actually connect to local
+      - ROUTER_OLLAMA_URL=http://localhost:11434  # Not used but required by some components
+      - ROUTER_HOST=0.0.0.0
+      - ROUTER_PORT=11436
+      
+      # Enable external provider routing
+      - ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
+      - ROUTER_EXTERNAL_PROVIDERS=openai,anthropic,google
+      
+      # provider.db configuration (auto-updates)
+      - ROUTER_PROVIDER_DB_ENABLED=true
+      - ROUTER_PROVIDER_DB_AUTO_UPDATE_HOURS=4
+      
+      # Optional: Set quality preference (0.0=speed, 1.0=quality)
+      # ROUTER_QUALITY_PREFERENCE=0.5
+      
+      # Optional: Enable caching for better performance
+      # ROUTER_CACHE_ENABLED=true
+      # ROUTER_SEMANTIC_CACHE_SIZE=1000
+    volumes:
+      # Persist provider.db and SQLite databases
+      - ./data:/app/hubrouter/data:rw
+      # Optional: mount logs directory
+      - ./logs:/app/hubrouter/logs:rw
+    restart: unless-stopped
+    networks:
+      - smarterrouter-network
+    # No GPU needed for external-only setup
+    # Uncomment below if you also want local fallback with GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11436/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Resource limits (adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 4G
+    #       cpus: '2.0'
+    #     reservations:
+    #       memory: 2G
+    #       cpus: '1.0'
+
+networks:
+  smarterrouter-network:
+    driver: bridge

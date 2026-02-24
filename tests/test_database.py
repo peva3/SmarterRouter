@@ -1,13 +1,14 @@
 """Tests for database operations."""
 
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from router.database import get_session, init_db
+from router.database import get_session
 from router.models import Base, BenchmarkSync, ModelBenchmark, ModelProfile, RoutingDecision
 
 
@@ -15,12 +16,12 @@ from router.models import Base, BenchmarkSync, ModelBenchmark, ModelProfile, Rou
 def test_db():
     """Create test database."""
     engine = create_engine("sqlite:///:memory:")
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 
     # Patch the global engine and session
     with patch("router.database.engine", engine):
-        with patch("router.database.SessionLocal", TestingSessionLocal):
+        with patch("router.database.SessionLocal", testing_session_local):
             yield engine
 
 
@@ -83,7 +84,7 @@ class TestModelProfileCRUD:
                 factual=0.9,
                 speed=0.75,
                 avg_response_time_ms=1200.0,
-                last_profiled=datetime.now(timezone.utc),
+                last_profiled=datetime.now(UTC),
             )
             session.add(profile)
             session.commit()
@@ -142,7 +143,7 @@ class TestModelProfileCRUD:
             session.commit()
 
         # Second insert should fail
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             with get_session() as session:
                 profile2 = ModelProfile(name="unique_model", reasoning=0.9)
                 session.add(profile2)
@@ -200,7 +201,7 @@ class TestModelBenchmarkCRUD:
                 elo_rating=1200.0,
                 throughput=50.0,
                 context_window=8192,
-                last_updated=datetime.now(timezone.utc),
+                last_updated=datetime.now(UTC),
             )
             session.add(benchmark)
             session.commit()
@@ -247,7 +248,7 @@ class TestRoutingDecisionCRUD:
 
     def test_decision_timestamp_auto_set(self, test_db):
         """Test that timestamp is automatically set."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         with get_session() as session:
             decision = RoutingDecision(
@@ -270,7 +271,7 @@ class TestBenchmarkSyncCRUD:
         """Test creating a sync record."""
         with get_session() as session:
             sync = BenchmarkSync(
-                last_sync=datetime.now(timezone.utc),
+                last_sync=datetime.now(UTC),
                 models_count=10,
                 status="completed",
             )

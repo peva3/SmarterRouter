@@ -1,8 +1,9 @@
 """Tests for OllamaBackend."""
 
 import json
-import pytest
+
 import httpx
+import pytest
 import respx
 
 from router.backends.ollama import OllamaBackend
@@ -55,11 +56,14 @@ class TestOllamaBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:11434/api/tags").mock(
-                return_value=httpx.Response(200, json={
-                    "models": [
-                        {"name": "llama3", "size": 1000000000, "modified_at": "2024-01-01"}
-                    ]
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {"name": "llama3", "size": 1000000000, "modified_at": "2024-01-01"}
+                        ]
+                    },
+                )
             )
             models = await backend.list_models()
             assert len(models) == 1
@@ -85,11 +89,14 @@ class TestOllamaBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:11434/api/chat").mock(
-                return_value=httpx.Response(200, json={
-                    "message": {"content": "Hello!"},
-                    "prompt_eval_count": 10,
-                    "eval_count": 5,
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "message": {"content": "Hello!"},
+                        "prompt_eval_count": 10,
+                        "eval_count": 5,
+                    },
+                )
             )
             result = await backend.chat("llama3", [{"role": "user", "content": "Hi"}])
             assert result["message"]["content"] == "Hello!"
@@ -106,7 +113,7 @@ class TestOllamaBackend:
                 return_value=httpx.Response(200, json={"message": {"content": "OK"}})
             )
             await backend.chat("llama3", [{"role": "user", "content": "test"}])
-            
+
             # Check that prefixed model was sent
             request = mock_http.calls.last.request
             body = json.loads(request.content)
@@ -131,12 +138,14 @@ class TestOllamaBackend:
                     headers={"content-type": "text/plain"},
                 )
             )
-            stream, latency = await backend.chat_streaming("llama3", [{"role": "user", "content": "Hi"}])
-            
+            stream, latency = await backend.chat_streaming(
+                "llama3", [{"role": "user", "content": "Hi"}]
+            )
+
             chunks = []
             async for chunk in stream:
                 chunks.append(chunk)
-            
+
             assert len(chunks) >= 2
             assert chunks[0]["message"]["content"] == "Hello"
             assert chunks[1]["message"]["content"] == " World"
@@ -160,9 +169,7 @@ class TestOllamaBackend:
         backend = OllamaBackend("http://localhost:11434")
 
         with respx.mock() as mock_http:
-            mock_http.post("http://localhost:11434/api/chat").mock(
-                return_value=httpx.Response(404)
-            )
+            mock_http.post("http://localhost:11434/api/chat").mock(return_value=httpx.Response(404))
             result = await backend.unload_model("nonexistent")
             assert result is True
 
@@ -200,7 +207,7 @@ class TestOllamaBackend:
                 return_value=httpx.Response(200, json={"message": {"content": "OK"}})
             )
             await backend.chat("llama3", [{"role": "user", "content": "test"}], keep_alive=300)
-            
+
             request = mock_http.calls.last.request
             body = json.loads(request.content)
             assert body["keep_alive"] == 300
@@ -212,17 +219,20 @@ class TestOllamaBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:11434/api/ps").mock(
-                return_value=httpx.Response(200, json={
-                    "models": [
-                        {
-                            "name": "llama3.2:1b",
-                            "model": "llama3.2:1b",
-                            "size": 1500000000,
-                            "size_vram": 1200000000,
-                            "digest": "abc123"
-                        }
-                    ]
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "name": "llama3.2:1b",
+                                "model": "llama3.2:1b",
+                                "size": 1500000000,
+                                "size_vram": 1200000000,
+                                "digest": "abc123",
+                            }
+                        ]
+                    },
+                )
             )
             result = await backend.get_running_models()
             assert "llama3.2:1b" in result
@@ -236,17 +246,20 @@ class TestOllamaBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:11434/api/ps").mock(
-                return_value=httpx.Response(200, json={
-                    "models": [
-                        {
-                            "name": "llama3.2:1b",
-                            "model": "llama3.2:1b",
-                            "size": 1500000000,
-                            "size_vram": 1200000000,
-                            "digest": "abc123"
-                        }
-                    ]
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "name": "llama3.2:1b",
+                                "model": "llama3.2:1b",
+                                "size": 1500000000,
+                                "size_vram": 1200000000,
+                                "digest": "abc123",
+                            }
+                        ]
+                    },
+                )
             )
             # Test exact match
             vram = await backend.get_model_vram_usage("llama3.2:1b")
@@ -272,17 +285,20 @@ class TestOllamaBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:11434/api/ps").mock(
-                return_value=httpx.Response(200, json={
-                    "models": [
-                        {
-                            "name": "custom-llama3",
-                            "model": "custom-llama3",
-                            "size": 4000000000,
-                            "size_vram": 3500000000,
-                            "digest": "abc123"
-                        }
-                    ]
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {
+                                "name": "custom-llama3",
+                                "model": "custom-llama3",
+                                "size": 4000000000,
+                                "size_vram": 3500000000,
+                                "digest": "abc123",
+                            }
+                        ]
+                    },
+                )
             )
             # Should match with prefix applied
             vram = await backend.get_model_vram_usage("llama3")

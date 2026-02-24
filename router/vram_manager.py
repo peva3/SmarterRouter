@@ -1,8 +1,8 @@
 """VRAM allocation and model lifecycle management."""
 
-import logging
-from typing import Any, Dict, List, Optional
 import asyncio
+import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class VRAMManager:
         max_vram_gb: float,
         auto_unload_enabled: bool = True,
         unload_strategy: str = "lru",
-        monitor: Optional[Any] = None,
+        monitor: Any | None = None,
     ):
         """
         Initialize VRAM manager.
@@ -50,10 +50,10 @@ class VRAMManager:
         self.monitor = monitor
 
         # State
-        self.loaded_models: Dict[str, float] = {}  # model_name -> estimated_vram_gb
-        self.pinned_model: Optional[str] = None
-        self._backend_ref: Optional[Any] = None  # LLMBackend instance, set by RouterEngine
-        
+        self.loaded_models: dict[str, float] = {}  # model_name -> estimated_vram_gb
+        self.pinned_model: str | None = None
+        self._backend_ref: Any | None = None  # LLMBackend instance, set by RouterEngine
+
         # Concurrency control
         self._lock = asyncio.Lock()
 
@@ -69,7 +69,7 @@ class VRAMManager:
         where effective_budget = max_vram - FRAGMENTATION_BUFFER_GB
 
         This does NOT query nvidia-smi; it's based on our allocation tracking.
-        
+
         Note: This is a read-only operation; lock acquired by callers when needed.
         """
         effective_budget = self.max_vram - self.FRAGMENTATION_BUFFER_GB
@@ -119,7 +119,9 @@ class VRAMManager:
             # Check if fits
             if not self.can_load(model_name, vram_estimate_gb):
                 needed = vram_estimate_gb - self.get_available_vram()
-                logger.info(f"VRAM: Need {needed:.1f}GB more for {model_name}, triggering unload...")
+                logger.info(
+                    f"VRAM: Need {needed:.1f}GB more for {model_name}, triggering unload..."
+                )
                 if self.auto_unload:
                     await self._free_vram(needed)
                 else:
@@ -167,7 +169,7 @@ class VRAMManager:
         except Exception as e:
             logger.error(f"Failed to unload model {model_name}: {e}")
             # Still remove from tracking even if unload failed
-        
+
         # Remove from tracking
         if model_name in self.loaded_models:
             del self.loaded_models[model_name]
@@ -180,7 +182,7 @@ class VRAMManager:
     async def _free_vram(self, needed_gb: float):
         """
         Free VRAM by unloading models according to strategy.
-        
+
         Note: This method assumes the caller holds self._lock to prevent race conditions.
         It is called from load_model() which already acquires the lock.
 
@@ -234,11 +236,11 @@ class VRAMManager:
         """Check if a model is currently loaded."""
         return model_name in self.loaded_models
 
-    def get_loaded_models(self) -> List[str]:
+    def get_loaded_models(self) -> list[str]:
         """Return list of currently loaded model names."""
         return list(self.loaded_models.keys())
 
-    def get_vram_usage_by_model(self) -> Dict[str, float]:
+    def get_vram_usage_by_model(self) -> dict[str, float]:
         """Return dict of model -> estimated VRAM usage (GB)."""
         return dict(self.loaded_models)
 

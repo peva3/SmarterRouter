@@ -1,6 +1,5 @@
 """Additional tests for markdown JSON extraction in judge."""
 
-import pytest
 from router.judge import _extract_json_from_content
 
 
@@ -58,6 +57,6 @@ class TestMarkdownExtraction:
 
     def test_extract_empty_content(self):
         """Test extraction with empty content."""
-        content = ''
+        content = ""
         result = _extract_json_from_content(content)
-        assert result == ''
+        assert result == ""

@@ -2,13 +2,13 @@
 
 import asyncio
 import logging
-import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
-from .gpu_backends.base import GPUMemory
 from .gpu_backends import GPUBackendManager
+from .gpu_backends.base import GPUMemory
 from .metrics import VRAM_TOTAL_GB, VRAM_USED_GB, VRAM_UTILIZATION_PCT, gpu_metrics
 
 logger = logging.getLogger(__name__)
@@ -23,9 +23,9 @@ class VRAMMetrics:
     used_gb: float
     free_gb: float
     utilization_pct: float
-    models_loaded: List[str]  # From our tracking
-    per_model_vram_gb: Dict[str, float]  # Estimated per-model usage
-    gpus: List[GPUMemory]  # Per-GPU breakdown
+    models_loaded: list[str]  # From our tracking
+    per_model_vram_gb: dict[str, float]  # Estimated per-model usage
+    gpus: list[GPUMemory]  # Per-GPU breakdown
 
     def to_log_string(self) -> str:
         """Format for concise application log."""
@@ -37,7 +37,8 @@ class VRAMMetrics:
         # Add per-GPU info if multiple
         if len(self.gpus) > 1:
             gpu_details = ", ".join(
-                f"{(g.vendor + ' ') if g.vendor else ''}{g.device_name if g.device_name else f'GPU{g.index}'}: {g.used_gb:.1f}/{g.total_gb:.1f}GB" for g in self.gpus
+                f"{(g.vendor + ' ') if g.vendor else ''}{g.device_name if g.device_name else f'GPU{g.index}'}: {g.used_gb:.1f}/{g.total_gb:.1f}GB"
+                for g in self.gpus
             )
             return f"{base} | {gpu_details}"
         elif self.gpus:
@@ -64,19 +65,19 @@ class VRAMMonitor:
     def __init__(
         self,
         interval: int = 30,
-        total_vram_gb: Optional[float] = None,
-        app_state: Optional[Any] = None,
+        total_vram_gb: float | None = None,
+        app_state: Any | None = None,
         log_interval: int = 60,
-        apple_unified_memory_gb: Optional[float] = None,
-        amd_unified_memory_gb: Optional[float] = None,
+        apple_unified_memory_gb: float | None = None,
+        amd_unified_memory_gb: float | None = None,
     ):
         self.interval = interval
         self.total_vram_gb = total_vram_gb
         self.app_state = app_state
         self.log_interval = log_interval
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._running = False
-        self._samples: List[VRAMMetrics] = []
+        self._samples: list[VRAMMetrics] = []
         self._max_samples = 1000  # Keep ~30 min history at 30s interval
         self._last_log_time = 0
 
@@ -90,7 +91,7 @@ class VRAMMonitor:
     @property
     def has_nvidia(self) -> bool:
         """Backward-compatible alias for has_gpu.
-        
+
         Returns True if any GPU is detected (NVIDIA, AMD, Intel, or Apple Silicon).
         """
         return self.has_gpu
@@ -98,7 +99,7 @@ class VRAMMonitor:
     @has_nvidia.setter
     def has_nvidia(self, value: bool):
         """Backward-compatible setter for has_nvidia.
-        
+
         This allows tests to set the value directly.
         """
         self.has_gpu = value
@@ -106,11 +107,11 @@ class VRAMMonitor:
     @property
     def gpu_name(self) -> str:
         """Backward-compatible property for GPU name.
-        
+
         Returns the name of the first detected GPU or empty string.
         """
         # Check cached name from nvidia-smi check
-        if hasattr(self, '_cached_gpu_name') and self._cached_gpu_name:
+        if hasattr(self, "_cached_gpu_name") and self._cached_gpu_name:
             return self._cached_gpu_name
         if self.gpu_manager.backends:
             for backend in self.gpu_manager.backends:
@@ -137,7 +138,7 @@ class VRAMMonitor:
         self._task = asyncio.create_task(self._monitor_loop())
 
         total_vram = self.gpu_manager.get_total_vram()
-        vendor_info = self.gpu_manager.get_vendor_info()
+        self.gpu_manager.get_vendor_info()
         logger.info(
             f"VRAM monitor started: interval={self.interval}s, "
             f"total={total_vram:.1f}GB across {len(self.gpu_manager.backends)} vendor(s)"
@@ -202,7 +203,7 @@ class VRAMMonitor:
         """Take a single VRAM snapshot."""
         loop = asyncio.get_event_loop()
         gpus = []
-        
+
         # Backward compatibility: check if _run_nvidia_smi is set (for tests)
         if self._run_nvidia_smi is not None:
             try:
@@ -211,7 +212,7 @@ class VRAMMonitor:
                     _, _, _, gpus = self._parse_output(output)
             except Exception as e:
                 logger.debug(f"Legacy nvidia-smi query failed: {e}")
-        
+
         # Normal path: use GPU backend manager
         if not gpus:
             try:
@@ -272,11 +273,11 @@ class VRAMMonitor:
         )
 
     # Public accessors remain unchanged
-    def get_current(self) -> Optional[VRAMMetrics]:
+    def get_current(self) -> VRAMMetrics | None:
         """Get the most recent metrics sample."""
         return self._samples[-1] if self._samples else None
 
-    def get_history(self, minutes: int = 10) -> List[VRAMMetrics]:
+    def get_history(self, minutes: int = 10) -> list[VRAMMetrics]:
         """Return samples from the last N minutes."""
         if not self._samples:
             return []
@@ -284,17 +285,18 @@ class VRAMMonitor:
         return [s for s in self._samples if s.timestamp >= cutoff]
 
     # Backward compatibility methods for tests
-    _run_nvidia_smi: Optional[Callable[[], str]] = None
+    _run_nvidia_smi: Callable[[], str] | None = None
 
     def _parse_output(self, output: str) -> tuple:
         """Backward-compatible method to parse nvidia-smi output.
-        
+
         This method is deprecated and provided for test compatibility.
         The new implementation uses GPUBackendManager for memory queries.
         """
         import re
+
         gpus = []
-        
+
         # Parse old nvidia-smi format: "0, 24576 MiB, 12845 MiB, 11731 MiB"
         # or multi-GPU: "0, 24576 MiB, 12845 MiB, 11731 MiB\n1, 24576 MiB, 8000 MiB, 16576 MiB"
         for line in output.strip().split("\n"):
@@ -303,27 +305,29 @@ class VRAMMonitor:
             match = re.match(r"(\d+),\s*(\d+)\s*MiB,\s*(\d+)\s*MiB,\s*(\d+)\s*MiB", line)
             if match:
                 idx, total, used, free = match.groups()
-                gpus.append(GPUMemory(
-                    index=int(idx),
-                    total_gb=int(total) / 1024,
-                    used_gb=int(used) / 1024,
-                    free_gb=int(free) / 1024,
-                    vendor="nvidia",
-                    device_name=f"GPU{idx}",
-                ))
-        
+                gpus.append(
+                    GPUMemory(
+                        index=int(idx),
+                        total_gb=int(total) / 1024,
+                        used_gb=int(used) / 1024,
+                        free_gb=int(free) / 1024,
+                        vendor="nvidia",
+                        device_name=f"GPU{idx}",
+                    )
+                )
+
         if not gpus:
             raise ValueError(f"Could not parse nvidia-smi output: {output}")
-        
+
         total_mb = sum(int(g.total_gb * 1024) for g in gpus)
         used_mb = sum(int(g.used_gb * 1024) for g in gpus)
         free_mb = sum(int(g.free_gb * 1024) for g in gpus)
-        
+
         return total_mb, used_mb, free_mb, gpus
 
     def _check_nvidia_smi_available(self) -> bool:
         """Backward-compatible method to check nvidia-smi availability.
-        
+
         This method is deprecated. The new implementation uses GPUBackendManager
         which auto-detects all GPU vendors.
         """
@@ -331,11 +335,14 @@ class VRAMMonitor:
         if self.has_nvidia:
             return True
         # Try actual backends
-        if self.gpu_manager.has_gpus and any(b.vendor == "nvidia" for b in self.gpu_manager.backends):
+        if self.gpu_manager.has_gpus and any(
+            b.vendor == "nvidia" for b in self.gpu_manager.backends
+        ):
             return True
         # Fallback: try running nvidia-smi directly (for backward compatibility)
         try:
             import subprocess
+
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                 capture_output=True,

@@ -1,12 +1,12 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from router.benchmark_db import (
     get_all_benchmarks,
     get_benchmarks_for_models,
-    invalidate_benchmarks_cache,
-    invalidate_profiles_cache,
     invalidate_all_caches,
+    invalidate_benchmarks_cache,
 )
 
 
@@ -39,9 +39,7 @@ class TestBenchmarkCaching:
         mock_benchmark.mmlu = 0.7
         mock_benchmark.humaneval = 0.65
 
-        mock_session.execute.return_value.scalars.return_value.all.return_value = [
-            mock_benchmark
-        ]
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [mock_benchmark]
 
         result1 = get_all_benchmarks()
         result2 = get_all_benchmarks()
@@ -64,9 +62,7 @@ class TestBenchmarkCaching:
         mock_benchmark.general_score = 0.85
         mock_benchmark.elo_rating = 1200
 
-        mock_session.execute.return_value.scalars.return_value.all.return_value = [
-            mock_benchmark
-        ]
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [mock_benchmark]
 
         model_names = ["llama3", "codellama"]
         result1 = get_benchmarks_for_models(model_names)
@@ -90,9 +86,7 @@ class TestBenchmarkCaching:
         mock_benchmark.general_score = 0.85
         mock_benchmark.elo_rating = 1200
 
-        mock_session.execute.return_value.scalars.return_value.all.return_value = [
-            mock_benchmark
-        ]
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [mock_benchmark]
 
         result1 = get_benchmarks_for_models(["llama3"])
         assert len(result1) == 1

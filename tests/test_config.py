@@ -3,8 +3,6 @@
 import logging
 from unittest.mock import patch
 
-import pytest
-
 from router.config import Settings, init_logging, settings
 
 

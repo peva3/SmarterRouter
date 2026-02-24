@@ -1,9 +1,10 @@
 """Tests for VRAMMonitor."""
 
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
-from router.vram_monitor import VRAMMonitor, VRAMMetrics, GPUMemory
+import pytest
+
+from router.vram_monitor import GPUMemory, VRAMMetrics, VRAMMonitor
 
 
 class TestGPUMemory:
@@ -131,7 +132,7 @@ class TestVRAMMonitor:
             gpus=[GPUMemory(index=0, total_gb=24.0, used_gb=12.0, free_gb=12.0)],
         )
         monitor._samples.append(sample)
-        
+
         result = monitor.get_current()
         assert result == sample
 
@@ -142,7 +143,7 @@ class TestVRAMMonitor:
     def test_get_history_with_samples(self, monitor):
         """Test get_history filters by time."""
         import time
-        
+
         now = time.time()
         recent = VRAMMetrics(
             timestamp=now - 60,
@@ -164,9 +165,9 @@ class TestVRAMMonitor:
             per_model_vram_gb={},
             gpus=[GPUMemory(index=0, total_gb=24.0, used_gb=12.0, free_gb=12.0)],
         )
-        
+
         monitor._samples = [old, recent]
-        
+
         history = monitor.get_history(minutes=5)
         assert len(history) == 1
         assert history[0] == recent
@@ -175,9 +176,9 @@ class TestVRAMMonitor:
     async def test_start_without_nvidia(self, monitor):
         """Test start when nvidia-smi is not available."""
         monitor.has_nvidia = False
-        
+
         await monitor.start()
-        
+
         assert monitor._task is None
         assert monitor._running is False
 
@@ -185,17 +186,17 @@ class TestVRAMMonitor:
     async def test_stop(self, monitor):
         """Test stopping the monitor."""
         monitor._running = True
-        
+
         await monitor.stop()
-        
+
         assert monitor._running is False
 
     def test_parse_output_single_gpu(self, monitor):
         """Test parsing nvidia-smi output for single GPU."""
         output = "0, 24576 MiB, 12845 MiB, 11731 MiB"
-        
+
         total_mb, used_mb, free_mb, gpus = monitor._parse_output(output)
-        
+
         assert total_mb == 24576
         assert used_mb == 12845
         assert free_mb == 11731
@@ -206,9 +207,9 @@ class TestVRAMMonitor:
         """Test parsing nvidia-smi output for multiple GPUs."""
         output = """0, 24576 MiB, 12845 MiB, 11731 MiB
 1, 24576 MiB, 10000 MiB, 14576 MiB"""
-        
+
         total_mb, used_mb, free_mb, gpus = monitor._parse_output(output)
-        
+
         assert total_mb == 49152
         assert used_mb == 22845
         assert len(gpus) == 2
@@ -216,24 +217,21 @@ class TestVRAMMonitor:
     def test_parse_output_invalid(self, monitor):
         """Test parsing invalid output raises error."""
         output = "invalid data"
-        
+
         with pytest.raises(ValueError):
             monitor._parse_output(output)
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_check_nvidia_smi_available(self, mock_run, monitor):
         """Test nvidia-smi detection when available."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="NVIDIA GeForce RTX 3090, 24576 MiB"
-        )
-        
+        mock_run.return_value = MagicMock(returncode=0, stdout="NVIDIA GeForce RTX 3090, 24576 MiB")
+
         result = monitor._check_nvidia_smi()
-        
+
         assert result is True
         assert monitor.gpu_name == "NVIDIA GeForce RTX 3090"
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_check_nvidia_smi_not_available(self, mock_run, monitor):
         """Test nvidia-smi detection when not available."""
         # Mock GPU manager to report no GPUs
@@ -243,9 +241,9 @@ class TestVRAMMonitor:
         monitor.gpu_manager = mock_gpu_manager
         monitor.has_nvidia = False
         mock_run.side_effect = FileNotFoundError()
-        
+
         result = monitor._check_nvidia_smi()
-        
+
         assert result is False
 
 
@@ -258,18 +256,19 @@ class TestVRAMMonitorAppState:
         mock_vram_manager = MagicMock()
         mock_vram_manager.loaded_models = {"llama3": 8.0}
         mock_app_state.vram_manager = mock_vram_manager
-        
+
         monitor = VRAMMonitor(
             interval=30,
             total_vram_gb=24.0,
             app_state=mock_app_state,
         )
-        
+
         monitor.has_nvidia = True
         monitor._run_nvidia_smi = lambda: "0, 24576 MiB, 12845 MiB, 11731 MiB"
-        
+
         import asyncio
+
         metrics = asyncio.get_event_loop().run_until_complete(monitor._sample())
-        
+
         assert "llama3" in metrics.models_loaded
         assert metrics.per_model_vram_gb["llama3"] == 8.0

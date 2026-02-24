@@ -73,7 +73,7 @@ class OpenAIBackend(LLMBackend):
             "Content-Type": "application/json",
         }
         client = await self._get_client()
-        
+
         # Create a new client with specific timeout if needed
         if effective_timeout != self.timeout:
             async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
@@ -84,7 +84,7 @@ class OpenAIBackend(LLMBackend):
                     logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
                     return {}
                 return data
-        
+
         response = await client.request(method, url, headers=headers, **kwargs)
         response.raise_for_status()
         data = response.json()
@@ -96,13 +96,13 @@ class OpenAIBackend(LLMBackend):
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests."""
         now = time.monotonic()
-        
+
         # Check cache
         if self._models_cache is not None:
             models, cached_at = self._models_cache
             if now - cached_at < self.models_cache_ttl:
                 return models
-        
+
         # Fetch fresh models
         try:
             data = await self._request("GET", "/models")
@@ -115,7 +115,7 @@ class OpenAIBackend(LLMBackend):
                         modified_at=None,
                     )
                 )
-            
+
             # Update cache
             self._models_cache = (models, now)
             return models
@@ -147,7 +147,7 @@ class OpenAIBackend(LLMBackend):
         }
         payload.update(kwargs)
         response = await self._request("POST", "/chat/completions", json=payload)
-        
+
         # Transform OpenAI format to Ollama format for consistency
         choices = response.get("choices", [])
         if choices:
@@ -224,7 +224,7 @@ class OpenAIBackend(LLMBackend):
 
     async def unload_model(self, model_name: str) -> bool:
         """External APIs don't support model unloading."""
-        logger.debug(f"unload_model not supported for external API backend")
+        logger.debug("unload_model not supported for external API backend")
         return False
 
     async def embed(

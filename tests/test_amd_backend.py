@@ -1,12 +1,8 @@
 """Tests for AMD GPU backend, including APU detection."""
 
-import pytest
-from unittest.mock import patch, MagicMock
-import tempfile
-import os
+from unittest.mock import patch
 
-from router.gpu_backends.amdgpu import AMDBackend, VRAM_CUTOFF_GB
-from router.gpu_backends.base import GPUMemory
+from router.gpu_backends.amdgpu import VRAM_CUTOFF_GB, AMDBackend
 
 
 class TestAMDBackendDetection:
@@ -21,7 +17,7 @@ class TestAMDBackendDetection:
         backend._is_apu = False
         backend._detected_device_name = "AMD GPU"
 
-        with patch('subprocess.run', side_effect=FileNotFoundError()):
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
             result = backend.is_available()
             assert result is False
 
@@ -34,7 +30,7 @@ class TestAMDBackendDetection:
         backend._is_apu = False
         backend._detected_device_name = "AMD GPU"
 
-        with patch('subprocess.run', side_effect=FileNotFoundError()):
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
             result = backend.is_available()
             assert result is True
 

@@ -3,9 +3,8 @@
 import logging
 import re
 import subprocess
-from typing import List
 
-from router.gpu_backends.base import GPUBackend, GPUMemory
+from router.gpu_backends.base import GPUMemory
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ class NVIDIABackend:
             logger.debug(f"NVIDIA backend detection error: {e}")
         return False
 
-    def get_memory_info(self) -> List[GPUMemory]:
+    def get_memory_info(self) -> list[GPUMemory]:
         """Get VRAM memory info for all NVIDIA GPUs.
 
         Returns:
@@ -99,7 +98,7 @@ class NVIDIABackend:
             logger.error(f"Unexpected error querying NVIDIA GPUs: {e}")
             raise
 
-    def _parse_output(self, output: str) -> List[GPUMemory]:
+    def _parse_output(self, output: str) -> list[GPUMemory]:
         """Parse nvidia-smi CSV output.
 
         Expected format per line:
@@ -119,7 +118,7 @@ class NVIDIABackend:
             ValueError: If no valid GPU data found
         """
         lines = output.strip().split("\n")
-        gpus: List[GPUMemory] = []
+        gpus: list[GPUMemory] = []
 
         for line in lines:
             parts = line.split(",")

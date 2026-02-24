@@ -2,7 +2,7 @@
 
 This backend monitors dedicated Intel GPUs with their own VRAM:
     - Intel Arc A-series (A380, A770, etc.) - uses i915 driver
-    - Intel Arc B-series (B580, etc.) - uses xe driver  
+    - Intel Arc B-series (B580, etc.) - uses xe driver
     - Intel Data Center GPU (Flex, Max series)
 
 Integrated graphics (Intel UHD, Iris Xe, Arc 130V/140V iGPU) are skipped
@@ -21,9 +21,8 @@ import logging
 import os
 import re
 import subprocess
-from typing import List, Optional
 
-from router.gpu_backends.base import GPUBackend, GPUMemory
+from router.gpu_backends.base import GPUMemory
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,7 @@ class IntelBackend:
             intel_gpu_top_path: Path to intel_gpu_top executable (default: "intel_gpu_top")
         """
         self._intel_gpu_top_path = intel_gpu_top_path
-        self._sysfs_cards: List[str] = []
+        self._sysfs_cards: list[str] = []
         self._detect_sysfs_cards()
 
     def _detect_sysfs_cards(self):
@@ -53,11 +52,11 @@ class IntelBackend:
                     vendor_path = f"{device_path}/vendor"
                     if os.path.exists(vendor_path):
                         try:
-                            with open(vendor_path, "r") as f:
+                            with open(vendor_path) as f:
                                 vendor = f.read().strip()
                                 if vendor == INTEL_VENDOR_ID:
                                     self._sysfs_cards.append(device_path)
-                        except (IOError, OSError):
+                        except OSError:
                             continue
         except (FileNotFoundError, OSError):
             pass
@@ -83,7 +82,7 @@ class IntelBackend:
             driver_link = os.readlink(driver_path)
             if "xe" in driver_link:
                 return True
-        except (OSError, IOError):
+        except OSError:
             pass
 
         lmem_total_path = f"{device_path}/lmem_total"
@@ -91,13 +90,13 @@ class IntelBackend:
             return False
 
         try:
-            with open(lmem_total_path, "r") as f:
+            with open(lmem_total_path) as f:
                 content = f.read().strip()
                 match = re.search(r"(\d+)", content)
                 if match:
                     total_bytes = int(match.group(1))
                     return total_bytes > 0
-        except (IOError, OSError, ValueError):
+        except (OSError, ValueError):
             pass
 
         return False
@@ -131,6 +130,7 @@ class IntelBackend:
             if result.returncode == 0:
                 # Parse JSON output to check for any engines
                 import json
+
                 data = json.loads(result.stdout)
                 if "cards" in data and data["cards"]:
                     return True
@@ -146,7 +146,7 @@ class IntelBackend:
 
         return False
 
-    def get_memory_info(self) -> List[GPUMemory]:
+    def get_memory_info(self) -> list[GPUMemory]:
         """Get VRAM memory info for all dedicated Intel GPUs.
 
         Returns:
@@ -155,7 +155,7 @@ class IntelBackend:
         Raises:
             ValueError: If no GPU data could be obtained
         """
-        gpus: List[GPUMemory] = []
+        gpus: list[GPUMemory] = []
 
         # Try intel_gpu_top method (preferred)
         try:
@@ -179,7 +179,7 @@ class IntelBackend:
 
         return gpus
 
-    def _query_intel_gpu_top(self) -> List[GPUMemory]:
+    def _query_intel_gpu_top(self) -> list[GPUMemory]:
         """Query Intel GPUs using intel_gpu_top JSON output."""
         try:
             result = subprocess.run(
@@ -191,7 +191,7 @@ class IntelBackend:
             result.check_returncode()
 
             data = json.loads(result.stdout)
-            gpus: List[GPUMemory] = []
+            gpus: list[GPUMemory] = []
 
             cards = data.get("cards", [])
             for card in cards:
@@ -217,7 +217,7 @@ class IntelBackend:
             logger.warning(f"intel_gpu_top query error: {e}")
             raise
 
-    def _query_sysfs_device(self, device_path: str) -> Optional[GPUMemory]:
+    def _query_sysfs_device(self, device_path: str) -> GPUMemory | None:
         """Query VRAM info from sysfs for a single Intel GPU device.
 
         Supports both i915 driver (lmem_total) and xe driver (fdinfo).
@@ -237,7 +237,7 @@ class IntelBackend:
 
         return self._query_i915_device(device_path, card_id)
 
-    def _query_xe_driver(self, device_path: str, card_id: str) -> Optional[GPUMemory]:
+    def _query_xe_driver(self, device_path: str, card_id: str) -> GPUMemory | None:
         """Query VRAM for xe driver (Battlemage, Xe2).
 
         The xe driver uses fdinfo format instead of lmem_total.
@@ -255,7 +255,7 @@ class IntelBackend:
             driver_link = os.readlink(driver_path)
             if "xe" not in driver_link:
                 return None
-        except (OSError, IOError):
+        except OSError:
             return None
 
         logger.debug(f"Intel GPU card {card_id} uses xe driver")
@@ -269,13 +269,13 @@ class IntelBackend:
         for vram_path in vram_paths:
             if os.path.exists(vram_path):
                 try:
-                    with open(vram_path, "r") as f:
+                    with open(vram_path) as f:
                         content = f.read().strip()
                         match = re.search(r"(\d+)", content)
                         if match:
                             total_bytes = int(match.group(1))
                             break
-                except (IOError, OSError):
+                except OSError:
                     continue
 
         if total_bytes is None:
@@ -288,7 +288,7 @@ class IntelBackend:
         if total_bytes is None or total_bytes == 0:
             return None
 
-        total_gb = total_bytes / (1024 ** 3)
+        total_gb = total_bytes / (1024**3)
 
         used_gb = 0.0
         used_paths = [
@@ -298,13 +298,13 @@ class IntelBackend:
         for used_path in used_paths:
             if os.path.exists(used_path):
                 try:
-                    with open(used_path, "r") as f:
+                    with open(used_path) as f:
                         content = f.read().strip()
                         match = re.search(r"(\d+)", content)
                         if match:
-                            used_gb = int(match.group(1)) / (1024 ** 3)
+                            used_gb = int(match.group(1)) / (1024**3)
                             break
-                except (IOError, OSError):
+                except OSError:
                     continue
 
         free_gb = max(0.0, total_gb - used_gb)
@@ -318,7 +318,7 @@ class IntelBackend:
             device_name=f"Intel Arc GPU (card {card_id}, xe)",
         )
 
-    def _get_vram_from_fdinfo(self, card_id: str) -> Optional[int]:
+    def _get_vram_from_fdinfo(self, card_id: str) -> int | None:
         """Get VRAM from fdinfo for xe driver.
 
         The xe driver exposes memory stats via fdinfo format:
@@ -335,7 +335,7 @@ class IntelBackend:
             return None
 
         try:
-            with open(fdinfo_path, "r") as f:
+            with open(fdinfo_path) as f:
                 content = f.read()
 
             for line in content.split("\n"):
@@ -344,14 +344,24 @@ class IntelBackend:
                     if match:
                         value = int(match.group(1))
                         unit = match.group(2).upper()
-                        multipliers = {"B": 1, "KB": 1024, "KIB": 1024, "MB": 1024**2, "MIB": 1024**2, "GB": 1024**3, "GIB": 1024**3, "TB": 1024**4, "TIB": 1024**4}
+                        multipliers = {
+                            "B": 1,
+                            "KB": 1024,
+                            "KIB": 1024,
+                            "MB": 1024**2,
+                            "MIB": 1024**2,
+                            "GB": 1024**3,
+                            "GIB": 1024**3,
+                            "TB": 1024**4,
+                            "TIB": 1024**4,
+                        }
                         return value * multipliers.get(unit, 1)
-        except (IOError, OSError):
+        except OSError:
             pass
 
         return None
 
-    def _query_i915_device(self, device_path: str, card_id: str) -> Optional[GPUMemory]:
+    def _query_i915_device(self, device_path: str, card_id: str) -> GPUMemory | None:
         """Query VRAM for i915 driver (Arc A-series).
 
         Args:
@@ -366,23 +376,23 @@ class IntelBackend:
             if not os.path.exists(total_path):
                 return None
 
-            with open(total_path, "r") as f:
+            with open(total_path) as f:
                 total_str = f.read().strip()
                 match = re.search(r"(\d+)", total_str)
                 if not match:
                     return None
                 total_bytes = int(match.group(1))
-                total_gb = total_bytes / (1024 ** 3)
+                total_gb = total_bytes / (1024**3)
 
             used_gb = 0.0
             used_path = f"{device_path}/lmem_used"
             if os.path.exists(used_path):
-                with open(used_path, "r") as f:
+                with open(used_path) as f:
                     used_str = f.read().strip()
                     match = re.search(r"(\d+)", used_str)
                     if match:
                         used_bytes = int(match.group(1))
-                        used_gb = used_bytes / (1024 ** 3)
+                        used_gb = used_bytes / (1024**3)
 
             free_gb = max(0.0, total_gb - used_gb)
 
@@ -394,6 +404,6 @@ class IntelBackend:
                 vendor=self.vendor,
                 device_name=f"Intel Arc GPU (card {card_id})",
             )
-        except (IOError, OSError, ValueError) as e:
+        except (OSError, ValueError) as e:
             logger.debug(f"Failed to read Intel GPU sysfs at {device_path}: {e}")
             return None

@@ -67,7 +67,7 @@ class LlamaCppBackend(LLMBackend):
         url = f"{self.base_url}{path}"
         effective_timeout = timeout if timeout is not None else self.timeout
         client = await self._get_client()
-        
+
         # Create a new client with specific timeout if needed
         if effective_timeout != self.timeout:
             async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
@@ -78,7 +78,7 @@ class LlamaCppBackend(LLMBackend):
                     logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
                     return {}
                 return data
-        
+
         response = await client.request(method, url, **kwargs)
         response.raise_for_status()
         data = response.json()
@@ -90,13 +90,13 @@ class LlamaCppBackend(LLMBackend):
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests."""
         now = time.monotonic()
-        
+
         # Check cache
         if self._models_cache is not None:
             models, cached_at = self._models_cache
             if now - cached_at < self.models_cache_ttl:
                 return models
-        
+
         # Fetch fresh models
         try:
             data = await self._request("GET", "/v1/models")
@@ -109,7 +109,7 @@ class LlamaCppBackend(LLMBackend):
                         modified_at=None,
                     )
                 )
-            
+
             # Update cache
             self._models_cache = (models, now)
             return models
@@ -141,7 +141,7 @@ class LlamaCppBackend(LLMBackend):
         }
         payload.update(kwargs)
         response = await self._request("POST", "/v1/chat/completions", json=payload)
-        
+
         # Transform OpenAI format to Ollama format for consistency
         choices = response.get("choices", [])
         if choices:
@@ -213,7 +213,7 @@ class LlamaCppBackend(LLMBackend):
 
     async def unload_model(self, model_name: str) -> bool:
         """Llama.cpp doesn't support explicit unloading via API."""
-        logger.debug(f"unload_model not supported for llama.cpp backend")
+        logger.debug("unload_model not supported for llama.cpp backend")
         return False
 
     async def embed(

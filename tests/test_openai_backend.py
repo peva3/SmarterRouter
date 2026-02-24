@@ -1,8 +1,9 @@
 """Tests for OpenAIBackend."""
 
 import json
-import pytest
+
 import httpx
+import pytest
 import respx
 
 from router.backends.openai import OpenAIBackend
@@ -49,11 +50,9 @@ class TestOpenAIBackend:
 
         with respx.mock() as mock_http:
             mock_http.get("http://localhost:8000/v1/models").mock(
-                return_value=httpx.Response(200, json={
-                    "data": [
-                        {"id": "gpt-4", "size": 1000000000}
-                    ]
-                })
+                return_value=httpx.Response(
+                    200, json={"data": [{"id": "gpt-4", "size": 1000000000}]}
+                )
             )
             models = await backend.list_models()
             assert len(models) == 1
@@ -68,7 +67,7 @@ class TestOpenAIBackend:
                 return_value=httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
             )
             await backend.chat("gpt-4", [{"role": "user", "content": "test"}])
-            
+
             request = mock_http.calls.last.request
             assert request.headers["Authorization"] == "Bearer sk-test"
 
@@ -78,13 +77,16 @@ class TestOpenAIBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8000/v1/chat/completions").mock(
-                return_value=httpx.Response(200, json={
-                    "choices": [{"message": {"content": "Test response"}}],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "Test response"}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    },
+                )
             )
             result = await backend.chat("gpt-4", [{"role": "user", "content": "Test"}])
-            
+
             assert "message" in result
             assert result["message"]["content"] == "Test response"
             assert result["prompt_eval_count"] == 10
@@ -92,14 +94,16 @@ class TestOpenAIBackend:
 
     @pytest.mark.asyncio
     async def test_chat_with_model_prefix(self):
-        backend = OpenAIBackend("http://localhost:8000/v1", api_key="sk-test", model_prefix="myorg/")
+        backend = OpenAIBackend(
+            "http://localhost:8000/v1", api_key="sk-test", model_prefix="myorg/"
+        )
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8000/v1/chat/completions").mock(
                 return_value=httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
             )
             await backend.chat("gpt-4", [{"role": "user", "content": "test"}])
-            
+
             request = mock_http.calls.last.request
             body = json.loads(request.content)
             assert body["model"] == "myorg/gpt-4"
@@ -111,7 +115,7 @@ class TestOpenAIBackend:
         stream_chunks = [
             b'data: {"choices": [{"delta": {"content": "Hello"}}]}\n',
             b'data: {"choices": [{"delta": {"content": " World"}}]}\n',
-            b'data: [DONE]\n',
+            b"data: [DONE]\n",
         ]
 
         with respx.mock() as mock_http:
@@ -122,13 +126,15 @@ class TestOpenAIBackend:
                     headers={"content-type": "text/plain"},
                 )
             )
-            stream, latency = await backend.chat_streaming("gpt-4", [{"role": "user", "content": "Hi"}])
-            
+            stream, latency = await backend.chat_streaming(
+                "gpt-4", [{"role": "user", "content": "Hi"}]
+            )
+
             chunks = []
             async for chunk in stream:
                 if "message" in chunk:
                     chunks.append(chunk)
-            
+
             assert len(chunks) == 2
             assert chunks[0]["message"]["content"] == "Hello"
             assert chunks[1]["message"]["content"] == " World"
@@ -144,12 +150,14 @@ class TestOpenAIBackend:
                     content=b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n',
                 )
             )
-            stream, latency = await backend.chat_streaming("gpt-4", [{"role": "user", "content": "test"}])
-            
+            stream, latency = await backend.chat_streaming(
+                "gpt-4", [{"role": "user", "content": "test"}]
+            )
+
             # Consume the stream to trigger the HTTP request
             async for _ in stream:
                 pass
-            
+
             request = mock_http.calls.last.request
             assert request.headers["Authorization"] == "Bearer sk-test"
 
@@ -165,9 +173,9 @@ class TestOpenAIBackend:
 
         with respx.mock() as mock_http:
             mock_http.post("http://localhost:8000/v1/embeddings").mock(
-                return_value=httpx.Response(200, json={
-                    "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]
-                })
+                return_value=httpx.Response(
+                    200, json={"data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]}
+                )
             )
             result = await backend.embed("text-embedding-ada-002", "test text")
             assert "data" in result

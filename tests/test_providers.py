@@ -382,7 +382,9 @@ class TestArtificialAnalysisProvider:
                 ],
             }
 
-            with patch("router.providers.artificial_analysis.httpx.AsyncClient") as mock_client_class:
+            with patch(
+                "router.providers.artificial_analysis.httpx.AsyncClient"
+            ) as mock_client_class:
                 mock_response_obj = MagicMock()
                 mock_response_obj.status_code = 200
                 mock_response_obj.json.return_value = mock_response
@@ -518,4 +520,3 @@ class TestArtificialAnalysisProvider:
 
         ollama_name = provider._map_to_ollama_name(model_data, ["some-model"])
         assert ollama_name is None
-

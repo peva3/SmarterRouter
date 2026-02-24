@@ -1,6 +1,5 @@
 """Tests for model filtering functionality."""
 
-import pytest
 from router.backends.base import ModelInfo
 from router.model_filter import (
     filter_model_infos,
@@ -72,7 +71,7 @@ class TestFilterModelNames:
     def test_include_only(self):
         """Include filter only allows matching models."""
         models = ["llama3", "gemma2:7b", "mistral7b", "phi3:mini"]
-        
+
         result = filter_model_names(models, ["llama*", "gemma*"], [])
         assert "llama3" in result
         assert "gemma2:7b" in result
@@ -82,7 +81,7 @@ class TestFilterModelNames:
     def test_exclude_only(self):
         """Exclude filter removes matching models."""
         models = ["llama3", "qwen2.5:72b", "gemma2:7b", "mistral7b"]
-        
+
         result = filter_model_names(models, [], ["qwen*"])
         assert "llama3" in result
         assert "qwen2.5:72b" not in result
@@ -92,11 +91,11 @@ class TestFilterModelNames:
     def test_exclude_takes_precedence(self):
         """Exclude takes precedence over include."""
         models = ["llama3", "llama3:8b-q4", "gemma2:7b"]
-        
+
         result = filter_model_names(
             models,
             ["llama*"],  # Include llama
-            ["*q4*"],    # Exclude q4
+            ["*q4*"],  # Exclude q4
         )
         assert "llama3" in result
         assert "llama3:8b-q4" not in result  # Excluded by pattern
@@ -105,7 +104,7 @@ class TestFilterModelNames:
     def test_multiple_exclude_patterns(self):
         """Multiple exclude patterns work together."""
         models = ["llama3", "qwen2.5", "gemma2", "mistral7b"]
-        
+
         result = filter_model_names(models, [], ["qwen*", "mistral*"])
         assert "llama3" in result
         assert "qwen2.5" not in result
@@ -115,7 +114,7 @@ class TestFilterModelNames:
     def test_case_insensitive_filtering(self):
         """Filtering is case-insensitive."""
         models = ["LLAMA3", "Gemma2:7b", "Mistral7b"]
-        
+
         result = filter_model_names(models, ["llama*", "gemma*"], [])
         assert "LLAMA3" in result
         assert "Gemma2:7b" in result
@@ -147,7 +146,7 @@ class TestFilterModelInfos:
             ModelInfo(name="qwen2.5:72b", size=40000000000),
             ModelInfo(name="gemma2:7b", size=987654321),
         ]
-        
+
         result = filter_model_infos(models, ["llama*", "gemma*"], [])
         assert len(result) == 2
         names = [m.name for m in result]
@@ -162,7 +161,7 @@ class TestFilterModelInfos:
             ModelInfo(name="qwen2.5:72b", size=40000000000),
             ModelInfo(name="gemma2:7b", size=987654321),
         ]
-        
+
         result = filter_model_infos(models, [], ["qwen*"])
         assert len(result) == 2
         names = [m.name for m in result]
@@ -175,7 +174,7 @@ class TestFilterModelInfos:
         models = [
             ModelInfo(name="llama3", size=1234567890, modified_at="2024-01-01"),
         ]
-        
+
         result = filter_model_infos(models, ["llama*"], [])
         assert len(result) == 1
         assert result[0].name == "llama3"
@@ -189,21 +188,21 @@ class TestFilterEdgeCases:
     def test_all_excluded(self):
         """All models excluded returns empty list."""
         models = ["llama3", "gemma2:7b", "mistral7b"]
-        
+
         result = filter_model_names(models, [], ["*"])
         assert result == []
 
     def test_nothing_matches_include(self):
         """No models match include returns empty."""
         models = ["llama3", "gemma2:7b"]
-        
+
         result = filter_model_names(models, ["qwen*"], [])
         assert result == []
 
     def test_overlapping_include_exclude(self):
         """Overlapping include/exclude patterns work correctly."""
         models = ["llama3", "llama3:8b-q4", "llama3:8b-q8"]
-        
+
         # Include all llama, but exclude q4
         result = filter_model_names(models, ["llama3*"], ["*q4*"])
         assert "llama3" in result
@@ -213,7 +212,7 @@ class TestFilterEdgeCases:
     def test_special_characters_in_names(self):
         """Model names with special characters are handled correctly."""
         models = ["model:v1-q4_K_M", "model:v2-q5_K_M", "other"]
-        
+
         result = filter_model_names(models, [], ["*q4*"])
         assert "model:v1-q4_K_M" not in result
         assert "model:v2-q5_K_M" in result

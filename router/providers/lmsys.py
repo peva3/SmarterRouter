@@ -1,7 +1,4 @@
-import csv
 import logging
-import pickle
-from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
 
@@ -26,8 +23,6 @@ class LMSYSProvider(BenchmarkProvider):
 
     async def fetch_data(self, ollama_models: list[str]) -> list[dict[str, Any]]:
         logger.info(f"Fetching data from {self.name} provider")
-
-        benchmarks: list[dict[str, Any]] = []
 
         try:
             # Try fetching Arena Hard CSV first (easier to parse)

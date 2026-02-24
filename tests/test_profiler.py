@@ -20,9 +20,7 @@ def profiler(mock_client):
 @pytest.mark.asyncio
 async def test_profile_model_success(profiler, mock_client):
     # Mock the chat method to return Ollama-format response
-    mock_client.chat = AsyncMock(
-        return_value={"message": {"content": "This is a test response"}}
-    )
+    mock_client.chat = AsyncMock(return_value={"message": {"content": "This is a test response"}})
 
     result = await profiler.profile_model("llama3")
 
@@ -42,7 +40,7 @@ async def test_profile_model_timeout(profiler, mock_client):
         await asyncio.sleep(10)
         return {"message": {"content": ""}}
 
-    mock_client.chat = AsyncMock(side_effect=asyncio.TimeoutError())
+    mock_client.chat = AsyncMock(side_effect=TimeoutError())
 
     result = await profiler.profile_model("llama3")
 
@@ -64,9 +62,7 @@ async def test_test_category_multiple_prompts(profiler, mock_client):
     prompts = ["prompt1", "prompt2", "prompt3"]
 
     # Mock chat method with Ollama-format response
-    mock_client.chat = AsyncMock(
-        return_value={"message": {"content": "Response text here"}}
-    )
+    mock_client.chat = AsyncMock(return_value={"message": {"content": "Response text here"}})
 
     score, avg_time = await profiler._test_category("llama3", "coding", prompts)
 
@@ -129,23 +125,20 @@ async def test_adaptive_timeout_very_large_model(profiler, mock_client):
 @pytest.mark.asyncio
 async def test_profile_model_vram_via_ollama_api(profiler, mock_client):
     """Test that VRAM is measured via Ollama API when available."""
-    from router.judge import JudgeClient
-    
+
     # Mock client.chat for successful responses (need >50 chars to pass screening)
     long_response = "This is a test response that is long enough to pass the screening heuristic. It needs to be at least fifty characters long."
-    mock_client.chat = AsyncMock(
-        return_value={"message": {"content": long_response}}
-    )
-    
+    mock_client.chat = AsyncMock(return_value={"message": {"content": long_response}})
+
     # Mock Ollama API VRAM method
     mock_client.get_model_vram_usage = AsyncMock(return_value=2.5)
-    
+
     # Mock judge to avoid API calls
     profiler.judge = MagicMock()
     profiler.judge.score_responses_batch = AsyncMock(return_value=[0.8, 0.8, 0.8, 0.8, 0.8])
-    
+
     result = await profiler.profile_model("llama3.2:1b")
-    
+
     assert result is not None
     # Verify Ollama API was called for VRAM
     mock_client.get_model_vram_usage.assert_called_once_with("llama3.2:1b")
@@ -154,27 +147,23 @@ async def test_profile_model_vram_via_ollama_api(profiler, mock_client):
 @pytest.mark.asyncio
 async def test_profile_model_vram_fallback_to_nvidia_smi(profiler, mock_client):
     """Test VRAM fallback to nvidia-smi when Ollama API returns None."""
-    from router.judge import JudgeClient
-    import router.profiler as profiler_module
-    
+
     # Mock client.chat for successful responses (need >50 chars to pass screening)
     long_response = "This is a test response that is long enough to pass the screening heuristic. It needs to be at least fifty characters long."
-    mock_client.chat = AsyncMock(
-        return_value={"message": {"content": long_response}}
-    )
-    
+    mock_client.chat = AsyncMock(return_value={"message": {"content": long_response}})
+
     # Mock Ollama API to return None (model not found in running models)
     mock_client.get_model_vram_usage = AsyncMock(return_value=None)
-    
+
     # Mock nvidia-smi measurement
     profiler._measure_vram_gb_async = AsyncMock(return_value=8.0)
-    
+
     # Mock judge
     profiler.judge = MagicMock()
     profiler.judge.score_responses_batch = AsyncMock(return_value=[0.8, 0.8, 0.8, 0.8, 0.8])
-    
+
     result = await profiler.profile_model("llama3.2:1b")
-    
+
     assert result is not None
     # Verify Ollama API was attempted
     mock_client.get_model_vram_usage.assert_called_once_with("llama3.2:1b")

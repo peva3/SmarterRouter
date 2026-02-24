@@ -1,7 +1,6 @@
 """Pydantic models for API request/response validation."""
 
 import re
-
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -181,9 +180,6 @@ def sanitize_prompt(prompt: str | list[dict] | None, max_length: int = 10000) ->
     return prompt.strip()
 
 
-from .logging_config import sanitize_for_logging
-
-
 def strip_signature(content: str, signature_format: str | None = None) -> str:
     """
     Remove router signature from content.
@@ -215,7 +211,7 @@ def _get_unclosed_fence_char(content: str) -> str | None:
     """
     Detect if content ends with an unclosed fenced code block.
     Returns the fence character ('`' or '~') if unclosed, None otherwise.
-    
+
     Implements a proper Markdown fenced code block state machine:
     - When not in a code block, a fence line opens a block.
     - When in a code block, only an exact matching fence (3 of same char) closes it;
@@ -225,19 +221,19 @@ def _get_unclosed_fence_char(content: str) -> str | None:
         return None
     in_code = False
     current_fence = None  # '`' or '~' for the currently open block
-    
+
     lines = content.splitlines()
-    for i, line in enumerate(lines):
+    for _i, line in enumerate(lines):
         stripped = line.strip()
         is_fence = stripped.startswith("```") or stripped.startswith("~~~")
-        
+
         if is_fence:
             # Determine fence char from this line
             if stripped.startswith("```"):
-                fence_char = '`'
+                fence_char = "`"
             else:
-                fence_char = '~'
-                
+                fence_char = "~"
+
             if not in_code:
                 # Opening a new block
                 in_code = True
@@ -250,7 +246,7 @@ def _get_unclosed_fence_char(content: str) -> str | None:
                 else:
                     # Fence inside a code block is just content; ignore for state
                     pass
-    
+
     return current_fence if in_code else None
 
 
@@ -261,21 +257,21 @@ def is_unclosed_code_block(content: str) -> bool:
 
 def close_unclosed_code_block(content: str) -> str:
     """Close an unclosed fenced code block by appending matching fence.
-    
+
     Special handling: if the content ends with a fence line that just opened
     an empty block (no content), remove that stray fence instead of closing it.
     This prevents ugly empty code blocks appearing before signatures.
     """
     if not content:
         return content
-    
+
     fence_char = _get_unclosed_fence_char(content)
     if not fence_char:
         return content
-    
+
     lines = content.splitlines()
     last_line = lines[-1].strip() if lines else ""
-    
+
     # Check if last line is just a fence (opening with no content after)
     # In this case, remove it entirely rather than creating an empty block
     if last_line.startswith(fence_char * 3):
@@ -288,7 +284,7 @@ def close_unclosed_code_block(content: str) -> str:
             # Removing the last line makes the content "closed"
             # This means the last line was a stray opening fence
             return content_stripped + "\n"
-    
+
     # Normal case: close the unclosed block
     if not content.endswith("\n"):
         content += "\n"
