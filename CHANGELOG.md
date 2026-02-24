@@ -1,4 +1,4 @@
-## [2.2.0] - 2026-02-24
+## [2.1.3] - 2026-02-23
 
 ### External Provider Support (provider.db + External APIs)
 
@@ -79,10 +79,6 @@ ROUTER_PROVIDER_DB_PATH=/custom/path/provider.db
 - Added `tests/test_provider_db.py` (14 tests)
 - Added `tests/test_backend_registry.py` (9 tests)
 - Test count: 391 tests passing
-
----
-
-## [2.1.3] - 2026-02-23
 
 ### Model Filtering
 
