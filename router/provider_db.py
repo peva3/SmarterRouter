@@ -19,19 +19,22 @@ from pathlib import Path
 from typing import Any
 
 from router.config import settings
+from router.exceptions import RouterDatabaseError
+from router.cache import get_cache
+
 
 logger = logging.getLogger(__name__)
 
+
+# Alias for backward compatibility
+ProviderDBError = RouterDatabaseError
+
 _PROVIDER_DB_CACHE_TTL = 60.0
-_provider_db_cache: dict[str, Any] | None = None
-_provider_db_cache_time: float = 0.0
-_provider_db_cache_lock = threading.Lock()
+# Unified cache instance
+_provider_cache = get_cache("provider_db", default_ttl=_PROVIDER_DB_CACHE_TTL)
 
 
-class ProviderDBError(Exception):
-    """Raised when provider.db operations fail."""
 
-    pass
 
 
 class ProviderDB:
@@ -127,8 +130,6 @@ class ProviderDB:
 
         Returns dict keyed by model_id with benchmark data.
         """
-        global _provider_db_cache, _provider_db_cache_time
-
         if not self.is_available():
             return {}
 
@@ -136,56 +137,76 @@ class ProviderDB:
             return {}
 
         # Security: Validate model IDs to prevent injection
-        if len(model_ids) > 1000:
+        # SQLite has a maximum of 999 parameters per query
+        if len(model_ids) > 999:
             logger.warning(f"Too many model_ids requested: {len(model_ids)}")
-            return {}
+            # Truncate to max allowed
+            model_ids = model_ids[:999]
         for model_id in model_ids:
             if not re.match(r"^[a-zA-Z0-9_\-/\.]+$", model_id):
                 logger.warning(f"Invalid model_id format: {model_id}")
                 return {}
 
-        # Check cache first (without lock - race is acceptable)
-        now = time.monotonic()
-        if (
-            _provider_db_cache is not None
-            and (now - _provider_db_cache_time) < _PROVIDER_DB_CACHE_TTL
-        ):
-            # Return only requested models from cache
-            return {k: v for k, v in _provider_db_cache.items() if k in model_ids}
+        # Try to get from unified cache first
+        cached_all = _provider_cache.get("all_benchmarks")
+        if cached_all is not None:
+            # Filter requested models
+            results = {}
+            for model_id in model_ids:
+                if model_id in cached_all:
+                    results[model_id] = cached_all[model_id]
+            if len(results) == len(model_ids):
+                # All requested models found in cache
+                return results
+            # Some models missing from cache, we'll query for missing ones
+            missing_models = [m for m in model_ids if m not in results]
+        else:
+            results = {}
+            missing_models = model_ids
 
-        # Cache miss - use thread lock to prevent thundering herd
-        with _provider_db_cache_lock:
-            # Double-check cache after acquiring lock (another thread may have updated)
-            if (
-                _provider_db_cache is not None
-                and (time.monotonic() - _provider_db_cache_time) < _PROVIDER_DB_CACHE_TTL
-            ):
-                return {k: v for k, v in _provider_db_cache.items() if k in model_ids}
+        if not missing_models:
+            return results
 
-            try:
-                with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    placeholders = ",".join("?" * len(model_ids))
+        # Need to query database for missing models
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Chunk queries to avoid SQLite parameter limit (999)
+                # and improve performance with smaller queries
+                CHUNK_SIZE = 250
+                queried_results = {}
+                
+                for i in range(0, len(missing_models), CHUNK_SIZE):
+                    chunk = missing_models[i:i + CHUNK_SIZE]
+                    placeholders = ",".join("?" * len(chunk))
                     cursor.execute(
                         f"""SELECT * FROM model_benchmarks
                             WHERE model_id IN ({placeholders}) AND archived = 0""",
-                        model_ids,
+                        chunk,
                     )
-                    results = {row["model_id"]: dict(row) for row in cursor.fetchall()}
-
-                    # Update cache with all non-archived models
-                    cursor.execute("SELECT * FROM model_benchmarks WHERE archived = 0")
-                    new_cache = {row["model_id"]: dict(row) for row in cursor.fetchall()}
-                    if _provider_db_cache is None:
-                        _provider_db_cache = new_cache
-                    else:
-                        _provider_db_cache.update(new_cache)
-                    _provider_db_cache_time = time.monotonic()
-
-                    return results
-            except Exception as e:
-                logger.warning(f"Failed to get benchmarks for models: {e}")
-                return {}
+                    for row in cursor.fetchall():
+                        model_id = row["model_id"]
+                        queried_results[model_id] = dict(row)
+                
+                # Update results with queried data
+                results.update(queried_results)
+                
+                # Update cache with newly fetched models
+                if queried_results:
+                    # Get current cache (might have been updated by another thread)
+                    current_cache = _provider_cache.get("all_benchmarks")
+                    if current_cache is None:
+                        current_cache = {}
+                    # Merge new data
+                    current_cache.update(queried_results)
+                    # Store back with TTL
+                    _provider_cache.set("all_benchmarks", current_cache)
+                
+                return results
+        except Exception as e:
+            logger.warning(f"Failed to get benchmarks for models: {e}")
+            return {}
 
     def get_all_benchmarks(self) -> list[dict[str, Any]]:
         """Get all active model benchmarks."""
@@ -255,7 +276,5 @@ def get_provider_db() -> ProviderDB:
 
 def invalidate_provider_cache() -> None:
     """Invalidate the provider.db cache."""
-    global _provider_db_cache, _provider_db_cache_time
-    _provider_db_cache = None
-    _provider_db_cache_time = 0.0
+    _provider_cache.invalidate("all_benchmarks")
     logger.debug("Provider.db cache invalidated")

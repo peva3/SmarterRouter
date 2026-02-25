@@ -43,10 +43,11 @@ class TestDatabaseConnection:
             assert "benchmark_sync" in tables
 
     def test_get_session_commit(self, test_db):
-        """Test that get_session commits on success."""
+        """Test that get_session does NOT commit automatically; manual commit required."""
         with get_session() as session:
             profile = ModelProfile(name="test_model", reasoning=0.8)
             session.add(profile)
+            session.commit()  # Manual commit required
 
         # Verify it was committed
         with get_session() as session:

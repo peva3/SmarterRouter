@@ -101,6 +101,57 @@ CATEGORY_MIN_SIZES = {
     "general": {"simple": 0, "medium": 1, "hard": 4},
 }
 
+# Scoring configuration constants to replace magic numbers
+# These can be moved to settings in the future
+SCORING_CONFIG = {
+    # Category boost multipliers
+    "dominant_category_boost_with_data": 20.0,
+    "dominant_category_boost_with_size": 10.0,
+    "dominant_category_boost_default": 1.5,
+    "dominant_category_threshold": 0.15,
+    
+    # Signal weights
+    "benchmark_weight": 1.5,
+    "elo_weight": 1.0,
+    "name_inference_weight": 0.4,
+    "profile_weight": 0.8,
+    
+    # Bonus multipliers
+    "feedback_bonus_multiplier": 2.0,
+    "has_benchmark_bonus": 0.3,
+    
+    # Size scoring
+    "size_score_very_large": 3.0,
+    "size_score_large": 2.0,
+    "size_score_medium": 1.0,
+    "size_score_tiny_penalty_high": -2.0,
+    "size_score_tiny_penalty_low": -0.5,
+    
+    # Complexity thresholds
+    "complexity_moderate_threshold": 0.3,
+    "complexity_high_threshold": 0.5,
+    "complexity_low_threshold": 0.15,
+    
+    # Complexity-size matching bonuses
+    "high_complexity_very_large_bonus": 3.0,
+    "high_complexity_large_bonus": 2.0,
+    "high_complexity_medium_bonus": 1.0,
+    "high_complexity_small_penalty": -3.0,
+    "moderate_complexity_very_large_bonus": 2.0,
+    "moderate_complexity_large_bonus": 1.2,
+    "moderate_complexity_medium_bonus": 0.4,
+    "moderate_complexity_small_penalty": -2.0,
+    "low_complexity_tiny_bonus": 1.5,
+    "low_complexity_small_bonus": 0.8,
+    "low_complexity_large_penalty": -1.0,
+    "low_complexity_very_large_penalty": -2.0,
+    "size_score_multiplier": 0.5,
+    "negative_weight_multiplier": 0.01,
+    "quality_preference_boost": 0.5,
+    "quality_preference_threshold": 0.5,
+    "dominant_category_confidence_threshold": 0.5,
+}
+
 
 class SemanticCache:
     """Smart LRU cache for routing decisions with semantic similarity and response caching.
@@ -841,7 +892,7 @@ Select the model that best matches the user's prompt needs."""
         # Quality vs Speed Trade-off
         quality_pref = settings.quality_preference
         speed_weight = 1.0 - quality_pref
-        quality_weight = quality_pref + 0.5  # Boost quality signals if preferred
+        quality_weight = quality_pref + SCORING_CONFIG["quality_preference_boost"]  # Boost quality signals if preferred
 
         normalized_benchmark_map = {}
         for name in model_names:
@@ -908,7 +959,7 @@ Select the model that best matches the user's prompt needs."""
         }
         if task_categories:
             top_category = max(task_categories.items(), key=lambda x: x[1])
-            dominant_category = top_category[0] if top_category[1] > 0.5 else None
+            dominant_category = top_category[0] if top_category[1] > SCORING_CONFIG["dominant_category_confidence_threshold"] else None
         else:
             dominant_category = None
 
@@ -962,11 +1013,11 @@ Select the model that best matches the user's prompt needs."""
 
                 # Weighted combination of signals
                 combined_cat_score = (
-                    (benchmark_score * 1.5 * quality_weight)
-                    + (elo_signal * 1.0 * quality_weight)
-                    + (inference_score * 0.4 * quality_weight)
+                    (benchmark_score * SCORING_CONFIG["benchmark_weight"] * quality_weight)
+                    + (elo_signal * SCORING_CONFIG["elo_weight"] * quality_weight)
+                    + (inference_score * SCORING_CONFIG["name_inference_weight"] * quality_weight)
                     + (
-                        profile_score * 0.8 * quality_weight
+                        profile_score * SCORING_CONFIG["profile_weight"] * quality_weight
                     )  # Profile is more reliable than name inference
                 )
 
@@ -980,20 +1031,20 @@ Select the model that best matches the user's prompt needs."""
                 params = self._extract_parameter_count(model_name)
                 has_adequate_size = params is not None and params >= min_size
 
-                if category == dominant_category and combined_cat_score > 0.15:
+                if category == dominant_category and combined_cat_score > SCORING_CONFIG["dominant_category_threshold"]:
                     if has_actual_data:
-                        combined_cat_score *= 20.0  # Strong boost with data
+                        combined_cat_score *= SCORING_CONFIG["dominant_category_boost_with_data"]  # Strong boost with data
                     elif has_adequate_size:
                         combined_cat_score *= (
-                            10.0  # Moderate boost with adequate size but no benchmark
+                            SCORING_CONFIG["dominant_category_boost_with_size"]  # Moderate boost with adequate size but no benchmark
                         )
                     else:
-                        combined_cat_score *= 1.5  # Weak boost without data or size
+                        combined_cat_score *= SCORING_CONFIG["dominant_category_boost_default"]  # Weak boost without data or size
 
                 if weight > 0:
                     base_score += combined_cat_score * weight
                 else:
-                    base_score += combined_cat_score * 0.01
+                    base_score += combined_cat_score * SCORING_CONFIG["negative_weight_multiplier"]
 
             # Bonus factors (speed, size, newness, complexity, feedback)
             bonus_score = 0.0
@@ -1004,11 +1055,11 @@ Select the model that best matches the user's prompt needs."""
             # Feedback Bonus
             fb_score = feedback_scores.get(model_name, 0.0)
             if fb_score != 0:
-                bonus_score += fb_score * 2.0  # Significant impact for user preference
+                bonus_score += fb_score * SCORING_CONFIG["feedback_bonus_multiplier"]  # Significant impact for user preference
 
             # Bonus for having benchmark data (prefer data-driven over name-based)
             if has_benchmark:
-                bonus_score += 0.3 * quality_weight
+                bonus_score += SCORING_CONFIG["has_benchmark_bonus"] * quality_weight
 
             # === SIZE/CAPACITY SCORING ===
             # Only apply size bonus when we have benchmark data OR high complexity
@@ -1016,53 +1067,53 @@ Select the model that best matches the user's prompt needs."""
             size_score = 0.0
             if params:
                 if params >= 30:
-                    size_score = 3.0 * quality_weight  # Strong preference for very large models
+                    size_score = SCORING_CONFIG["size_score_very_large"] * quality_weight  # Strong preference for very large models
                 elif params >= 14:
-                    size_score = 2.0 * quality_weight  # Good preference for large models
+                    size_score = SCORING_CONFIG["size_score_large"] * quality_weight  # Good preference for large models
                 elif params >= 7:
-                    size_score = 1.0 * quality_weight  # Medium preference for mid-size models
+                    size_score = SCORING_CONFIG["size_score_medium"] * quality_weight  # Medium preference for mid-size models
                 elif params >= 3:
                     size_score = 0.0  # Neutral for small models
                 else:
                     # Penalize tiny models less if we prefer speed (low quality_pref)
-                    penalty = -2.0 if quality_pref >= 0.5 else -0.5
+                    penalty = SCORING_CONFIG["size_score_tiny_penalty_high"] if quality_pref >= SCORING_CONFIG["quality_preference_threshold"] else SCORING_CONFIG["size_score_tiny_penalty_low"]
                     size_score = penalty
 
             # Apply size score only for moderate+ complexity tasks
-            if complexity >= 0.3:
-                bonus_score += size_score * 0.5
+            if complexity >= SCORING_CONFIG["complexity_moderate_threshold"]:
+                bonus_score += size_score * SCORING_CONFIG["size_score_multiplier"]
 
             # Complexity-Size Matching Logic (enhanced)
-            if complexity >= 0.5:
+            if complexity >= SCORING_CONFIG["complexity_high_threshold"]:
                 # Very high complexity: STRONGLY prefer larger models
                 if params and params >= 30:
-                    bonus_score += 3.0 * quality_weight
+                    bonus_score += SCORING_CONFIG["high_complexity_very_large_bonus"] * quality_weight
                 elif params and params >= 14:
-                    bonus_score += 2.0 * quality_weight
+                    bonus_score += SCORING_CONFIG["high_complexity_large_bonus"] * quality_weight
                 elif params and params >= 7:
-                    bonus_score += 1.0 * quality_weight
+                    bonus_score += SCORING_CONFIG["high_complexity_medium_bonus"] * quality_weight
                 elif params and params < 4:
-                    bonus_score -= 3.0 * quality_weight
-            elif complexity >= 0.3:
+                    bonus_score += SCORING_CONFIG["high_complexity_small_penalty"] * quality_weight
+            elif complexity >= SCORING_CONFIG["complexity_moderate_threshold"]:
                 # Moderate complexity: Prefer larger models
                 if params and params >= 30:
-                    bonus_score += 2.0 * quality_weight
+                    bonus_score += SCORING_CONFIG["moderate_complexity_very_large_bonus"] * quality_weight
                 elif params and params >= 14:
-                    bonus_score += 1.2 * quality_weight
+                    bonus_score += SCORING_CONFIG["moderate_complexity_large_bonus"] * quality_weight
                 elif params and params >= 7:
-                    bonus_score += 0.4 * quality_weight
+                    bonus_score += SCORING_CONFIG["moderate_complexity_medium_bonus"] * quality_weight
                 elif params and params < 4:
-                    bonus_score -= 2.0 * quality_weight
-            elif complexity < 0.15:
+                    bonus_score += SCORING_CONFIG["moderate_complexity_small_penalty"] * quality_weight
+            elif complexity < SCORING_CONFIG["complexity_low_threshold"]:
                 # Low complexity: Strong preference for small/fast models
                 if params and params <= 4:
-                    bonus_score += 1.5 * speed_weight  # Strong bonus for tiny models
+                    bonus_score += SCORING_CONFIG["low_complexity_tiny_bonus"] * speed_weight  # Strong bonus for tiny models
                 elif params and params <= 7:
-                    bonus_score += 0.8 * speed_weight  # Good bonus for small models
+                    bonus_score += SCORING_CONFIG["low_complexity_small_bonus"] * speed_weight  # Good bonus for small models
                 elif params and params >= 14:
-                    bonus_score -= 1.0 * speed_weight  # Penalize large models
+                    bonus_score += SCORING_CONFIG["low_complexity_large_penalty"] * speed_weight  # Penalize large models
                 elif params and params >= 30:
-                    bonus_score -= 2.0 * speed_weight  # Strong penalty for very large
+                    bonus_score += SCORING_CONFIG["low_complexity_very_large_penalty"] * speed_weight  # Strong penalty for very large
 
             # === CATEGORY-AWARE MINIMUM SIZE REQUIREMENTS ===
             # Apply severe penalty if model is below minimum size for category + complexity

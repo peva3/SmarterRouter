@@ -4,13 +4,13 @@ import asyncio
 import logging
 from typing import Any
 
+from router.exceptions import RouterVRAMError
+
 logger = logging.getLogger(__name__)
 
 
-class VRAMExceededError(Exception):
-    """Raised when VRAM budget is exceeded and cannot free enough memory."""
-
-    pass
+# Alias for backward compatibility
+VRAMExceededError = RouterVRAMError
 
 
 class VRAMManager:

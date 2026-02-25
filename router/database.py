@@ -182,10 +182,14 @@ def _run_migrations() -> None:
 
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
+    """Context manager for database sessions.
+    
+    Yields a session for database operations. For write operations, call
+    session.commit() explicitly. The session is rolled back on exception.
+    """
     session = SessionLocal()
     try:
         yield session
-        session.commit()
     except Exception:
         session.rollback()
         raise

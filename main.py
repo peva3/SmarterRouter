@@ -52,19 +52,56 @@ from router.vram_manager import VRAMManager
 from router.vram_monitor import VRAMMonitor
 
 
+# Cache for VRAM estimates to avoid N+1 queries
+_VRAM_ESTIMATE_CACHE: dict[str, tuple[float, float]] = {}  # model_name -> (estimate, timestamp)
+_VRAM_CACHE_TTL = 300.0  # 5 minutes
+
+
 def get_model_vram_estimate(model_name: str) -> float:
     """
     Estimate VRAM required for a model.
     Looks up profiled value from DB, falls back to default.
+    Uses in-memory cache with TTL to avoid N+1 queries.
     """
+    import time
+    
+    now = time.monotonic()
+    
+    # Check cache first
+    if model_name in _VRAM_ESTIMATE_CACHE:
+        estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
+        if (now - timestamp) < _VRAM_CACHE_TTL:
+            return estimate
+    
+    # Cache miss or expired
     try:
         with get_session() as session:
             profile = session.query(ModelProfile).filter_by(name=model_name).first()
             if profile and profile.vram_required_gb:
-                return profile.vram_required_gb
+                estimate = profile.vram_required_gb
+                _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
+                return estimate
     except Exception as e:
         logger.debug(f"Could not fetch VRAM estimate for {model_name}: {e}")
-    return settings.vram_default_estimate_gb
+    
+    # Fallback to default
+    estimate = settings.vram_default_estimate_gb
+    _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
+    return estimate
+
+
+def invalidate_vram_estimate_cache(model_name: str | None = None) -> None:
+    """
+    Invalidate VRAM estimate cache.
+    If model_name is None, invalidate all entries.
+    """
+    global _VRAM_ESTIMATE_CACHE
+    if model_name is None:
+        _VRAM_ESTIMATE_CACHE.clear()
+        logger.debug("VRAM estimate cache cleared")
+    elif model_name in _VRAM_ESTIMATE_CACHE:
+        del _VRAM_ESTIMATE_CACHE[model_name]
+        logger.debug(f"VRAM estimate cache invalidated for {model_name}")
 
 
 async def list_models_with_timeout(backend: LLMBackend, timeout: float = 10.0) -> list:
@@ -126,7 +163,11 @@ async def verify_admin_token(
 ) -> bool:
     """Verify admin API key if configured."""
     if not config.admin_api_key:
-        return True
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin API key not configured. Set ROUTER_ADMIN_API_KEY environment variable to enable admin endpoints.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if not credentials:
         raise HTTPException(
@@ -304,9 +345,19 @@ async def startup_event():
 
 async def shutdown_event():
     logger.info("Shutting down SmarterRouter...")
-    for task in app_state.background_tasks:
+    
+    # Cancel all background tasks
+    tasks = list(app_state.background_tasks)
+    for task in tasks:
         task.cancel()
-
+    
+    # Wait for tasks to complete with timeout (5 seconds)
+    if tasks:
+        try:
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Some background tasks did not cancel gracefully within timeout")
+    
     # Unload model if pinned
     if settings.pinned_model and app_state.backend:
         if supports_unload(app_state.backend):
@@ -803,18 +854,44 @@ async def chat_completions(
     # Pre-fetch VRAM estimates for all fallback models to avoid N+1 queries
     vram_estimate_map: dict[str, float] = {}
     if app_state.vram_manager:
-        with get_session() as session:
-            profiles = (
-                session.query(ModelProfile).filter(ModelProfile.name.in_(fallback_list)).all()
-            )
-            vram_estimate_map = {
-                p.name: (
-                    p.vram_required_gb
-                    if p.vram_required_gb is not None
-                    else config.vram_default_estimate_gb
-                )
-                for p in profiles
-            }
+        import time
+        
+        now = time.monotonic()
+        # First check cache for all models
+        for model_name in fallback_list:
+            if model_name in _VRAM_ESTIMATE_CACHE:
+                estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
+                if (now - timestamp) < _VRAM_CACHE_TTL:
+                    vram_estimate_map[model_name] = estimate
+        
+        # Find models not in cache or expired
+        uncached_models = [m for m in fallback_list if m not in vram_estimate_map]
+        
+        if uncached_models:
+            # Chunk queries to avoid SQLite parameter limit (999)
+            CHUNK_SIZE = 250
+            for i in range(0, len(uncached_models), CHUNK_SIZE):
+                chunk = uncached_models[i:i + CHUNK_SIZE]
+                with get_session() as session:
+                    profiles = (
+                        session.query(ModelProfile).filter(ModelProfile.name.in_(chunk)).all()
+                    )
+                    for p in profiles:
+                        estimate = (
+                            p.vram_required_gb
+                            if p.vram_required_gb is not None
+                            else config.vram_default_estimate_gb
+                        )
+                        vram_estimate_map[p.name] = estimate
+                        # Update cache
+                        _VRAM_ESTIMATE_CACHE[p.name] = (estimate, now)
+        
+        # For models not found in database, use default and cache
+        for model_name in fallback_list:
+            if model_name not in vram_estimate_map:
+                estimate = config.vram_default_estimate_gb
+                vram_estimate_map[model_name] = estimate
+                _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
 
     # If cascading is enabled, we might want to ensure we don't just randomly fallback,
     # but that's handled by the router mostly returning the "best" model first.

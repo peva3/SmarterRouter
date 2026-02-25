@@ -1,4 +1,34 @@
-## [2.2.0] - 2026-02-24
+## [2.1.4] - 2026-02-25
+
+### Critical Bug Fixes and Reliability Improvements
+
+Fixed critical issues identified in comprehensive analysis:
+
+#### Database Safety & Performance
+- **Fixed Database Session Bug**: `get_session()` context manager no longer commits transactions automatically for read-only queries, preventing performance overhead and potential data corruption
+- **Fixed SQLite IN Clause DoS**: Added parameter chunking to avoid exceeding SQLite's 999 parameter limit in provider_db.py and benchmark_db.py
+- **Fixed Missing Batch Error Handling**: Bulk upsert operations now use individual transactions per benchmark to prevent partial commits on errors
+
+#### Security Hardening
+- **Fixed Admin API Security Bypass**: Admin endpoints now require explicit API key configuration; empty API key no longer grants admin access (must set `ROUTER_ADMIN_API_KEY=disable` to disable)
+- **Enhanced Input Validation**: Improved model ID validation and SQL injection prevention across database queries
+
+#### Background Task Stability
+- **Fixed Background Task Shutdown Race**: Added proper await with timeout for task cancellation during application shutdown, preventing dangling HTTP connections
+
+#### Cache & Performance Optimizations
+- **Fixed Cache Race Conditions**: Improved double-checked locking in provider_db.py with unified cache manager
+- **Fixed N+1 VRAM Queries**: Added caching for VRAM estimates with TTL and cache invalidation when profiles are updated
+- **Created Unified Cache Manager**: New `router/cache.py` provides thread-safe caching with TTL and LRU eviction for consistent cache management
+
+#### Code Quality & Maintainability
+- **Standardized Exception Hierarchy**: New `router/exceptions.py` with consistent exception types (`RouterError`, `RouterDatabaseError`, etc.)
+- **Removed Magic Numbers from Scoring**: Hardcoded multipliers in router scoring algorithm replaced with configurable constants in `SCORING_CONFIG`
+- **Added Circuit Breaker Pattern**: New `router/circuit_breaker.py` provides circuit breaker implementation for external service calls
+
+#### Backward Compatibility
+- All changes maintain backward compatibility with existing configurations
+- Updated tests to reflect new database session behavior
 
 ### External Provider Support (provider.db + External APIs)
 

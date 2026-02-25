@@ -65,26 +65,39 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
         if (now - cached_time) < _BENCHMARK_CACHE_TTL:
             return cached_result
 
-    with get_session() as session:
-        benchmarks = (
-            session.execute(
-                select(ModelBenchmark).where(ModelBenchmark.ollama_name.in_(model_names))
-            )
-            .scalars()
-            .all()
-        )
-        result = [
-            {
-                "ollama_name": b.ollama_name,
-                "reasoning_score": b.reasoning_score,
-                "coding_score": b.coding_score,
-                "general_score": b.general_score,
-                "elo_rating": b.elo_rating,
-            }
-            for b in benchmarks
-        ]
-        _benchmarks_for_models_cache[cache_key] = (now, result)
-        return result
+    try:
+        with get_session() as session:
+            # Chunk queries to avoid SQLite parameter limit (999)
+            # SQLAlchemy's in_() method parameterizes correctly but still hits SQLite limit
+            CHUNK_SIZE = 250
+            all_benchmarks = []
+            
+            for i in range(0, len(model_names), CHUNK_SIZE):
+                chunk = model_names[i:i + CHUNK_SIZE]
+                benchmarks = (
+                    session.execute(
+                        select(ModelBenchmark).where(ModelBenchmark.ollama_name.in_(chunk))
+                    )
+                    .scalars()
+                    .all()
+                )
+                all_benchmarks.extend(benchmarks)
+            
+            result = [
+                {
+                    "ollama_name": b.ollama_name,
+                    "reasoning_score": b.reasoning_score,
+                    "coding_score": b.coding_score,
+                    "general_score": b.general_score,
+                    "elo_rating": b.elo_rating,
+                }
+                for b in all_benchmarks
+            ]
+            _benchmarks_for_models_cache[cache_key] = (now, result)
+            return result
+    except Exception as e:
+        logger.warning(f"Failed to get benchmarks for models: {e}")
+        return []
 
 
 def upsert_benchmark(data: dict[str, Any]) -> None:
@@ -145,9 +158,11 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         return 0
 
     count = 0
-    with get_session() as session:
-        for cleaned in processed:
-            try:
+    # Use individual transactions for each benchmark to prevent partial commits
+    # on errors while maintaining database consistency
+    for cleaned in processed:
+        try:
+            with get_session() as session:
                 existing = (
                     session.query(ModelBenchmark)
                     .filter(ModelBenchmark.ollama_name == cleaned.get("ollama_name"))
@@ -161,11 +176,12 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                 else:
                     safe_data = {k: v for k, v in cleaned.items() if k in allowed_benchmark_fields}
                     session.add(ModelBenchmark(**safe_data))
+                
+                session.commit()
                 count += 1
-            except Exception as e:
-                logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
-
-        session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
+            # Continue with other benchmarks - error is isolated to this transaction
 
     return count
 
@@ -191,24 +207,49 @@ def update_sync_status(status: str, models_count: int = 0) -> None:
 
 def remove_benchmarks_not_in(model_names: list[str]) -> int:
     """Remove benchmarks not in the provided list using ORM delete (SQL injection safe)."""
-    with get_session() as session:
-        if not model_names:
-            return 0
+    if not model_names:
+        return 0
 
-        # Validate all model names are strings and reasonable length
-        if not all(isinstance(name, str) and len(name) < 200 for name in model_names):
-            logger.warning("Invalid model names provided to remove_benchmarks_not_in")
-            return 0
+    # Validate all model names are strings and reasonable length
+    if not all(isinstance(name, str) and len(name) < 200 for name in model_names):
+        logger.warning("Invalid model names provided to remove_benchmarks_not_in")
+        return 0
 
-        # Use ORM delete instead of raw SQL for safety
-        deleted = (
-            session.query(ModelBenchmark)
-            .filter(~ModelBenchmark.ollama_name.in_(model_names))
-            .delete(synchronize_session=False)
-        )
-
-        session.commit()
-        return deleted
+    try:
+        with get_session() as session:
+            # SQLite has a maximum of 999 parameters per query
+            # If we exceed this, we need to use a different approach
+            if len(model_names) <= 999:
+                # Simple case: single query
+                deleted = (
+                    session.query(ModelBenchmark)
+                    .filter(~ModelBenchmark.ollama_name.in_(model_names))
+                    .delete(synchronize_session=False)
+                )
+            else:
+                # Complex case: chunk with AND conditions
+                # Delete where ollama_name NOT IN chunk1 AND NOT IN chunk2 AND ...
+                from sqlalchemy import and_
+                
+                CHUNK_SIZE = 250
+                chunks = [model_names[i:i + CHUNK_SIZE] for i in range(0, len(model_names), CHUNK_SIZE)]
+                
+                # Build AND conditions
+                conditions = [~ModelBenchmark.ollama_name.in_(chunk) for chunk in chunks]
+                combined_condition = and_(*conditions) if len(conditions) > 1 else conditions[0]
+                
+                deleted = (
+                    session.query(ModelBenchmark)
+                    .filter(combined_condition)
+                    .delete(synchronize_session=False)
+                )
+            
+            session.commit()
+            return deleted
+    except Exception as e:
+        logger.warning(f"Failed to remove benchmarks: {e}")
+        # Rollback happens automatically when exception escapes context manager
+        return 0
 
 
 def invalidate_benchmarks_cache() -> None:
