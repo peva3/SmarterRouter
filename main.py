@@ -276,7 +276,7 @@ async def startup_event():
             model_names = [m.name for m in available_models] if available_models else []
             # Load persistent cache first, then warm up other caches
             await app_state.router_engine.load_persistent_cache()
-            app_state.router_engine.warmup_caches(model_names)
+            await app_state.router_engine.warmup_caches(model_names)
         except Exception as e:
             logger.warning(f"Failed to pre-warm router caches: {e}")
 
@@ -1832,7 +1832,7 @@ async def explain_routing(
         from router.router import get_benchmarks_for_models_with_external
 
         # Get all components used for scoring
-        profiles = app_state.router_engine._get_all_profiles()
+        profiles = await app_state.router_engine._get_all_profiles()
         benchmarks = get_benchmarks_for_models_with_external(model_list)
         analysis = app_state.router_engine._analyze_prompt(prompt, None)
         feedback_scores = app_state.router_engine._get_model_feedback_scores()

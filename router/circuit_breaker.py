@@ -5,11 +5,14 @@ Prevents cascading failures by failing fast when a service is repeatedly failing
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class CircuitState(Enum):
@@ -164,8 +167,8 @@ class CircuitBreaker:
         if self.on_state_change:
             try:
                 self.on_state_change(self.name, old_state, new_state)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Circuit breaker state change callback failed: {e}")
 
     def get_stats(self) -> dict[str, Any]:
         """Get current circuit breaker statistics."""

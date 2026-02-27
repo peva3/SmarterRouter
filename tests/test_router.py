@@ -57,7 +57,9 @@ def sample_profiles():
 async def test_select_model_coding_prompt(router, sample_profiles):
     """When no benchmarks available, algorithm uses name heuristics + speed.
     Codellama is explicitly a coding model, so it should win."""
-    with patch.object(router, "_get_all_profiles", return_value=sample_profiles):
+    with patch.object(
+        router, "_get_all_profiles", new_callable=AsyncMock, return_value=sample_profiles
+    ):
         with patch("router.benchmark_db.get_all_benchmarks", return_value=[]):
             result = await router._keyword_dispatch(
                 "Write a Python function to calculate fibonacci", ["llama3", "codellama", "mistral"]
@@ -72,7 +74,9 @@ async def test_select_model_reasoning_prompt(router, sample_profiles):
     """When no benchmarks available, algorithm uses profile scores + speed.
     For simple reasoning tasks, speed bonus can tip the balance.
     Mistral (fastest) or llama3 (highest reasoning) are valid choices."""
-    with patch.object(router, "_get_all_profiles", return_value=sample_profiles):
+    with patch.object(
+        router, "_get_all_profiles", new_callable=AsyncMock, return_value=sample_profiles
+    ):
         with patch("router.benchmark_db.get_all_benchmarks", return_value=[]):
             result = await router._keyword_dispatch(
                 "If a train travels 120km in 1.5 hours, what is its average speed in m/s?",
@@ -86,7 +90,9 @@ async def test_select_model_reasoning_prompt(router, sample_profiles):
 
 @pytest.mark.asyncio
 async def test_select_model_fast_for_simple_prompt(router, sample_profiles):
-    with patch.object(router, "_get_all_profiles", return_value=sample_profiles):
+    with patch.object(
+        router, "_get_all_profiles", new_callable=AsyncMock, return_value=sample_profiles
+    ):
         with patch("router.benchmark_db.get_all_benchmarks", return_value=[]):
             result = await router._keyword_dispatch(
                 "What is the capital of France?", ["llama3", "codellama", "mistral"]

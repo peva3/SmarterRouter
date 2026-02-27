@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 if TYPE_CHECKING:
@@ -32,12 +32,12 @@ class ModelProfile(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     # Model availability tracking (SmarterRouter 2.1.6+)
-    active: Mapped[bool] = mapped_column(Integer, default=1)  # SQLite uses Integer for Boolean
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # New capabilities
-    vision: Mapped[bool] = mapped_column(Integer, default=0)  # SQLite uses Integer for Boolean
-    tool_calling: Mapped[bool] = mapped_column(Integer, default=0)
+    vision: Mapped[bool] = mapped_column(Boolean, default=False)
+    tool_calling: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # VRAM tracking (filled during profiling)
     vram_required_gb: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -109,8 +109,8 @@ class ModelBenchmark(Base):
     context_window: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # New capabilities
-    vision: Mapped[bool] = mapped_column(Integer, default=0)
-    tool_calling: Mapped[bool] = mapped_column(Integer, default=0)
+    vision: Mapped[bool] = mapped_column(Boolean, default=False)
+    tool_calling: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Extra provider-specific data (e.g., ArtificialAnalysis indices, speed metrics)
     extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)

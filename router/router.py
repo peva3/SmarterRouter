@@ -86,6 +86,7 @@ def get_benchmarks_for_models_with_external(
 
 _profiles_cache: list[dict] | None = None
 _profiles_cache_time: float = 0.0
+_profiles_cache_lock = asyncio.Lock()
 
 
 @dataclass
@@ -358,6 +359,11 @@ class SemanticCache:
 
         Embeddings are cached for 24 hours by default to avoid repeated
         expensive embedding API calls for the same prompts.
+
+        Uses a simple two-phase check pattern:
+        1. Check cache under lock, if hit return immediately
+        2. If miss, release lock and fetch embedding (allows concurrent fetches)
+        3. Re-acquire lock and store result (handles race with other fetchers)
         """
         if not self.embed_model:
             return None
@@ -365,6 +371,7 @@ class SemanticCache:
         key = self._hash_prompt(text[:8192])
         current_time = time.time()
 
+        # Phase 1: Check cache under lock
         async with self._embedding_lock:
             if key in self.embedding_cache:
                 emb, mag, timestamp = self.embedding_cache[key]
@@ -391,57 +398,81 @@ class SemanticCache:
                     )
                     del self.embedding_cache[key]
 
+        # Phase 2: Fetch embedding outside lock (allows concurrent fetches for different keys)
         try:
             result = await client.embed(self.embed_model, text[:8192])
             embeddings = result.get("embeddings") or result.get("embedding")
-            if embeddings:
-                emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings
-                if emb and isinstance(emb, list):
-                    mag = sum(x * x for x in emb) ** 0.5
-                    async with self._embedding_lock:
-                        self.embedding_cache[key] = (emb, mag, current_time)
+            if not embeddings:
+                return None
+
+            emb = embeddings[0] if isinstance(embeddings[0], list) else embeddings
+            if not emb or not isinstance(emb, list):
+                return None
+
+            mag = sum(x * x for x in emb) ** 0.5
+
+            # Phase 3: Store under lock (handles race with other fetchers)
+            async with self._embedding_lock:
+                # Check again - another task may have stored while we were fetching
+                if key in self.embedding_cache:
+                    # Use cached result from other task
+                    cached_emb, cached_mag, cached_ts = self.embedding_cache[key]
+                    if current_time - cached_ts < self.embedding_ttl:
                         self.embedding_cache.move_to_end(key)
-                        if len(self.embedding_cache) > self.embedding_max_size:
-                            old_key, (old_emb, old_mag, old_ts) = self.embedding_cache.popitem(
-                                last=False
-                            )
-                            await self._record_cache_event(
-                                cache_type="embedding",
-                                event_type="eviction",
-                                model=None,
-                                prompt_hash=old_key,
-                                embedding_dim=len(old_emb)
-                                if old_emb and isinstance(old_emb, list)
-                                else None,
-                                eviction_reason="size",
-                            )
+                        self.stats["embedding_cache_hits"] += 1
+                        await self._record_cache_event(
+                            cache_type="embedding",
+                            event_type="hit",
+                            model=None,
+                            prompt_hash=key,
+                            embedding_dim=len(cached_emb)
+                            if cached_emb and isinstance(cached_emb, list)
+                            else None,
+                        )
+                        return cached_emb
 
-                    # Save to persistent cache if enabled
-                    if self.persistent_cache and self.persistent_cache.enabled:
-                        try:
-                            await self.persistent_cache.save_embedding_entry(
-                                prompt_hash=key,
-                                embedding=emb,
-                                magnitude=mag,
-                                ttl_seconds=self.embedding_ttl,
-                            )
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to save embedding cache entry {key[:8]} to persistent storage: {e}"
-                            )
-
-                    self.stats["embedding_cache_misses"] += 1
+                # Store our result
+                self.embedding_cache[key] = (emb, mag, current_time)
+                self.embedding_cache.move_to_end(key)
+                if len(self.embedding_cache) > self.embedding_max_size:
+                    old_key, (old_emb, old_mag, old_ts) = self.embedding_cache.popitem(last=False)
                     await self._record_cache_event(
                         cache_type="embedding",
-                        event_type="miss",
+                        event_type="eviction",
                         model=None,
-                        prompt_hash=key,
-                        embedding_dim=len(emb) if emb and isinstance(emb, list) else None,
+                        prompt_hash=old_key,
+                        embedding_dim=len(old_emb)
+                        if old_emb and isinstance(old_emb, list)
+                        else None,
+                        eviction_reason="size",
                     )
-                    return emb
+
+            # Save to persistent cache if enabled (outside lock)
+            if self.persistent_cache and self.persistent_cache.enabled:
+                try:
+                    await self.persistent_cache.save_embedding_entry(
+                        prompt_hash=key,
+                        embedding=emb,
+                        magnitude=mag,
+                        ttl_seconds=self.embedding_ttl,
+                    )
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to save embedding cache entry {key[:8]} to persistent storage: {e}"
+                    )
+
+            self.stats["embedding_cache_misses"] += 1
+            await self._record_cache_event(
+                cache_type="embedding",
+                event_type="miss",
+                model=None,
+                prompt_hash=key,
+                embedding_dim=len(emb) if emb and isinstance(emb, list) else None,
+            )
+            return emb
         except Exception as e:
             logger.debug(f"Embedding failed: {e}")
-        return None
+            return None
 
     def _calculate_adaptive_threshold(self, cache_key: str | None = None) -> float:
         """Calculate adaptive similarity threshold based on cache performance and query patterns.
@@ -936,11 +967,11 @@ class RouterEngine:
             if self.semantic_cache.persistent_cache:
                 await self.semantic_cache.persistent_cache.delete_expired_entries()
 
-    def warmup_caches(self, model_names: list[str] | None = None) -> None:
+    async def warmup_caches(self, model_names: list[str] | None = None) -> None:
         """Pre-warm caches on startup to avoid first-request latency."""
         from router.benchmark_db import get_benchmarks_for_models
 
-        self._get_all_profiles()
+        await self._get_all_profiles()
         if model_names:
             # Warm both local and external benchmarks
             get_benchmarks_for_models(model_names)
@@ -1205,7 +1236,7 @@ Select the model that best matches the user's prompt needs."""
     async def _keyword_dispatch(
         self, prompt: str, model_names: list[str], request_obj: Any = None
     ) -> RoutingResult:
-        profiles = self._get_all_profiles()
+        profiles = await self._get_all_profiles()
         benchmarks = get_benchmarks_for_models_with_external(model_names)
         feedback_scores = self._get_model_feedback_scores()
 
@@ -1330,28 +1361,37 @@ Select the model that best matches the user's prompt needs."""
             reasoning=reasoning,
         )
 
-    def _get_all_profiles(self) -> list[dict]:
-        global _profiles_cache, _profiles_cache_time
+    async def _get_all_profiles(self) -> list[dict]:
+        global _profiles_cache, _profiles_cache_time, _profiles_cache_lock
         now = time.monotonic()
+
+        # Fast path: check cache without lock
         if _profiles_cache is not None and (now - _profiles_cache_time) < _PROFILE_CACHE_TTL:
             return _profiles_cache
 
-        with get_session() as session:
-            profiles = session.execute(select(ModelProfile)).scalars().all()
-            _profiles_cache = [
-                {
-                    "name": p.name,
-                    "reasoning": p.reasoning,
-                    "coding": p.coding,
-                    "creativity": p.creativity,
-                    "speed": p.speed,
-                    "avg_response_time_ms": p.avg_response_time_ms,
-                    "first_seen": p.first_seen,
-                }
-                for p in profiles
-            ]
-            _profiles_cache_time = now
-            return _profiles_cache
+        # Slow path: acquire lock and check again
+        async with _profiles_cache_lock:
+            # Double-check after acquiring lock
+            if _profiles_cache is not None and (now - _profiles_cache_time) < _PROFILE_CACHE_TTL:
+                return _profiles_cache
+
+            # Cache miss, fetch from database
+            with get_session() as session:
+                profiles = session.execute(select(ModelProfile)).scalars().all()
+                _profiles_cache = [
+                    {
+                        "name": p.name,
+                        "reasoning": p.reasoning,
+                        "coding": p.coding,
+                        "creativity": p.creativity,
+                        "speed": p.speed,
+                        "avg_response_time_ms": p.avg_response_time_ms,
+                        "first_seen": p.first_seen,
+                    }
+                    for p in profiles
+                ]
+                _profiles_cache_time = now
+                return _profiles_cache
 
     def _calculate_combined_scores(
         self,

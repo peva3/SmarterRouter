@@ -130,7 +130,8 @@ class TestBenchmarkCaching:
 class TestRouterEngineCaching:
     """Tests for RouterEngine cache warming and invalidation."""
 
-    def test_warmup_caches(self):
+    @pytest.mark.asyncio
+    async def test_warmup_caches(self):
         """Test that warmup_caches pre-warms the caches."""
         from router.router import RouterEngine
 
@@ -142,14 +143,15 @@ class TestRouterEngineCaching:
             cache_enabled=False,
         )
 
-        with patch.object(engine, "_get_all_profiles") as mock_profiles:
+        with patch.object(engine, "_get_all_profiles", new_callable=AsyncMock) as mock_profiles:
             with patch("router.benchmark_db.get_benchmarks_for_models") as mock_benchmarks:
-                engine.warmup_caches(["llama3", "codellama"])
+                await engine.warmup_caches(["llama3", "codellama"])
 
                 mock_profiles.assert_called_once()
                 mock_benchmarks.assert_called_once_with(["llama3", "codellama"])
 
-    def test_warmup_caches_without_model_names(self):
+    @pytest.mark.asyncio
+    async def test_warmup_caches_without_model_names(self):
         """Test that warmup_caches works without model names."""
         from router.router import RouterEngine
 
@@ -161,9 +163,9 @@ class TestRouterEngineCaching:
             cache_enabled=False,
         )
 
-        with patch.object(engine, "_get_all_profiles") as mock_profiles:
+        with patch.object(engine, "_get_all_profiles", new_callable=AsyncMock) as mock_profiles:
             with patch("router.benchmark_db.get_benchmarks_for_models") as mock_benchmarks:
-                engine.warmup_caches()
+                await engine.warmup_caches()
 
                 mock_profiles.assert_called_once()
                 mock_benchmarks.assert_not_called()

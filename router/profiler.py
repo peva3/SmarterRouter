@@ -414,7 +414,8 @@ class ModelProfiler:
                 if len(response_text.strip()) < 50:
                     return 0.1, elapsed_ms, token_count
                 return 0.5, elapsed_ms, token_count
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Model {model} screening failed for prompt '{prompt[:50]}...': {e}")
                 return 0.0, self.timeout * 1000, 0
 
         # Run screening prompts concurrently

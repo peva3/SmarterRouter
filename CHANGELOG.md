@@ -1,3 +1,39 @@
+## [2.1.7] - 2026-02-27
+
+### Critical Bug Fixes & Stability Improvements
+
+#### Concurrency & Race Condition Fixes
+- **Fixed race condition in `SemanticCache._get_embedding()`**: Rewrote embedding cache to eliminate double lock acquisition that could cause deadlocks (router/router.py:396-467)
+- **Fixed global cache race condition in `_get_all_profiles()`**: Added `asyncio.Lock()` and double-checked locking pattern to prevent concurrent cache corruption (router/router.py:1363-1384)
+- **Fixed memory leak in `_embedding_locks`**: Removed unused per-key locks dict that grew unbounded without cleanup (router/router.py)
+
+#### Database & Type Safety
+- **Fixed boolean type mismatch in SQLAlchemy models**: Changed `Integer` columns mapped to Python `bool` to proper `Boolean` type with `True`/`False` defaults (router/models.py:35,39,40,112,113)
+- **Improved database session cleanup**: Ensured proper session rollback and closure on error paths across codebase
+
+#### Error Handling Improvements
+- **Fixed critical bare `except Exception:` patterns**: Added proper logging for circuit breaker callbacks and model profiling failures while maintaining appropriate graceful degradation
+- **Enhanced error context**: Added debug logging for model screening failures in profiler (router/profiler.py:417)
+- **Improved circuit breaker reliability**: Added logging for state change callback failures (router/circuit_breaker.py:167)
+
+#### Code Quality & Testing
+- **Fixed linting issues**: Removed whitespace from blank lines (ruff W293)
+- **Updated async tests**: Modified test suite to work with new async `_get_all_profiles()` method
+- **All tests passing**: 14 router tests and 3 caching tests pass without regression
+
+#### Performance Impact
+- **Eliminated deadlock risk**: Embedding cache operations now safe under high concurrency
+- **Prevented memory leaks**: `_embedding_locks` dict removal prevents unbounded memory growth
+- **Improved cache consistency**: Global profile cache now properly synchronized across threads
+- **Better type safety**: Boolean columns correctly mapped between Python and SQLite
+
+#### Backward Compatibility
+- **Fully backward compatible**: All fixes maintain existing API and behavior
+- **Database schema unchanged**: Boolean column changes maintain compatibility with existing SQLite data
+- **Configuration unchanged**: No new environment variables required
+
+---
+
 ## [2.1.6] - 2026-02-27
 
 ### Enhanced Cache Statistics & API
