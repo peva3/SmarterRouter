@@ -46,6 +46,50 @@ That's it! SmarterRouter will:
 
 **Access the router at:** `http://localhost:11436`
 
+### Interactive Setup Wizard (New in v2.1.5)
+
+SmarterRouter now includes a built-in CLI for easy setup and management:
+
+```bash
+# Run interactive setup wizard
+python -m smarterrouter setup
+
+# Validate configuration and connections
+python -m smarterrouter check
+
+# Generate optimal .env file based on hardware detection
+python -m smarterrouter generate-env
+```
+
+The setup wizard automatically:
+- 🔍 Detects your Ollama installation (local, Docker, or remote)
+- ⚙️ Identifies GPU hardware (NVIDIA, AMD, Intel, Apple Silicon)
+- 📊 Analyzes available models and suggests optimal settings
+- 📝 Generates a tailored `.env` configuration file
+
+### One-Line Docker Deployment (New in v2.1.5)
+
+For the simplest deployment experience, use the included script:
+
+```bash
+# Make script executable (if needed)
+chmod +x docker-run.sh
+
+# Run with auto-detected GPU configuration
+./docker-run.sh
+
+# Customize deployment
+./docker-run.sh --port 11436 --data-dir ./smarterrouter-data --env-file .env
+```
+
+The script automatically:
+- 🐳 Detects GPU vendor and configures appropriate Docker device mounts
+- 📁 Creates persistent data directory
+- 🔧 Generates optimal configuration for your hardware
+- 🚀 Starts the container with proper restart policy
+
+For production deployments, continue using `docker-compose.yml` with GPU-specific configurations.
+
 ### Connect to OpenWebUI
 
 1. Open OpenWebUI → **Settings** → **Connections** → **Add Connection**

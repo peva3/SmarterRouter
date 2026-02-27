@@ -20,6 +20,7 @@ from router.config import settings
 from router.database import get_session
 from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import ModelFeedback, ModelProfile, RoutingDecision
+from router.persistent_cache import PersistentCacheManager
 from router.provider_db import get_provider_db
 
 logger = logging.getLogger(__name__)
@@ -109,29 +110,24 @@ SCORING_CONFIG = {
     "dominant_category_boost_with_size": 10.0,
     "dominant_category_boost_default": 1.5,
     "dominant_category_threshold": 0.15,
-    
     # Signal weights
     "benchmark_weight": 1.5,
     "elo_weight": 1.0,
     "name_inference_weight": 0.4,
     "profile_weight": 0.8,
-    
     # Bonus multipliers
     "feedback_bonus_multiplier": 2.0,
     "has_benchmark_bonus": 0.3,
-    
     # Size scoring
     "size_score_very_large": 3.0,
     "size_score_large": 2.0,
     "size_score_medium": 1.0,
     "size_score_tiny_penalty_high": -2.0,
     "size_score_tiny_penalty_low": -0.5,
-    
     # Complexity thresholds
     "complexity_moderate_threshold": 0.3,
     "complexity_high_threshold": 0.5,
     "complexity_low_threshold": 0.15,
-    
     # Complexity-size matching bonuses
     "high_complexity_very_large_bonus": 3.0,
     "high_complexity_large_bonus": 2.0,
@@ -167,10 +163,11 @@ class SemanticCache:
         similarity_threshold: float = 0.85,
         embed_model: str | None = None,
         response_max_size: int = 50,
-        embedding_ttl_seconds: int = 86400,  # 24 hours for embeddings
+        embedding_ttl_seconds: int = 86400,  # 24 hours for embeddings,
+        persistent_cache_manager: PersistentCacheManager | None = None,
     ):
         self.cache: OrderedDict[
-            str, tuple[RoutingResult, float, list[float] | None, float | None]
+            str, tuple[RoutingResult, float, list[float] | None, float | None, int]
         ] = OrderedDict()
         self.max_size = max_size
         self.ttl = ttl_seconds
@@ -182,7 +179,7 @@ class SemanticCache:
         self._response_lock = asyncio.Lock()
         self._embedding_lock = asyncio.Lock()
 
-        self.response_cache: OrderedDict[tuple[str, str], tuple[str, float]] = OrderedDict()
+        self.response_cache: OrderedDict[tuple, tuple[str, float]] = OrderedDict()
         self.response_max_size = response_max_size
         self.response_ttl = ttl_seconds
 
@@ -200,9 +197,64 @@ class SemanticCache:
             "response_misses": 0,
             "embedding_cache_hits": 0,
             "embedding_cache_misses": 0,
+            "adaptive_threshold_adjustments": 0,
         }
 
+        self.persistent_cache = persistent_cache_manager
         self._model_frequency: dict[str, int] = {}
+        self._access_counts: dict[str, int] = {}  # Track access counts for cached entries
+
+    async def load_from_persistence(self) -> None:
+        """Load cache data from persistent storage if enabled."""
+        if not self.persistent_cache or not self.persistent_cache.enabled:
+            return
+
+        try:
+            # Load routing cache with access counts, prioritizing high-access entries
+            routing_data = await self.persistent_cache.load_routing_cache()
+            async with self._routing_lock:
+                self.cache.clear()
+                self._access_counts.clear()
+                # Sort by access_count descending, limit to max_size (Top-K pre-caching)
+                sorted_items = sorted(
+                    routing_data.items(),
+                    key=lambda x: x[1][4],  # access_count is 5th element in tuple
+                    reverse=True,
+                )[: self.max_size]
+                for cache_key, (
+                    result,
+                    timestamp,
+                    embedding,
+                    magnitude,
+                    access_count,
+                ) in sorted_items:
+                    self.cache[cache_key] = (result, timestamp, embedding, magnitude, access_count)
+                    self._access_counts[cache_key] = access_count
+
+            # Load response cache, limit to max size
+            response_data = await self.persistent_cache.load_response_cache()
+            async with self._response_lock:
+                self.response_cache.clear()
+                # Take only top response_max_size entries (already sorted by access_count)
+                response_items = list(response_data.items())[: self.response_max_size]
+                for resp_key, (response_text, timestamp) in response_items:
+                    self.response_cache[resp_key] = (response_text, timestamp)
+
+            # Load embedding cache, limit to max size
+            embedding_data = await self.persistent_cache.load_embedding_cache()
+            async with self._embedding_lock:
+                self.embedding_cache.clear()
+                # Take only top embedding_max_size entries (already sorted by access_count)
+                embedding_items = list(embedding_data.items())[: self.embedding_max_size]
+                for prompt_hash, (embedding, magnitude, timestamp) in embedding_items:
+                    self.embedding_cache[prompt_hash] = (embedding, magnitude, timestamp)
+
+            logger.info(
+                f"Loaded from persistent cache: {len(self.cache)} routing (top {len(self.cache)} by access count), "
+                f"{len(self.response_cache)} response, {len(self.embedding_cache)} embedding entries (top-K limited)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load from persistent cache: {e}")
 
     def _hash_prompt(self, prompt: str) -> str:
         return hashlib.sha256(prompt.encode()).hexdigest()[:32]
@@ -286,11 +338,86 @@ class SemanticCache:
                         self.embedding_cache.move_to_end(key)
                         if len(self.embedding_cache) > self.embedding_max_size:
                             self.embedding_cache.popitem(last=False)
+
+                    # Save to persistent cache if enabled
+                    if self.persistent_cache and self.persistent_cache.enabled:
+                        try:
+                            await self.persistent_cache.save_embedding_entry(
+                                prompt_hash=key,
+                                embedding=emb,
+                                magnitude=mag,
+                                ttl_seconds=self.embedding_ttl,
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                f"Failed to save embedding cache entry {key[:8]} to persistent storage: {e}"
+                            )
+
                     self.stats["embedding_cache_misses"] += 1
                     return emb
         except Exception as e:
             logger.debug(f"Embedding failed: {e}")
         return None
+
+    def _calculate_adaptive_threshold(self, cache_key: str | None = None) -> float:
+        """Calculate adaptive similarity threshold based on cache performance and query patterns.
+
+        Args:
+            cache_key: Optional cache key of the candidate entry
+
+        Returns:
+            Adaptive similarity threshold (0.7 to 0.95)
+        """
+        base_threshold = self.similarity_threshold
+
+        # Factor 1: Overall cache hit rate
+        total_routing = self.stats["routing_hits"] + self.stats["routing_misses"]
+        hit_rate_factor = 0.0
+        if total_routing > 10:
+            hit_rate = self.stats["routing_hits"] / total_routing
+            # Low hit rate (< 0.3): lower threshold by up to -0.15
+            # High hit rate (> 0.7): raise threshold by up to +0.1
+            if hit_rate < 0.3:
+                hit_rate_factor = -0.15 * (0.3 - hit_rate) / 0.3
+            elif hit_rate > 0.7:
+                hit_rate_factor = 0.1 * (hit_rate - 0.7) / 0.3
+        else:
+            # Not enough data, skip hit rate factor
+            hit_rate_factor = 0.0
+
+        # Factor 2: Model frequency (if cache_key provided)
+        model_frequency_factor = 0.0
+        if cache_key and cache_key in self.cache:
+            result, _, _, _, _ = self.cache[cache_key]
+            model_name = result.selected_model
+            # Get model frequency from recent selections
+            model_freq = self._model_frequency.get(model_name, 0)
+            total_freq = sum(self._model_frequency.values())
+            if total_freq > 0:
+                freq_ratio = model_freq / total_freq
+                # High frequency models (> 0.5): raise threshold for precision
+                # Low frequency models: no adjustment
+                if freq_ratio > 0.5:
+                    model_frequency_factor = 0.05 * (freq_ratio - 0.5) / 0.5
+
+        # Factor 3: Time of day (encourage exploration during low-traffic times)
+        # Not implemented yet
+
+        # Combine factors
+        adaptive = base_threshold + hit_rate_factor + model_frequency_factor
+        # Clamp to reasonable range
+        adaptive = max(0.7, min(0.95, adaptive))
+
+        # Log adjustment if changed significantly
+        if abs(adaptive - base_threshold) > 0.05:
+            self.stats["adaptive_threshold_adjustments"] += 1
+            logger.debug(
+                f"Adaptive threshold: {base_threshold:.2f} -> {adaptive:.2f} "
+                f"(hit_rate_factor={hit_rate_factor:.3f}, "
+                f"model_freq_factor={model_frequency_factor:.3f})"
+            )
+
+        return adaptive
 
     async def get(self, prompt: str, embedding: list[float] | None = None) -> RoutingResult | None:
         key = self._hash_prompt(prompt)
@@ -298,20 +425,26 @@ class SemanticCache:
 
         async with self._routing_lock:
             if key in self.cache:
-                result, timestamp, _, _ = self.cache[key]
+                result, timestamp, emb, mag, acc = self.cache[key]
                 if current_time - timestamp < self.ttl:
+                    # Increment access count
+                    acc += 1
+                    self.cache[key] = (result, timestamp, emb, mag, acc)
+                    self._access_counts[key] = acc
                     self.cache.move_to_end(key)
                     self.stats["routing_hits"] += 1
                     logger.debug(f"Cache hit (exact) for prompt hash: {key[:8]}...")
                     return result
                 else:
                     del self.cache[key]
+                    if key in self._access_counts:
+                        del self._access_counts[key]
 
             if embedding:
                 embedding_mag = sum(x * x for x in embedding) ** 0.5
                 candidates = [
                     (cache_key, cache_emb, cache_mag)
-                    for cache_key, (_, timestamp, cache_emb, cache_mag) in self.cache.items()
+                    for cache_key, (_, timestamp, cache_emb, cache_mag, _) in self.cache.items()
                     if cache_emb and cache_mag and current_time - timestamp < self.ttl
                 ]
 
@@ -321,12 +454,18 @@ class SemanticCache:
                     )
 
                     for cache_key, similarity in similarities:
-                        if similarity >= self.similarity_threshold:
-                            result = self.cache[cache_key][0]
+                        # Use adaptive threshold for this comparison
+                        threshold = self._calculate_adaptive_threshold(cache_key)
+                        if similarity >= threshold:
+                            result, timestamp, emb, mag, acc = self.cache[cache_key]
+                            acc += 1
+                            self.cache[cache_key] = (result, timestamp, emb, mag, acc)
+                            self._access_counts[cache_key] = acc
                             self.cache.move_to_end(cache_key)
                             self.stats["routing_similarity_hits"] += 1
                             logger.debug(
-                                f"Cache hit (similarity={similarity:.2f}) for prompt hash: {cache_key[:8]}..."
+                                f"Cache hit (similarity={similarity:.2f}, threshold={threshold:.2f}) "
+                                f"for prompt hash: {cache_key[:8]}..."
                             )
                             return result
 
@@ -342,10 +481,12 @@ class SemanticCache:
         key = self._hash_prompt(prompt)
         async with self._routing_lock:
             mag = sum(x * x for x in embedding) ** 0.5 if embedding else None
-            self.cache[key] = (result, time.time(), embedding, mag)
+            self.cache[key] = (result, time.time(), embedding, mag, 1)
+            self._access_counts[key] = 1
             self.cache.move_to_end(key)
             if len(self.cache) > self.max_size:
-                self.cache.popitem(last=False)
+                old_key, _ = self.cache.popitem(last=False)
+                self._access_counts.pop(old_key, None)
 
             self.recent_selections.append((result.selected_model, time.time()))
             if len(self.recent_selections) > self.max_recent:
@@ -356,6 +497,21 @@ class SemanticCache:
             self._model_frequency[result.selected_model] = (
                 self._model_frequency.get(result.selected_model, 0) + 1
             )
+
+        # Save to persistent cache if enabled
+        if self.persistent_cache and self.persistent_cache.enabled:
+            try:
+                await self.persistent_cache.save_routing_entry(
+                    cache_key=key,
+                    result=result,
+                    embedding=embedding,
+                    embedding_magnitude=mag,
+                    ttl_seconds=self.ttl,
+                )
+            except Exception as e:
+                logger.debug(
+                    f"Failed to save routing cache entry {key[:8]} to persistent storage: {e}"
+                )
 
         logger.debug(f"Cached routing decision for: {key[:8]}...")
 
@@ -412,6 +568,19 @@ class SemanticCache:
             self.response_cache.move_to_end(key)
             if len(self.response_cache) > self.response_max_size:
                 self.response_cache.popitem(last=False)
+        # Save to persistent cache if enabled
+        if self.persistent_cache and self.persistent_cache.enabled:
+            try:
+                await self.persistent_cache.save_response_entry(
+                    cache_key=key,
+                    response_text=response,
+                    ttl_seconds=self.response_ttl,
+                )
+            except Exception as e:
+                logger.debug(
+                    f"Failed to save response cache entry for {model} to persistent storage: {e}"
+                )
+
         logger.debug(f"Cached response for {model}")
 
     async def invalidate_response(self, model: str | None = None) -> int:
@@ -455,6 +624,7 @@ class SemanticCache:
                 "hits": self.stats["routing_hits"],
                 "similarity_hits": self.stats["routing_similarity_hits"],
                 "misses": self.stats["routing_misses"],
+                "adaptive_threshold_adjustments": self.stats["adaptive_threshold_adjustments"],
             }
             total_routing = self.stats["routing_hits"] + self.stats["routing_misses"]
             routing_stats["hit_rate"] = round(
@@ -509,6 +679,8 @@ class RouterEngine:
         cache_response_max_size: int = 200,
         embed_model: str | None = None,
         vram_manager: Any | None = None,  # VRAMManager, using Any to avoid circular import
+        persistent_cache_enabled: bool | None = None,
+        persistent_cache_max_age_days: int = 7,
     ):
         self.client = client
         self.dispatcher_model = dispatcher_model or settings.router_model
@@ -518,15 +690,38 @@ class RouterEngine:
         self.semantic_cache: SemanticCache | None
 
         if cache_enabled:
+            # Create persistent cache manager if enabled
+            persistent_cache_manager = None
+            if persistent_cache_enabled is None:
+                # Use settings default if not explicitly set
+                persistent_cache_manager = PersistentCacheManager(
+                    enabled=settings.persistent_cache_enabled,
+                    max_age_days=persistent_cache_max_age_days,
+                )
+            elif persistent_cache_enabled:
+                persistent_cache_manager = PersistentCacheManager(
+                    enabled=True,
+                    max_age_days=persistent_cache_max_age_days,
+                )
+
             self.semantic_cache = SemanticCache(
                 max_size=cache_max_size,
                 ttl_seconds=cache_ttl_seconds,
                 similarity_threshold=cache_similarity_threshold,
                 embed_model=embed_model,
                 response_max_size=cache_response_max_size,
+                persistent_cache_manager=persistent_cache_manager,
             )
         else:
             self.semantic_cache = None
+
+    async def load_persistent_cache(self) -> None:
+        """Load cache data from persistent storage."""
+        if self.cache_enabled and self.semantic_cache:
+            await self.semantic_cache.load_from_persistence()
+            # Clean up expired entries from persistent cache
+            if self.semantic_cache.persistent_cache:
+                await self.semantic_cache.persistent_cache.delete_expired_entries()
 
     def warmup_caches(self, model_names: list[str] | None = None) -> None:
         """Pre-warm caches on startup to avoid first-request latency."""
@@ -892,7 +1087,9 @@ Select the model that best matches the user's prompt needs."""
         # Quality vs Speed Trade-off
         quality_pref = settings.quality_preference
         speed_weight = 1.0 - quality_pref
-        quality_weight = quality_pref + SCORING_CONFIG["quality_preference_boost"]  # Boost quality signals if preferred
+        quality_weight = (
+            quality_pref + SCORING_CONFIG["quality_preference_boost"]
+        )  # Boost quality signals if preferred
 
         normalized_benchmark_map = {}
         for name in model_names:
@@ -959,7 +1156,11 @@ Select the model that best matches the user's prompt needs."""
         }
         if task_categories:
             top_category = max(task_categories.items(), key=lambda x: x[1])
-            dominant_category = top_category[0] if top_category[1] > SCORING_CONFIG["dominant_category_confidence_threshold"] else None
+            dominant_category = (
+                top_category[0]
+                if top_category[1] > SCORING_CONFIG["dominant_category_confidence_threshold"]
+                else None
+            )
         else:
             dominant_category = None
 
@@ -1031,15 +1232,24 @@ Select the model that best matches the user's prompt needs."""
                 params = self._extract_parameter_count(model_name)
                 has_adequate_size = params is not None and params >= min_size
 
-                if category == dominant_category and combined_cat_score > SCORING_CONFIG["dominant_category_threshold"]:
+                if (
+                    category == dominant_category
+                    and combined_cat_score > SCORING_CONFIG["dominant_category_threshold"]
+                ):
                     if has_actual_data:
-                        combined_cat_score *= SCORING_CONFIG["dominant_category_boost_with_data"]  # Strong boost with data
+                        combined_cat_score *= SCORING_CONFIG[
+                            "dominant_category_boost_with_data"
+                        ]  # Strong boost with data
                     elif has_adequate_size:
                         combined_cat_score *= (
-                            SCORING_CONFIG["dominant_category_boost_with_size"]  # Moderate boost with adequate size but no benchmark
+                            SCORING_CONFIG[
+                                "dominant_category_boost_with_size"
+                            ]  # Moderate boost with adequate size but no benchmark
                         )
                     else:
-                        combined_cat_score *= SCORING_CONFIG["dominant_category_boost_default"]  # Weak boost without data or size
+                        combined_cat_score *= SCORING_CONFIG[
+                            "dominant_category_boost_default"
+                        ]  # Weak boost without data or size
 
                 if weight > 0:
                     base_score += combined_cat_score * weight
@@ -1055,7 +1265,9 @@ Select the model that best matches the user's prompt needs."""
             # Feedback Bonus
             fb_score = feedback_scores.get(model_name, 0.0)
             if fb_score != 0:
-                bonus_score += fb_score * SCORING_CONFIG["feedback_bonus_multiplier"]  # Significant impact for user preference
+                bonus_score += (
+                    fb_score * SCORING_CONFIG["feedback_bonus_multiplier"]
+                )  # Significant impact for user preference
 
             # Bonus for having benchmark data (prefer data-driven over name-based)
             if has_benchmark:
@@ -1067,16 +1279,26 @@ Select the model that best matches the user's prompt needs."""
             size_score = 0.0
             if params:
                 if params >= 30:
-                    size_score = SCORING_CONFIG["size_score_very_large"] * quality_weight  # Strong preference for very large models
+                    size_score = (
+                        SCORING_CONFIG["size_score_very_large"] * quality_weight
+                    )  # Strong preference for very large models
                 elif params >= 14:
-                    size_score = SCORING_CONFIG["size_score_large"] * quality_weight  # Good preference for large models
+                    size_score = (
+                        SCORING_CONFIG["size_score_large"] * quality_weight
+                    )  # Good preference for large models
                 elif params >= 7:
-                    size_score = SCORING_CONFIG["size_score_medium"] * quality_weight  # Medium preference for mid-size models
+                    size_score = (
+                        SCORING_CONFIG["size_score_medium"] * quality_weight
+                    )  # Medium preference for mid-size models
                 elif params >= 3:
                     size_score = 0.0  # Neutral for small models
                 else:
                     # Penalize tiny models less if we prefer speed (low quality_pref)
-                    penalty = SCORING_CONFIG["size_score_tiny_penalty_high"] if quality_pref >= SCORING_CONFIG["quality_preference_threshold"] else SCORING_CONFIG["size_score_tiny_penalty_low"]
+                    penalty = (
+                        SCORING_CONFIG["size_score_tiny_penalty_high"]
+                        if quality_pref >= SCORING_CONFIG["quality_preference_threshold"]
+                        else SCORING_CONFIG["size_score_tiny_penalty_low"]
+                    )
                     size_score = penalty
 
             # Apply size score only for moderate+ complexity tasks
@@ -1087,7 +1309,9 @@ Select the model that best matches the user's prompt needs."""
             if complexity >= SCORING_CONFIG["complexity_high_threshold"]:
                 # Very high complexity: STRONGLY prefer larger models
                 if params and params >= 30:
-                    bonus_score += SCORING_CONFIG["high_complexity_very_large_bonus"] * quality_weight
+                    bonus_score += (
+                        SCORING_CONFIG["high_complexity_very_large_bonus"] * quality_weight
+                    )
                 elif params and params >= 14:
                     bonus_score += SCORING_CONFIG["high_complexity_large_bonus"] * quality_weight
                 elif params and params >= 7:
@@ -1097,23 +1321,39 @@ Select the model that best matches the user's prompt needs."""
             elif complexity >= SCORING_CONFIG["complexity_moderate_threshold"]:
                 # Moderate complexity: Prefer larger models
                 if params and params >= 30:
-                    bonus_score += SCORING_CONFIG["moderate_complexity_very_large_bonus"] * quality_weight
+                    bonus_score += (
+                        SCORING_CONFIG["moderate_complexity_very_large_bonus"] * quality_weight
+                    )
                 elif params and params >= 14:
-                    bonus_score += SCORING_CONFIG["moderate_complexity_large_bonus"] * quality_weight
+                    bonus_score += (
+                        SCORING_CONFIG["moderate_complexity_large_bonus"] * quality_weight
+                    )
                 elif params and params >= 7:
-                    bonus_score += SCORING_CONFIG["moderate_complexity_medium_bonus"] * quality_weight
+                    bonus_score += (
+                        SCORING_CONFIG["moderate_complexity_medium_bonus"] * quality_weight
+                    )
                 elif params and params < 4:
-                    bonus_score += SCORING_CONFIG["moderate_complexity_small_penalty"] * quality_weight
+                    bonus_score += (
+                        SCORING_CONFIG["moderate_complexity_small_penalty"] * quality_weight
+                    )
             elif complexity < SCORING_CONFIG["complexity_low_threshold"]:
                 # Low complexity: Strong preference for small/fast models
                 if params and params <= 4:
-                    bonus_score += SCORING_CONFIG["low_complexity_tiny_bonus"] * speed_weight  # Strong bonus for tiny models
+                    bonus_score += (
+                        SCORING_CONFIG["low_complexity_tiny_bonus"] * speed_weight
+                    )  # Strong bonus for tiny models
                 elif params and params <= 7:
-                    bonus_score += SCORING_CONFIG["low_complexity_small_bonus"] * speed_weight  # Good bonus for small models
+                    bonus_score += (
+                        SCORING_CONFIG["low_complexity_small_bonus"] * speed_weight
+                    )  # Good bonus for small models
                 elif params and params >= 14:
-                    bonus_score += SCORING_CONFIG["low_complexity_large_penalty"] * speed_weight  # Penalize large models
+                    bonus_score += (
+                        SCORING_CONFIG["low_complexity_large_penalty"] * speed_weight
+                    )  # Penalize large models
                 elif params and params >= 30:
-                    bonus_score += SCORING_CONFIG["low_complexity_very_large_penalty"] * speed_weight  # Strong penalty for very large
+                    bonus_score += (
+                        SCORING_CONFIG["low_complexity_very_large_penalty"] * speed_weight
+                    )  # Strong penalty for very large
 
             # === CATEGORY-AWARE MINIMUM SIZE REQUIREMENTS ===
             # Apply severe penalty if model is below minimum size for category + complexity

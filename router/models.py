@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, DateTime, Float, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+if TYPE_CHECKING:
+    from router.router import RoutingResult
 
 
 class Base(DeclarativeBase):
@@ -151,3 +157,82 @@ class ModelFeedback(Base):
 
     category: Mapped[str | None] = mapped_column(String)  # e.g. "coding", "reasoning"
     comment: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RoutingCache(Base):
+    """Persistent cache for routing decisions."""
+
+    __tablename__ = "routing_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    selected_model: Mapped[str] = mapped_column(String)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reasoning: Mapped[str | None] = mapped_column(String, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_magnitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    access_count: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def to_routing_result(self) -> RoutingResult:  # type: ignore[name-defined]
+        """Convert to RoutingResult dataclass."""
+        from router.router import RoutingResult
+
+        return RoutingResult(
+            selected_model=self.selected_model,
+            confidence=self.confidence,
+            reasoning=self.reasoning or "",
+        )
+
+
+class ResponseCache(Base):
+    """Persistent cache for LLM responses."""
+
+    __tablename__ = "response_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String, index=True)
+    prompt_hash: Mapped[str] = mapped_column(String, index=True)
+    parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    response_text: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    access_count: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def cache_key(self) -> tuple:
+        """Generate cache key matching SemanticCache._make_response_key."""
+        if self.parameters:
+            param_tuple = tuple(sorted((k, v) for k, v in self.parameters.items() if v is not None))
+            return (self.model_name, self.prompt_hash, param_tuple)
+        return (self.model_name, self.prompt_hash)
+
+
+class EmbeddingCache(Base):
+    """Persistent cache for embeddings."""
+
+    __tablename__ = "embedding_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    embedding: Mapped[list[float]] = mapped_column(JSON)
+    magnitude: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    access_count: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

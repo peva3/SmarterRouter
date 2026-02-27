@@ -4,9 +4,13 @@
 # without requiring a local Ollama instance.
 #
 # Quick Start:
-#   1. Copy this file to docker-compose.yml (or use with -f flag)
-#   2. Set your API keys in .env file
-#   3. docker-compose up -d
+#   1. Build locally: docker compose build
+#   2. Copy this file to docker-compose.yml (or use with -f flag)
+#   3. Set your API keys in .env file (in project root)
+#   4. docker-compose up -d
+#
+# NOTE: The .env file will be mounted to /app/.env in the container.
+# If .env doesn't exist, auto-setup will create one.
 #
 # See: docs/external-providers.md for complete documentation
 
@@ -15,6 +19,9 @@ version: '3.8'
 services:
   smarterrouter:
     image: ghcr.io/peva3/smarterrouter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: smarterrouter
     ports:
       - "11436:11436"
@@ -42,10 +49,14 @@ services:
       # ROUTER_CACHE_ENABLED=true
       # ROUTER_SEMANTIC_CACHE_SIZE=1000
     volumes:
+      # Mount .env file from project root
+      # If .env doesn't exist on host, it will be created by auto-setup
+      - ./.env:/app/.env:rw
       # Persist provider.db and SQLite databases
-      - ./data:/app/hubrouter/data:rw
+      # Ensure the ./data directory exists and is writable by the container user (UID 1000).
+      - ./data:/app/data:rw
       # Optional: mount logs directory
-      - ./logs:/app/hubrouter/logs:rw
+      - ./logs:/app/logs:rw
     restart: unless-stopped
     networks:
       - smarterrouter-network
@@ -59,7 +70,7 @@ services:
     #           count: all
     #           capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11436/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11436/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

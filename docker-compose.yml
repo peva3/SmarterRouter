@@ -4,9 +4,14 @@
 # SmarterRouter auto-detects GPUs on startup and logs what was found.
 #
 # QUICK START:
+#   - Build locally: docker compose build
 #   - NVIDIA: docker-compose --compatibility up -d
 #   - AMD:    Comment out deploy section, uncomment devices section, then docker-compose up -d
 #   - Intel:  Comment out deploy section, uncomment devices section, then docker-compose up -d
+#
+# CONFIGURATION:
+#   - Place your .env file in the project root or let auto-setup create one
+#   - The .env file will be mounted to /app/.env in the container
 #
 # IMPORTANT: The `deploy` section is ONLY for NVIDIA. AMD/Intel use `devices` at service level.
 # See docs/docker-compose.amd.yml, docs/docker-compose.intel.yml for ready-to-use templates.
@@ -14,13 +19,20 @@
 services:
   smarterrouter:
     image: ghcr.io/peva3/smarterrouter:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: smarterrouter
     ports:
       - "11436:11436"
     env_file:
       - .env
     volumes:
+      # Mount .env file from project root
+      # If .env doesn't exist on host, it will be created by auto-setup
+      - ./.env:/app/.env:rw
       # Mount a data directory for persistence (safer than mounting individual files)
+      # Ensure the ./data directory exists and is writable by the container user (UID 1000).
       - ./data:/app/data:rw
       # Optional: mount tmpfs for temporary files if needed
       - type: tmpfs

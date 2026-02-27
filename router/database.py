@@ -156,6 +156,53 @@ def _run_migrations() -> None:
                 conn.execute(text("ALTER TABLE model_benchmarks ADD COLUMN extra_data JSON"))
                 conn.commit()
 
+        # Add access_count and last_accessed columns to routing_cache if missing
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='routing_cache'")
+        )
+        if result.fetchone():
+            result = conn.execute(text("PRAGMA table_info(routing_cache)"))
+            existing_rc_columns = {row[1] for row in result.fetchall()}
+            if "access_count" not in existing_rc_columns:
+                logger.info("Adding column: access_count to routing_cache")
+                conn.execute(
+                    text("ALTER TABLE routing_cache ADD COLUMN access_count INTEGER DEFAULT 1")
+                )
+                conn.commit()
+            # Note: last_accessed column already exists from previous migration
+
+        # Add access_count column to response_cache if missing
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='response_cache'")
+        )
+        if result.fetchone():
+            result = conn.execute(text("PRAGMA table_info(response_cache)"))
+            existing_resc_columns = {row[1] for row in result.fetchall()}
+            if "access_count" not in existing_resc_columns:
+                logger.info("Adding column: access_count to response_cache")
+                conn.execute(
+                    text("ALTER TABLE response_cache ADD COLUMN access_count INTEGER DEFAULT 1")
+                )
+                conn.commit()
+
+        # Add last_accessed and access_count columns to embedding_cache if missing
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='embedding_cache'")
+        )
+        if result.fetchone():
+            result = conn.execute(text("PRAGMA table_info(embedding_cache)"))
+            existing_ec_columns = {row[1] for row in result.fetchall()}
+            if "last_accessed" not in existing_ec_columns:
+                logger.info("Adding column: last_accessed to embedding_cache")
+                conn.execute(text("ALTER TABLE embedding_cache ADD COLUMN last_accessed DATETIME"))
+                conn.commit()
+            if "access_count" not in existing_ec_columns:
+                logger.info("Adding column: access_count to embedding_cache")
+                conn.execute(
+                    text("ALTER TABLE embedding_cache ADD COLUMN access_count INTEGER DEFAULT 1")
+                )
+                conn.commit()
+
         # Create indexes for common query patterns
         indexes_to_create = [
             ("idx_model_feedback_model_timestamp", "model_feedback", "model_name, timestamp"),
@@ -183,7 +230,7 @@ def _run_migrations() -> None:
 @contextmanager
 def get_session() -> Generator[Session, None, None]:
     """Context manager for database sessions.
-    
+
     Yields a session for database operations. For write operations, call
     session.commit() explicitly. The session is rolled back on exception.
     """

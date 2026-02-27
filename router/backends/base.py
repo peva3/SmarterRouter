@@ -70,6 +70,13 @@ class LLMBackend(Protocol):
         """Close HTTP client and cleanup resources. Optional."""
         ...
 
+    def is_external_model(self, model_name: str) -> bool:
+        """Check if model belongs to an external provider (not locally hosted).
+
+        Default implementation returns False. External backends should override.
+        """
+        return False
+
 
 def supports_unload(backend: LLMBackend) -> bool:
     """Check if backend supports model unloading."""

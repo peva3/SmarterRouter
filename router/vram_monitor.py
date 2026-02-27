@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -341,8 +342,6 @@ class VRAMMonitor:
             return True
         # Fallback: try running nvidia-smi directly (for backward compatibility)
         try:
-            import subprocess
-
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                 capture_output=True,

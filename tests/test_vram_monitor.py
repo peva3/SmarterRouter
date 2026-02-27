@@ -250,7 +250,8 @@ class TestVRAMMonitor:
 class TestVRAMMonitorAppState:
     """Test VRAMMonitor with app_state integration."""
 
-    def test_sample_with_vram_manager(self):
+    @pytest.mark.asyncio
+    async def test_sample_with_vram_manager(self):
         """Test sampling includes VRAM manager model info."""
         mock_app_state = MagicMock()
         mock_vram_manager = MagicMock()
@@ -266,9 +267,7 @@ class TestVRAMMonitorAppState:
         monitor.has_nvidia = True
         monitor._run_nvidia_smi = lambda: "0, 24576 MiB, 12845 MiB, 11731 MiB"
 
-        import asyncio
-
-        metrics = asyncio.get_event_loop().run_until_complete(monitor._sample())
+        metrics = await monitor._sample()
 
         assert "llama3" in metrics.models_loaded
         assert metrics.per_model_vram_gb["llama3"] == 8.0

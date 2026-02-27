@@ -165,6 +165,10 @@ class Settings(BaseSettings):
     )  # Max response cache entries (increased from 50)
     embed_model: str | None = Field(default=None)  # Model to use for embeddings
 
+    # Persistent Cache (Semantic Cache V2) settings
+    persistent_cache_enabled: bool = Field(default=True)  # Enable persistent disk caching
+    persistent_cache_max_age_days: int = Field(default=7)  # Maximum age of cache entries to keep
+
     # VRAM Monitoring & Management
     vram_monitor_enabled: bool = Field(
         default=True

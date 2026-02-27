@@ -51,7 +51,6 @@ from router.skills import skills_registry
 from router.vram_manager import VRAMManager
 from router.vram_monitor import VRAMMonitor
 
-
 # Cache for VRAM estimates to avoid N+1 queries
 _VRAM_ESTIMATE_CACHE: dict[str, tuple[float, float]] = {}  # model_name -> (estimate, timestamp)
 _VRAM_CACHE_TTL = 300.0  # 5 minutes
@@ -64,15 +63,15 @@ def get_model_vram_estimate(model_name: str) -> float:
     Uses in-memory cache with TTL to avoid N+1 queries.
     """
     import time
-    
+
     now = time.monotonic()
-    
+
     # Check cache first
     if model_name in _VRAM_ESTIMATE_CACHE:
         estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
         if (now - timestamp) < _VRAM_CACHE_TTL:
             return estimate
-    
+
     # Cache miss or expired
     try:
         with get_session() as session:
@@ -83,7 +82,7 @@ def get_model_vram_estimate(model_name: str) -> float:
                 return estimate
     except Exception as e:
         logger.debug(f"Could not fetch VRAM estimate for {model_name}: {e}")
-    
+
     # Fallback to default
     estimate = settings.vram_default_estimate_gb
     _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
@@ -252,6 +251,8 @@ async def startup_event():
             cache_similarity_threshold=settings.cache_similarity_threshold,
             cache_response_max_size=settings.cache_response_max_size,
             embed_model=settings.embed_model,
+            persistent_cache_enabled=settings.persistent_cache_enabled,
+            persistent_cache_max_age_days=settings.persistent_cache_max_age_days,
         )
 
         try:
@@ -273,6 +274,8 @@ async def startup_event():
                 )
 
             model_names = [m.name for m in available_models] if available_models else []
+            # Load persistent cache first, then warm up other caches
+            await app_state.router_engine.load_persistent_cache()
             app_state.router_engine.warmup_caches(model_names)
         except Exception as e:
             logger.warning(f"Failed to pre-warm router caches: {e}")
@@ -345,19 +348,19 @@ async def startup_event():
 
 async def shutdown_event():
     logger.info("Shutting down SmarterRouter...")
-    
+
     # Cancel all background tasks
     tasks = list(app_state.background_tasks)
     for task in tasks:
         task.cancel()
-    
+
     # Wait for tasks to complete with timeout (5 seconds)
     if tasks:
         try:
             await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Some background tasks did not cancel gracefully within timeout")
-    
+
     # Unload model if pinned
     if settings.pinned_model and app_state.backend:
         if supports_unload(app_state.backend):
@@ -855,7 +858,7 @@ async def chat_completions(
     vram_estimate_map: dict[str, float] = {}
     if app_state.vram_manager:
         import time
-        
+
         now = time.monotonic()
         # First check cache for all models
         for model_name in fallback_list:
@@ -863,15 +866,15 @@ async def chat_completions(
                 estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
                 if (now - timestamp) < _VRAM_CACHE_TTL:
                     vram_estimate_map[model_name] = estimate
-        
+
         # Find models not in cache or expired
         uncached_models = [m for m in fallback_list if m not in vram_estimate_map]
-        
+
         if uncached_models:
             # Chunk queries to avoid SQLite parameter limit (999)
-            CHUNK_SIZE = 250
-            for i in range(0, len(uncached_models), CHUNK_SIZE):
-                chunk = uncached_models[i:i + CHUNK_SIZE]
+            chunk_size = 250
+            for i in range(0, len(uncached_models), chunk_size):
+                chunk = uncached_models[i : i + chunk_size]
                 with get_session() as session:
                     profiles = (
                         session.query(ModelProfile).filter(ModelProfile.name.in_(chunk)).all()
@@ -885,7 +888,7 @@ async def chat_completions(
                         vram_estimate_map[p.name] = estimate
                         # Update cache
                         _VRAM_ESTIMATE_CACHE[p.name] = (estimate, now)
-        
+
         # For models not found in database, use default and cache
         for model_name in fallback_list:
             if model_name not in vram_estimate_map:
@@ -1525,7 +1528,7 @@ async def explain_routing(
 ):
     """
     Explain why a specific model would be selected for a prompt.
-    Returns scoring breakdown without generating a response.
+    Returns detailed scoring breakdown without generating a response.
     Useful for debugging routing decisions.
     """
     if not app_state.backend or not app_state.router_engine:
@@ -1569,7 +1572,7 @@ async def explain_routing(
                 "override": True,
                 "reasoning": f"Model override specified: {model_override}",
                 "confidence": 1.0,
-                "scores": None,
+                "scoring_breakdown": None,
             }
 
         # Otherwise, run the full routing logic to get scoring breakdown
@@ -1581,44 +1584,83 @@ async def explain_routing(
             cached_result = await app_state.router_engine.semantic_cache.get(prompt)
 
         if cached_result:
-            return {
-                "prompt": prompt,
-                "selected_model": cached_result.selected_model,
-                "cached": True,
-                "reasoning": cached_result.reasoning,
-                "confidence": cached_result.confidence,
-                "scores": None,
-            }
+            # Still compute scoring breakdown for explanation
+            selected_model = cached_result.selected_model
+            confidence = cached_result.confidence
+            reasoning = cached_result.reasoning
+            cached = True
+        else:
+            # Get routing decision
+            result = await app_state.router_engine.select_model(prompt, model_list)
 
-        # Get routing decision
-        result = await app_state.router_engine.select_model(prompt, model_list)
+            if result is None:
+                return JSONResponse(
+                    {"error": {"message": "Could not select model", "type": "internal_error"}},
+                    status_code=500,
+                )
 
-        if result is None:
-            return JSONResponse(
-                {"error": {"message": "Could not select model", "type": "internal_error"}},
-                status_code=500,
+            selected_model = result.selected_model
+            confidence = result.confidence
+            reasoning = result.reasoning
+            cached = False
+
+        # Enhanced scoring breakdown
+        from router.router import get_benchmarks_for_models_with_external
+
+        # Get all components used for scoring
+        profiles = app_state.router_engine._get_all_profiles()
+        benchmarks = get_benchmarks_for_models_with_external(model_list)
+        analysis = app_state.router_engine._analyze_prompt(prompt, None)
+        feedback_scores = app_state.router_engine._get_model_feedback_scores()
+
+        # Get model frequencies for diversity penalty
+        model_frequencies: dict[str, float] = {}
+        if app_state.router_engine.semantic_cache:
+            freq_tasks = [
+                app_state.router_engine.semantic_cache.get_model_frequency(m) for m in model_list
+            ]
+            freq_results = await asyncio.gather(*freq_tasks)
+            model_frequencies = dict(zip(model_list, freq_results, strict=False))
+
+        # Calculate combined scores for all models
+        scoring_breakdown = app_state.router_engine._calculate_combined_scores(
+            profiles, benchmarks, analysis, model_list, feedback_scores, model_frequencies
+        )
+
+        # Get profile details for each model
+        with get_session() as session:
+            db_profiles = (
+                session.query(ModelProfile).filter(ModelProfile.name.in_(model_list)).all()
+            )
+            profile_map = {p.name: p for p in db_profiles}
+
+        # Build detailed model scores
+        model_scores = []
+        for model_name in model_list:
+            profile = profile_map.get(model_name)
+            breakdown = scoring_breakdown.get(model_name, {})
+            model_scores.append(
+                {
+                    "name": model_name,
+                    "reasoning": profile.reasoning if profile else 0.0,
+                    "coding": profile.coding if profile else 0.0,
+                    "creativity": profile.creativity if profile else 0.0,
+                    "speed": profile.speed if profile else 0.0,
+                    "vram_gb": profile.vram_required_gb if profile else None,
+                    "total_score": breakdown.get("score", 0.0),
+                    "base_score": breakdown.get("base_score", 0.0),
+                    "coding_score": breakdown.get("coding", 0.0),
+                    "creativity_score": breakdown.get("creativity", 0.0),
+                    "reasoning_score": breakdown.get("reasoning", 0.0),
+                    "factual_score": breakdown.get("factual", 0.0),
+                    "speed_score": breakdown.get("speed", 0.0),
+                    "feedback_boost": breakdown.get("feedback_boost", 0.0),
+                    "diversity_penalty": breakdown.get("diversity_penalty", 0.0),
+                }
             )
 
-        selected_model = result.selected_model
-        confidence = result.confidence
-        reasoning = result.reasoning
-
-        # Get all model scores
-        with get_session() as session:
-            profiles = session.query(ModelProfile).filter(ModelProfile.name.in_(model_list)).all()
-
-            model_scores = []
-            for profile in profiles:
-                model_scores.append(
-                    {
-                        "name": profile.name,
-                        "reasoning": profile.reasoning,
-                        "coding": profile.coding,
-                        "creativity": profile.creativity,
-                        "speed": profile.speed,
-                        "vram_gb": profile.vram_required_gb,
-                    }
-                )
+        # Sort by total score descending
+        model_scores.sort(key=lambda x: x["total_score"], reverse=True)
 
         return {
             "prompt": prompt,
@@ -1628,9 +1670,22 @@ async def explain_routing(
             "selected_model": selected_model,
             "confidence": confidence,
             "reasoning": reasoning,
-            "cached": False,
+            "cached": cached,
             "available_models": len(model_list),
-            "model_scores": sorted(model_scores, key=lambda x: x["name"]),
+            "analysis": {
+                "categories": analysis,
+                "dominant_category": max(analysis.items(), key=lambda x: x[1])[0]
+                if analysis
+                else None,
+            },
+            "scoring_weights": {
+                "quality_preference": settings.quality_preference,
+                "speed_weight": 1.0 - settings.quality_preference,
+                "quality_weight": settings.quality_preference
+                + 0.2,  # SCORING_CONFIG["quality_preference_boost"]
+            },
+            "model_scores": model_scores,
+            "scoring_breakdown": scoring_breakdown,
         }
 
     except Exception as e:
@@ -1781,13 +1836,23 @@ async def embeddings(
         )
 
 
-def main() -> None:
-    uvicorn.run(
+async def main_async() -> None:
+    """Async entry point for running the server programmatically."""
+    config = uvicorn.Config(
         "main:app",
         host=settings.host,
         port=settings.port,
         reload=False,
     )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+def main() -> None:
+    """Synchronous entry point for running from command line."""
+    import asyncio
+
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

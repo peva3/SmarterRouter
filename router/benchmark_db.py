@@ -69,11 +69,11 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
         with get_session() as session:
             # Chunk queries to avoid SQLite parameter limit (999)
             # SQLAlchemy's in_() method parameterizes correctly but still hits SQLite limit
-            CHUNK_SIZE = 250
-            all_benchmarks = []
-            
-            for i in range(0, len(model_names), CHUNK_SIZE):
-                chunk = model_names[i:i + CHUNK_SIZE]
+            chunk_size = 250
+            all_benchmarks: list[ModelBenchmark] = []
+
+            for i in range(0, len(model_names), chunk_size):
+                chunk = model_names[i : i + chunk_size]
                 benchmarks = (
                     session.execute(
                         select(ModelBenchmark).where(ModelBenchmark.ollama_name.in_(chunk))
@@ -82,7 +82,7 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
                     .all()
                 )
                 all_benchmarks.extend(benchmarks)
-            
+
             result = [
                 {
                     "ollama_name": b.ollama_name,
@@ -176,7 +176,7 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                 else:
                     safe_data = {k: v for k, v in cleaned.items() if k in allowed_benchmark_fields}
                     session.add(ModelBenchmark(**safe_data))
-                
+
                 session.commit()
                 count += 1
         except Exception as e:
@@ -230,20 +230,22 @@ def remove_benchmarks_not_in(model_names: list[str]) -> int:
                 # Complex case: chunk with AND conditions
                 # Delete where ollama_name NOT IN chunk1 AND NOT IN chunk2 AND ...
                 from sqlalchemy import and_
-                
-                CHUNK_SIZE = 250
-                chunks = [model_names[i:i + CHUNK_SIZE] for i in range(0, len(model_names), CHUNK_SIZE)]
-                
+
+                chunk_size = 250
+                chunks = [
+                    model_names[i : i + chunk_size] for i in range(0, len(model_names), chunk_size)
+                ]
+
                 # Build AND conditions
                 conditions = [~ModelBenchmark.ollama_name.in_(chunk) for chunk in chunks]
                 combined_condition = and_(*conditions) if len(conditions) > 1 else conditions[0]
-                
+
                 deleted = (
                     session.query(ModelBenchmark)
                     .filter(combined_condition)
                     .delete(synchronize_session=False)
                 )
-            
+
             session.commit()
             return deleted
     except Exception as e:

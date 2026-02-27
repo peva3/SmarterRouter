@@ -12,16 +12,13 @@ import logging
 import os
 import re
 import sqlite3
-import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from router.cache import get_cache
 from router.config import settings
 from router.exceptions import RouterDatabaseError
-from router.cache import get_cache
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +29,6 @@ ProviderDBError = RouterDatabaseError
 _PROVIDER_DB_CACHE_TTL = 60.0
 # Unified cache instance
 _provider_cache = get_cache("provider_db", default_ttl=_PROVIDER_DB_CACHE_TTL)
-
-
-
 
 
 class ProviderDB:
@@ -171,14 +165,14 @@ class ProviderDB:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Chunk queries to avoid SQLite parameter limit (999)
                 # and improve performance with smaller queries
-                CHUNK_SIZE = 250
+                chunk_size = 250
                 queried_results = {}
-                
-                for i in range(0, len(missing_models), CHUNK_SIZE):
-                    chunk = missing_models[i:i + CHUNK_SIZE]
+
+                for i in range(0, len(missing_models), chunk_size):
+                    chunk = missing_models[i : i + chunk_size]
                     placeholders = ",".join("?" * len(chunk))
                     cursor.execute(
                         f"""SELECT * FROM model_benchmarks
@@ -188,10 +182,10 @@ class ProviderDB:
                     for row in cursor.fetchall():
                         model_id = row["model_id"]
                         queried_results[model_id] = dict(row)
-                
+
                 # Update results with queried data
                 results.update(queried_results)
-                
+
                 # Update cache with newly fetched models
                 if queried_results:
                     # Get current cache (might have been updated by another thread)
@@ -202,7 +196,7 @@ class ProviderDB:
                     current_cache.update(queried_results)
                     # Store back with TTL
                     _provider_cache.set("all_benchmarks", current_cache)
-                
+
                 return results
         except Exception as e:
             logger.warning(f"Failed to get benchmarks for models: {e}")

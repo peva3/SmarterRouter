@@ -685,15 +685,16 @@ class ModelProfiler:
                     )
                 session.add(profile)
                 session.commit()
-                
+
                 # Invalidate VRAM estimate cache for this model
                 try:
                     # Import here to avoid circular imports
                     from main import invalidate_vram_estimate_cache
+
                     invalidate_vram_estimate_cache(result.model_name)
                 except ImportError:
                     pass
-                
+
                 logger.debug(
                     f"Saved profile for {result.model_name}"
                     + (f" with VRAM {vram_gb:.2f}GB" if vram_gb else "")
