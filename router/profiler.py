@@ -658,6 +658,9 @@ class ModelProfiler:
                     profile.last_profiled = datetime.now(UTC)
                     profile.vision = result.vision
                     profile.tool_calling = result.tool_calling
+                    # Mark as active and update last seen
+                    profile.active = True
+                    profile.last_seen = datetime.now(UTC)
                     # Update VRAM fields if measured
                     if vram_gb is not None:
                         profile.vram_required_gb = vram_gb
@@ -678,6 +681,8 @@ class ModelProfiler:
                         last_profiled=datetime.now(UTC),
                         vision=result.vision,
                         tool_calling=result.tool_calling,
+                        active=True,
+                        last_seen=datetime.now(UTC),
                         vram_required_gb=vram_gb,
                         vram_measured_at=datetime.now(UTC) if vram_gb is not None else None,
                         adaptive_timeout_used=adaptive_timeout,

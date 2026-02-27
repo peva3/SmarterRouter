@@ -16,11 +16,13 @@ from router.benchmark_db import (
     get_benchmarks_for_models,
     invalidate_all_caches,
 )
+from router.cache_stats import CacheAnalytics, TimeSeriesStats
 from router.config import settings
 from router.database import get_session
 from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import ModelFeedback, ModelProfile, RoutingDecision
 from router.persistent_cache import PersistentCacheManager
+from router.profiler import profile_all_models
 from router.provider_db import get_provider_db
 
 logger = logging.getLogger(__name__)
@@ -165,6 +167,8 @@ class SemanticCache:
         response_max_size: int = 50,
         embedding_ttl_seconds: int = 86400,  # 24 hours for embeddings,
         persistent_cache_manager: PersistentCacheManager | None = None,
+        cache_stats_enabled: bool | None = None,
+        cache_stats_retention_hours: int = 24,
     ):
         self.cache: OrderedDict[
             str, tuple[RoutingResult, float, list[float] | None, float | None, int]
@@ -200,9 +204,54 @@ class SemanticCache:
             "adaptive_threshold_adjustments": 0,
         }
 
+        # Enhanced cache statistics (SmarterRouter 2.1.6+)
+        if cache_stats_enabled is None:
+            cache_stats_enabled = settings.cache_stats_enabled
+        self.cache_stats_enabled = cache_stats_enabled
+
+        if self.cache_stats_enabled:
+            self.time_series_stats = TimeSeriesStats(retention_hours=cache_stats_retention_hours)
+            self.cache_analytics = CacheAnalytics(self)
+        else:
+            self.time_series_stats = None
+            self.cache_analytics = None
+
         self.persistent_cache = persistent_cache_manager
         self._model_frequency: dict[str, int] = {}
         self._access_counts: dict[str, int] = {}  # Track access counts for cached entries
+        self._eviction_counts: dict[str, int] = {}  # Track eviction reasons
+
+    async def _record_cache_event(
+        self,
+        cache_type: str,
+        event_type: str,
+        model: str | None = None,
+        prompt_hash: str | None = None,
+        embedding_dim: int | None = None,
+        eviction_reason: str | None = None,
+    ) -> None:
+        """Record a cache event in time-series statistics if enabled."""
+        if self.cache_stats_enabled and self.time_series_stats:
+            if event_type == "eviction":
+                await self.time_series_stats.record_eviction(
+                    cache_type=cache_type,
+                    reason=eviction_reason or "unknown",
+                    model=model,
+                    prompt_hash=prompt_hash,
+                )
+            else:
+                await self.time_series_stats.record_hit(
+                    cache_type=cache_type,
+                    event_type=event_type,
+                    model=model,
+                    prompt_hash=prompt_hash,
+                    embedding_dim=embedding_dim,
+                )
+
+        # Track eviction counts for analytics
+        if event_type == "eviction":
+            key = f"{eviction_reason or 'unknown'}_{cache_type}"
+            self._eviction_counts[key] = self._eviction_counts.get(key, 0) + 1
 
     async def load_from_persistence(self) -> None:
         """Load cache data from persistent storage if enabled."""
@@ -322,8 +371,24 @@ class SemanticCache:
                 if current_time - timestamp < self.embedding_ttl:
                     self.embedding_cache.move_to_end(key)
                     self.stats["embedding_cache_hits"] += 1
+                    await self._record_cache_event(
+                        cache_type="embedding",
+                        event_type="hit",
+                        model=None,
+                        prompt_hash=key,
+                        embedding_dim=len(emb) if emb and isinstance(emb, list) else None,
+                    )
                     return emb
                 else:
+                    # TTL expired, record eviction
+                    await self._record_cache_event(
+                        cache_type="embedding",
+                        event_type="eviction",
+                        model=None,
+                        prompt_hash=key,
+                        embedding_dim=len(emb) if emb and isinstance(emb, list) else None,
+                        eviction_reason="ttl",
+                    )
                     del self.embedding_cache[key]
 
         try:
@@ -337,7 +402,19 @@ class SemanticCache:
                         self.embedding_cache[key] = (emb, mag, current_time)
                         self.embedding_cache.move_to_end(key)
                         if len(self.embedding_cache) > self.embedding_max_size:
-                            self.embedding_cache.popitem(last=False)
+                            old_key, (old_emb, old_mag, old_ts) = self.embedding_cache.popitem(
+                                last=False
+                            )
+                            await self._record_cache_event(
+                                cache_type="embedding",
+                                event_type="eviction",
+                                model=None,
+                                prompt_hash=old_key,
+                                embedding_dim=len(old_emb)
+                                if old_emb and isinstance(old_emb, list)
+                                else None,
+                                eviction_reason="size",
+                            )
 
                     # Save to persistent cache if enabled
                     if self.persistent_cache and self.persistent_cache.enabled:
@@ -354,6 +431,13 @@ class SemanticCache:
                             )
 
                     self.stats["embedding_cache_misses"] += 1
+                    await self._record_cache_event(
+                        cache_type="embedding",
+                        event_type="miss",
+                        model=None,
+                        prompt_hash=key,
+                        embedding_dim=len(emb) if emb and isinstance(emb, list) else None,
+                    )
                     return emb
         except Exception as e:
             logger.debug(f"Embedding failed: {e}")
@@ -433,9 +517,23 @@ class SemanticCache:
                     self._access_counts[key] = acc
                     self.cache.move_to_end(key)
                     self.stats["routing_hits"] += 1
+                    await self._record_cache_event(
+                        cache_type="routing",
+                        event_type="hit",
+                        model=result.selected_model,
+                        prompt_hash=key,
+                    )
                     logger.debug(f"Cache hit (exact) for prompt hash: {key[:8]}...")
                     return result
                 else:
+                    # TTL expired, record eviction
+                    await self._record_cache_event(
+                        cache_type="routing",
+                        event_type="eviction",
+                        model=result.selected_model,
+                        prompt_hash=key,
+                        eviction_reason="ttl",
+                    )
                     del self.cache[key]
                     if key in self._access_counts:
                         del self._access_counts[key]
@@ -463,6 +561,12 @@ class SemanticCache:
                             self._access_counts[cache_key] = acc
                             self.cache.move_to_end(cache_key)
                             self.stats["routing_similarity_hits"] += 1
+                            await self._record_cache_event(
+                                cache_type="routing",
+                                event_type="similarity_hit",
+                                model=result.selected_model,
+                                prompt_hash=cache_key,
+                            )
                             logger.debug(
                                 f"Cache hit (similarity={similarity:.2f}, threshold={threshold:.2f}) "
                                 f"for prompt hash: {cache_key[:8]}..."
@@ -470,6 +574,12 @@ class SemanticCache:
                             return result
 
             self.stats["routing_misses"] += 1
+            await self._record_cache_event(
+                cache_type="routing",
+                event_type="miss",
+                model=None,
+                prompt_hash=None,
+            )
             return None
 
     async def set(
@@ -485,7 +595,16 @@ class SemanticCache:
             self._access_counts[key] = 1
             self.cache.move_to_end(key)
             if len(self.cache) > self.max_size:
-                old_key, _ = self.cache.popitem(last=False)
+                old_key, (old_result, old_ts, old_emb, old_mag, old_acc) = self.cache.popitem(
+                    last=False
+                )
+                await self._record_cache_event(
+                    cache_type="routing",
+                    event_type="eviction",
+                    model=old_result.selected_model,
+                    prompt_hash=old_key,
+                    eviction_reason="size",
+                )
                 self._access_counts.pop(old_key, None)
 
             self.recent_selections.append((result.selected_model, time.time()))
@@ -551,12 +670,32 @@ class SemanticCache:
                 if current_time - timestamp < self.response_ttl:
                     self.response_cache.move_to_end(key)
                     self.stats["response_hits"] += 1
+                    await self._record_cache_event(
+                        cache_type="response",
+                        event_type="hit",
+                        model=model,
+                        prompt_hash=None,
+                    )
                     logger.debug(f"Response cache hit for {model}")
                     return response
                 else:
+                    # TTL expired, record eviction
+                    await self._record_cache_event(
+                        cache_type="response",
+                        event_type="eviction",
+                        model=model,
+                        prompt_hash=None,
+                        eviction_reason="ttl",
+                    )
                     del self.response_cache[key]
 
             self.stats["response_misses"] += 1
+            await self._record_cache_event(
+                cache_type="response",
+                event_type="miss",
+                model=model,
+                prompt_hash=None,
+            )
             return None
 
     async def set_response(
@@ -616,6 +755,60 @@ class SemanticCache:
         async with self._embedding_lock:
             self.embedding_cache.clear()
 
+    async def evict_oldest(self, count: int = 1) -> dict[str, int]:
+        """
+        Evict the oldest entries from each cache (LRU eviction).
+
+        Args:
+            count: Number of oldest entries to evict from each cache
+
+        Returns:
+            Dictionary with number of entries evicted per cache type
+        """
+        if count <= 0:
+            return {"routing": 0, "response": 0, "embedding": 0}
+
+        evicted = {"routing": 0, "response": 0, "embedding": 0}
+
+        # Evict from routing cache
+        async with self._routing_lock:
+            for _ in range(min(count, len(self.cache))):
+                key, (result, _, _, _, _) = self.cache.popitem(last=False)
+                evicted["routing"] += 1
+                await self._record_cache_event(
+                    cache_type="routing",
+                    event_type="eviction",
+                    model=result.selected_model,
+                    prompt_hash=key,
+                    eviction_reason="manual",
+                )
+
+        # Evict from response cache
+        async with self._response_lock:
+            for _ in range(min(count, len(self.response_cache))):
+                key, (response_text, _) = self.response_cache.popitem(last=False)
+                evicted["response"] += 1
+                await self._record_cache_event(
+                    cache_type="response",
+                    event_type="eviction",
+                    model=key[0] if isinstance(key, tuple) and len(key) > 0 else None,
+                    eviction_reason="manual",
+                )
+
+        # Evict from embedding cache
+        async with self._embedding_lock:
+            for _ in range(min(count, len(self.embedding_cache))):
+                key, (embedding, magnitude, _) = self.embedding_cache.popitem(last=False)
+                evicted["embedding"] += 1
+                await self._record_cache_event(
+                    cache_type="embedding",
+                    event_type="eviction",
+                    prompt_hash=key,
+                    eviction_reason="manual",
+                )
+
+        return evicted
+
     async def get_stats(self) -> dict[str, Any]:
         async with self._routing_lock:
             routing_stats: dict[str, int | float] = {
@@ -660,11 +853,25 @@ class SemanticCache:
                 3,
             )
 
-        return {
+        result = {
             "routing": routing_stats,
             "response": response_stats,
             "embedding": embedding_stats,
         }
+
+        if self.cache_stats_enabled and self.time_series_stats and self.cache_analytics:
+            # Get time-series stats for last hour
+            assert self.time_series_stats is not None
+            time_series = await self.time_series_stats.get_stats(window_minutes=60)
+            analytics = {
+                "time_series": time_series,
+                "top_prompts": await self.cache_analytics.get_top_prompts(limit=20),
+                "model_stats": await self.cache_analytics.get_model_stats(),
+                "eviction_stats": await self.cache_analytics.get_eviction_stats(),
+            }
+            result["enhanced"] = analytics
+
+        return result
 
 
 class RouterEngine:
@@ -681,12 +888,16 @@ class RouterEngine:
         vram_manager: Any | None = None,  # VRAMManager, using Any to avoid circular import
         persistent_cache_enabled: bool | None = None,
         persistent_cache_max_age_days: int = 7,
+        cache_stats_enabled: bool | None = None,
+        cache_stats_retention_hours: int = 24,
     ):
         self.client = client
         self.dispatcher_model = dispatcher_model or settings.router_model
         self.cache_enabled = cache_enabled
         self.embed_model = embed_model
         self.vram_manager = vram_manager
+        self.cache_stats_enabled = cache_stats_enabled
+        self.cache_stats_retention_hours = cache_stats_retention_hours
         self.semantic_cache: SemanticCache | None
 
         if cache_enabled:
@@ -711,6 +922,8 @@ class RouterEngine:
                 embed_model=embed_model,
                 response_max_size=cache_response_max_size,
                 persistent_cache_manager=persistent_cache_manager,
+                cache_stats_enabled=cache_stats_enabled,
+                cache_stats_retention_hours=cache_stats_retention_hours,
             )
         else:
             self.semantic_cache = None
@@ -742,6 +955,80 @@ class RouterEngine:
 
         invalidate_provider_cache()
         logger.info("Router caches invalidated")
+
+    async def refresh_models(self, cleanup: bool | None = None) -> dict[str, Any]:
+        """Refresh model list and update availability.
+
+        Args:
+            cleanup: If True, mark missing models as inactive. If None, use settings.model_cleanup_enabled.
+
+        Returns:
+            Dictionary with counts and changes.
+        """
+        if cleanup is None:
+            cleanup = settings.model_cleanup_enabled
+
+        available_models = await self.client.list_models()
+        available_names = {m.name for m in available_models}
+
+        with get_session() as session:
+            # Update last_seen for active models
+            profiles = session.query(ModelProfile).all()
+            changes = {"added": 0, "removed": 0, "updated": 0}
+            for profile in profiles:
+                if profile.name in available_names:
+                    if not profile.active or profile.last_seen is None:
+                        profile.active = True
+                        profile.last_seen = datetime.now(UTC)
+                        changes["updated"] += 1
+                    else:
+                        # Update last_seen anyway
+                        profile.last_seen = datetime.now(UTC)
+                else:
+                    if cleanup and profile.active:
+                        profile.active = False
+                        changes["removed"] += 1
+            session.commit()
+
+            # Count new models not in profiles
+            existing_names = {p.name for p in profiles}
+            logger.debug(f"Existing names: {existing_names}, available names: {available_names}")
+            new_models = [m for m in available_models if m.name not in existing_names]
+            changes["added"] = len(new_models)
+
+            # Trigger profiling for new models if auto-profile enabled
+            if new_models and settings.model_auto_profile_enabled:
+                logger.info(f"Auto-profiling {len(new_models)} new models")
+                # Note: profile_all_models will only profile new models by default
+                await profile_all_models(self.client)
+
+            logger.info(
+                f"Model refresh completed: {changes['added']} added, "
+                f"{changes['removed']} removed, {changes['updated']} updated"
+            )
+            return changes
+
+    async def reprofile_models(self, force: bool = False) -> dict[str, Any]:
+        """Re-profile all models (or only those needing updates).
+
+        Args:
+            force: If True, re-profile all models regardless of last profile time.
+
+        Returns:
+            Dictionary with profiling results.
+        """
+        logger.info(f"Starting model re-profiling (force={force})")
+        results = await profile_all_models(self.client, force=force)
+        # Update availability (mark all profiled models as active)
+        with get_session() as session:
+            for result in results:
+                profile = session.query(ModelProfile).filter_by(name=result.model_name).first()
+                if profile:
+                    profile.active = True
+                    profile.last_seen = datetime.now(UTC)
+            session.commit()
+        logger.info(f"Re-profiling completed: {len(results)} models profiled")
+        return {"profiled": len(results), "results": [r.model_name for r in results]}
 
     async def select_model(
         self, prompt: str | list[dict], request_obj: Any = None

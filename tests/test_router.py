@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from router.backends.base import ModelInfo
 from router.router import RouterEngine
 
 
@@ -198,3 +199,120 @@ def test_feedback_scoring_boost(router, sample_profiles):
     # Llama3 should win easily due to +2.0 boost vs -2.0 penalty
     assert scores["llama3"]["score"] > scores["mistral"]["score"]
     assert scores["llama3"]["bonus"] > scores["mistral"]["bonus"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_models_new_models(mock_client, router, mocker):
+    """Test refresh_models with new models."""
+    mock_client.list_models.return_value = [
+        ModelInfo(name="model1", size=1000000),
+        ModelInfo(name="model2", size=2000000),
+    ]
+    # Mock database session
+    mock_session = mocker.MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    mock_query = mock_session.query.return_value
+    mock_query.all.return_value = []  # No existing profiles
+    mocker.patch("router.router.get_session", return_value=mock_session)
+    # Mock settings
+    mocker.patch("router.router.settings.model_cleanup_enabled", False)
+    mocker.patch("router.router.settings.model_auto_profile_enabled", False)
+
+    changes = await router.refresh_models()
+    assert changes["added"] == 2
+    assert changes["removed"] == 0
+    assert changes["updated"] == 0
+    # Commit is always called after checking profiles
+    mock_session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_models_existing_active(mock_client, router, mocker):
+    """Test refresh_models with existing active models."""
+    from router.models import ModelProfile
+
+    mock_client.list_models.return_value = [
+        ModelInfo(name="model1", size=1000000),
+    ]
+    # Mock existing profile that is active
+    mock_profile = mocker.MagicMock(spec=ModelProfile)
+    mock_profile.name = "model1"
+    mock_profile.active = True
+    mock_profile.last_seen = None  # simulate missing last_seen
+    mock_session = mocker.MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    mock_query = mocker.MagicMock()
+    mock_session.query.return_value = mock_query
+    mock_query.all.return_value = [mock_profile]
+    mocker.patch("router.router.get_session", return_value=mock_session)
+    mocker.patch("router.router.settings.model_cleanup_enabled", False)
+    mocker.patch("router.router.settings.model_auto_profile_enabled", False)
+
+    changes = await router.refresh_models()
+    assert changes["added"] == 0
+    assert changes["removed"] == 0
+    assert changes["updated"] == 1  # last_seen updated
+    mock_session.commit.assert_called_once()
+    assert mock_profile.last_seen is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_models_cleanup(mock_client, router, mocker):
+    """Test refresh_models with cleanup marking missing models inactive."""
+    from router.models import ModelProfile
+
+    mock_client.list_models.return_value = [
+        ModelInfo(name="model1", size=1000000),
+    ]
+    # Two existing profiles, one missing
+    mock_profile1 = MagicMock(spec=ModelProfile)
+    mock_profile1.name = "model1"
+    mock_profile1.active = True
+    mock_profile1.last_seen = None
+    mock_profile2 = MagicMock(spec=ModelProfile)
+    mock_profile2.name = "model2"
+    mock_profile2.active = True
+    mock_profile2.last_seen = None
+    mock_session = mocker.MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    mock_query = mock_session.query.return_value
+    mock_query.all.return_value = [mock_profile1, mock_profile2]
+    mocker.patch("router.router.get_session", return_value=mock_session)
+    mocker.patch("router.router.settings.model_cleanup_enabled", True)
+    mocker.patch("router.router.settings.model_auto_profile_enabled", False)
+
+    changes = await router.refresh_models()
+    assert changes["added"] == 0
+    assert changes["removed"] == 1  # model2 marked inactive
+    assert changes["updated"] == 1  # model1 last_seen updated
+    mock_session.commit.assert_called_once()
+    assert not mock_profile2.active
+
+
+@pytest.mark.asyncio
+async def test_reprofile_models(mock_client, router, mocker):
+    """Test reprofile_models calls profile_all_models and updates availability."""
+    from router.models import ModelProfile
+    from router.profiler import ProfileResult
+
+    mock_client.list_models.return_value = [
+        ModelInfo(name="model1", size=1000000),
+    ]
+    # Mock profile_all_models to return a result
+    mock_result = MagicMock(spec=ProfileResult)
+    mock_result.model_name = "model1"
+    mocker.patch("router.router.profile_all_models", AsyncMock(return_value=[mock_result]))
+    # Mock database session
+    mock_session = mocker.MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    mock_query = mock_session.query.return_value
+    mock_profile = MagicMock(spec=ModelProfile)
+    mock_query.filter_by.return_value.first.return_value = mock_profile
+    mocker.patch("router.router.get_session", return_value=mock_session)
+
+    results = await router.reprofile_models()
+    assert results["profiled"] == 1
+    assert results["results"] == ["model1"]
+    mock_session.commit.assert_called_once()
+    assert mock_profile.active
+    assert mock_profile.last_seen is not None

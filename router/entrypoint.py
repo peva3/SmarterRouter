@@ -100,6 +100,9 @@ async def auto_setup():
 
 async def validate_environment():
     """Validate configuration and connections."""
+    import os
+    from pathlib import Path
+
     logger.info("Validating environment...")
 
     # Check for .env in data directory first
@@ -139,6 +142,31 @@ async def validate_environment():
         logger.warning(f"Found {len(results['issues'])} issue(s):")
         for issue in results["issues"]:
             logger.warning(f"  • {issue}")
+
+    # Check database directory permissions
+    try:
+        from router.config import settings
+
+        if "sqlite" in settings.database_url.lower():
+            # Extract file path
+            db_path = settings.database_url.replace("sqlite:///", "").replace("sqlite://", "")
+            if "?" in db_path:
+                db_path = db_path.split("?")[0]
+            db_file = Path(db_path)
+            db_dir = db_file.parent
+            if db_dir.exists():
+                if not os.access(db_dir, os.W_OK):
+                    logger.error(
+                        f"Database directory {db_dir} is not writable by current user. This will cause migration failures."
+                    )
+                    logger.error(
+                        f"Ensure the directory has correct permissions (user {os.getuid()})."
+                    )
+                    # Non-fatal, but will likely cause errors later
+            else:
+                logger.info(f"Database directory {db_dir} does not exist, will be created")
+    except Exception as e:
+        logger.debug(f"Could not check database permissions: {e}")
 
     return results
 

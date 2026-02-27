@@ -33,10 +33,15 @@ services:
       - ./.env:/app/.env:rw
       # Mount a data directory for persistence (safer than mounting individual files)
       # Ensure the ./data directory exists and is writable by the container user (UID 1000).
+      # If running for the first time, create the directory and set permissions:
+      #   mkdir -p ./data && chown 1000:1000 ./data
       - ./data:/app/data:rw
       # Optional: mount tmpfs for temporary files if needed
       - type: tmpfs
         target: /tmp
+    environment:
+      # Use persistent database location matching volume mount
+      - ROUTER_DATABASE_URL=sqlite:///app/data/router.db
     restart: unless-stopped
     networks:
       - smarterrouter-network

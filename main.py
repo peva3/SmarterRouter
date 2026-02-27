@@ -379,6 +379,7 @@ async def background_sync_task():
     provider_db_last_download: float | None = None
     provider_db_failures = 0
     backoff_base = 60  # seconds
+    last_model_poll_time: float | None = None
 
     while True:
         try:
@@ -417,6 +418,23 @@ async def background_sync_task():
                             f"Provider.db download failed (attempt {provider_db_failures}), backing off for {wait_time}s"
                         )
                         # We don't sleep here, we just won't try again until backoff expires
+
+            # Model Polling & Availability Refresh (SmarterRouter 2.1.6+)
+            if settings.model_polling_enabled and app_state.router_engine:
+                now = time.time()
+                if (
+                    last_model_poll_time is None
+                    or (now - last_model_poll_time) >= settings.model_polling_interval
+                ):
+                    logger.debug("Running model availability refresh")
+                    try:
+                        await app_state.router_engine.refresh_models(
+                            cleanup=settings.model_cleanup_enabled
+                        )
+                    except Exception as e:
+                        logger.warning(f"Model refresh failed: {e}")
+                    else:
+                        last_model_poll_time = now
 
             if app_state.backend:
                 # 2. Sync Benchmarks (once per day or on startup)
@@ -1390,6 +1408,50 @@ async def reprofile(
     }
 
 
+@app.post("/admin/models/refresh")
+async def refresh_models(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+    cleanup: bool | None = None,
+):
+    """Refresh model list and update availability (requires admin API key if configured)."""
+    if not app_state.router_engine:
+        return JSONResponse({"error": "Router engine not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    logger.info("Manual model refresh triggered")
+    changes = await app_state.router_engine.refresh_models(cleanup=cleanup)
+
+    return {
+        "status": "success",
+        "changes": changes,
+    }
+
+
+@app.post("/admin/models/reprofile")
+async def reprofile_models(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+    force: bool = False,
+):
+    """Re-profile models using router engine (requires admin API key if configured)."""
+    if not app_state.router_engine:
+        return JSONResponse({"error": "Router engine not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    logger.info(f"Manual model re-profiling triggered (force={force})")
+    results = await app_state.router_engine.reprofile_models(force=force)
+
+    return {
+        "status": "success",
+        "results": results,
+    }
+
+
 @app.post("/admin/cache/invalidate")
 async def invalidate_cache(
     request: Request,
@@ -1414,6 +1476,168 @@ async def invalidate_cache(
         "invalidated": invalidated,
         "model": model,
         "response_cache_only": response_cache_only,
+    }
+
+
+@app.get("/admin/cache/stats/detailed")
+async def get_detailed_cache_stats(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+    window_minutes: int = 60,
+    interval_minutes: int = 5,
+    limit: int = 50,
+):
+    """Get detailed cache analytics including time-series data, top prompts, and model stats."""
+    if not app_state.router_engine or not app_state.router_engine.semantic_cache:
+        return JSONResponse({"error": "Cache not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    cache = app_state.router_engine.semantic_cache
+    result = {}
+
+    # Basic cache stats (already enhanced with analytics)
+    result["basic"] = await cache.get_stats()
+
+    # Time-series data if cache stats enabled
+    if cache.time_series_stats:
+        result["time_series"] = await cache.time_series_stats.get_time_series(
+            interval_minutes=interval_minutes,
+            window_minutes=window_minutes,
+        )
+
+    # Advanced analytics if available
+    if cache.cache_analytics:
+        result["top_prompts"] = await cache.cache_analytics.get_top_prompts(limit=limit)
+        result["model_stats"] = await cache.cache_analytics.get_model_stats()
+        result["eviction_stats"] = await cache.cache_analytics.get_eviction_stats()
+
+    return result
+
+
+@app.post("/admin/cache/clear")
+async def clear_cache(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+    cache_type: str | None = None,
+    model: str | None = None,
+    older_than_hours: int | None = None,
+):
+    """Clear cache entries selectively."""
+    if not app_state.router_engine or not app_state.router_engine.semantic_cache:
+        return JSONResponse({"error": "Cache not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    cache = app_state.router_engine.semantic_cache
+    if not cache.cache_analytics:
+        return JSONResponse(
+            {"error": "Cache analytics not available (cache stats disabled?)"},
+            status_code=503,
+        )
+
+    cleared = await cache.cache_analytics.clear_cache(
+        cache_type=cache_type,
+        model=model,
+        older_than_hours=older_than_hours,
+    )
+
+    return {
+        "cleared": cleared,
+        "cache_type": cache_type,
+        "model": model,
+        "older_than_hours": older_than_hours,
+    }
+
+
+@app.post("/admin/cache/warm")
+async def warm_cache(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+):
+    """Pre-warm cache with provided prompts."""
+    if not app_state.router_engine or not app_state.router_engine.semantic_cache:
+        return JSONResponse({"error": "Cache not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    # Parse request body
+    try:
+        body = await request.json()
+        prompts = body.get("prompts", [])
+        model = body.get("model")
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Invalid request body: {str(e)}"},
+            status_code=400,
+        )
+
+    if not prompts:
+        return JSONResponse(
+            {"error": "At least one prompt must be provided in 'prompts' array"},
+            status_code=400,
+        )
+
+    cache = app_state.router_engine.semantic_cache
+    if not cache.cache_analytics:
+        return JSONResponse(
+            {"error": "Cache analytics not available (cache stats disabled?)"},
+            status_code=503,
+        )
+
+    # Limit number of prompts to prevent abuse
+    max_prompts = 1000
+    if len(prompts) > max_prompts:
+        prompts = prompts[:max_prompts]
+
+    result = await cache.cache_analytics.warm_cache(
+        prompts=prompts,
+        model=model,
+    )
+
+    return result
+
+
+@app.post("/admin/cache/evict")
+async def evict_cache(
+    request: Request,
+    _: Annotated[bool, Depends(verify_admin_token)],
+    config: Annotated[Settings, Depends(get_settings)],
+    model: str | None = None,
+    count: int = 1,
+):
+    """Manually trigger cache eviction (LRU or by model)."""
+    if not app_state.router_engine or not app_state.router_engine.semantic_cache:
+        return JSONResponse({"error": "Cache not initialized"}, status_code=503)
+
+    await rate_limit_request(request, config, is_admin=True)
+
+    cache = app_state.router_engine.semantic_cache
+
+    # If model specified, evict entries for that model
+    if model:
+        # Use existing invalidate_response for model-specific eviction
+        invalidated = await cache.invalidate_response(model)
+        return {
+            "evicted": invalidated,
+            "model": model,
+            "note": "Response cache entries evicted for model",
+        }
+
+    # Otherwise evict oldest entries from each cache
+    if count < 1:
+        count = 1
+    elif count > 100:
+        count = 100  # Limit to prevent abuse
+
+    evicted = await cache.evict_oldest(count=count)
+    return {
+        "evicted": evicted,
+        "model": None,
+        "note": f"Evicted oldest {count} entries from each cache",
     }
 
 

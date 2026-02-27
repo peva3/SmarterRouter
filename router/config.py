@@ -81,6 +81,13 @@ class Settings(BaseSettings):
         return values
 
     polling_interval: int = Field(default=60)
+    # Model Polling & Hot‑Swap (SmarterRouter 2.1.6+)
+    model_polling_enabled: bool = Field(default=True)  # Enable automatic model discovery
+    model_polling_interval: int = Field(default=60)  # Seconds between model availability checks
+    model_cleanup_enabled: bool = Field(
+        default=False
+    )  # Mark missing models as inactive (requires schema migration)
+    model_auto_profile_enabled: bool = Field(default=True)  # Automatically profile new models
     profile_timeout: int = Field(default=90)  # Increased to 90s for larger models like 14B+
     generation_timeout: int = Field(
         default=120
@@ -168,6 +175,10 @@ class Settings(BaseSettings):
     # Persistent Cache (Semantic Cache V2) settings
     persistent_cache_enabled: bool = Field(default=True)  # Enable persistent disk caching
     persistent_cache_max_age_days: int = Field(default=7)  # Maximum age of cache entries to keep
+
+    # Enhanced Cache Statistics & Analytics (SmarterRouter 2.1.6+)
+    cache_stats_enabled: bool = Field(default=True)  # Enable enhanced cache statistics
+    cache_stats_retention_hours: int = Field(default=24)  # Hours to keep time-series data
 
     # VRAM Monitoring & Management
     vram_monitor_enabled: bool = Field(

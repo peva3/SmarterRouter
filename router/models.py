@@ -31,6 +31,9 @@ class ModelProfile(Base):
     first_seen: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # Model availability tracking (SmarterRouter 2.1.6+)
+    active: Mapped[bool] = mapped_column(Integer, default=1)  # SQLite uses Integer for Boolean
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # New capabilities
     vision: Mapped[bool] = mapped_column(Integer, default=0)  # SQLite uses Integer for Boolean

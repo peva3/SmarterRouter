@@ -311,6 +311,14 @@ ROUTER_CACHE_RESPONSE_MAX_SIZE=200
 # Note: Exact hash caching works without this setting
 ROUTER_EMBED_MODEL=
 
+# Enable enhanced cache statistics collection (default: true)
+# Tracks time-series events, per-model cache counts, and provides analytics via admin endpoints
+ROUTER_CACHE_STATS_ENABLED=true
+
+# Retention period for time-series cache statistics in hours (default: 24)
+# Older data is automatically cleaned up to prevent unbounded growth
+ROUTER_CACHE_STATS_RETENTION_HOURS=24
+
 # =============================================================================
 # VRAM MONITORING & MANAGEMENT
 # =============================================================================
@@ -358,4 +366,24 @@ ROUTER_VRAM_UNLOAD_STRATEGY=lru
 # Default VRAM estimate for models that haven't been profiled (GB)
 # Used for capacity planning when vram_required_gb is unknown
 ROUTER_VRAM_DEFAULT_ESTIMATE_GB=8.0
+
+# =============================================================================
+# MODEL DISCOVERY & HOT‑SWAP
+# =============================================================================
+
+# Enable periodic model polling (default: true)
+# Automatically detects newly added models without restarting the router
+ROUTER_MODEL_POLLING_ENABLED=true
+
+# Model polling interval in seconds (default: 60)
+# How often to check for new models from the backend
+ROUTER_MODEL_POLLING_INTERVAL=60
+
+# Mark missing models as inactive (default: false)
+# When a model is no longer available, mark it inactive instead of deleting
+ROUTER_MODEL_CLEANUP_ENABLED=false
+
+# Automatically profile newly discovered models (default: false)
+# Profiles new models immediately after detection (requires model_polling_enabled)
+ROUTER_MODEL_AUTO_PROFILE_ENABLED=false
 

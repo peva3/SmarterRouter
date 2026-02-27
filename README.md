@@ -132,6 +132,14 @@ See [External Provider Setup](docs/external-providers.md) for complete instructi
 
 ---
 
+## Latest Features (v2.1.6)
+
+- **Live Model Hot‑Swap**: Add or remove models without restarting the router. Automatic discovery, optional auto‑profiling, and cleanup of missing models.
+- **Enhanced Cache Analytics**: Detailed time‑series statistics, per‑model cache counts, and advanced monitoring via new admin endpoints.
+- **Improved Performance**: Optimized cache statistics collection and parallel model polling.
+
+---
+
 ## What Gets Automated?
 
 - ✅ **Model discovery** - Automatically finds all available models from your backend

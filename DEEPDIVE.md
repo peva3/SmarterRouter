@@ -460,6 +460,31 @@ This optimization prevents redundant database queries on every routing decision 
 | `ROUTER_CACHE_RESPONSE_MAX_SIZE` | 200 | Max response cache entries |
 | `ROUTER_EMBED_MODEL` | - | Embedding model for semantic matching |
 
+### 5.3 Enhanced Cache Statistics & Model Hot‑Swap
+
+#### Enhanced Cache Statistics
+SmarterRouter 2.1.6 introduces comprehensive cache analytics and time‑series tracking:
+- **Time‑series events**: Cache hits, misses, similarity hits, evictions, and embedding cache events are recorded with timestamps.
+- **Per‑model breakdown**: Cache counts, access patterns, and eviction reasons tracked per model.
+- **Real‑time analytics**: Hit rates, similarity hit rates, and adaptive threshold adjustments monitored.
+- **New admin endpoints**: `/admin/cache/stats`, `/admin/cache/analytics`, `/admin/cache/reset`, `/admin/cache/series`.
+
+#### Model Hot‑Swap / Live Reload
+Dynamic model management enables adding or removing models without restarting the router:
+- **Live model discovery**: Periodic polling (`ROUTER_MODEL_POLLING_INTERVAL`) detects newly added models.
+- **Automatic profiling**: Optional auto‑profiling of new models (`ROUTER_MODEL_AUTO_PROFILE_ENABLED`).
+- **Cleanup of missing models**: Marks missing models as inactive (`ROUTER_MODEL_CLEANUP_ENABLED`).
+- **New admin endpoints**: `/admin/models/refresh` (trigger manual refresh), `/admin/models/reprofile` (re‑profile models).
+- **Database schema**: Added `active` (boolean) and `last_seen` (datetime) columns to `model_profiles`.
+
+#### Configuration Updates
+- `ROUTER_CACHE_STATS_ENABLED` (default: true) – enable cache statistics collection.
+- `ROUTER_CACHE_STATS_RETENTION_HOURS` (default: 24) – time‑series retention.
+- `ROUTER_MODEL_POLLING_ENABLED` (default: true) – enable periodic model polling.
+- `ROUTER_MODEL_POLLING_INTERVAL` (default: 60) – polling interval in seconds.
+- `ROUTER_MODEL_CLEANUP_ENABLED` (default: false) – mark missing models inactive.
+- `ROUTER_MODEL_AUTO_PROFILE_ENABLED` (default: false) – auto‑profile new models.
+
 ---
 
 ## 6. API Reference

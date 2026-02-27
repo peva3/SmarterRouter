@@ -33,6 +33,7 @@ services:
       - ROUTER_OLLAMA_URL=http://localhost:11434  # Not used but required by some components
       - ROUTER_HOST=0.0.0.0
       - ROUTER_PORT=11436
+      - ROUTER_DATABASE_URL=sqlite:///app/data/router.db  # Persistent database location
       
       # Enable external provider routing
       - ROUTER_EXTERNAL_PROVIDERS_ENABLED=true
@@ -54,6 +55,8 @@ services:
       - ./.env:/app/.env:rw
       # Persist provider.db and SQLite databases
       # Ensure the ./data directory exists and is writable by the container user (UID 1000).
+      # If running for the first time, create the directory and set permissions:
+      #   mkdir -p ./data && chown 1000:1000 ./data
       - ./data:/app/data:rw
       # Optional: mount logs directory
       - ./logs:/app/logs:rw

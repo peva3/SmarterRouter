@@ -1,3 +1,55 @@
+## [2.1.6] - 2026-02-27
+
+### Enhanced Cache Statistics & API
+
+#### Detailed Cache Analytics
+- **Time-series tracking**: Cache hits, misses, similarity hits, evictions, and embedding cache events tracked with timestamps
+- **Multi-dimensional metrics**: Per-model cache counts, access patterns, and eviction reasons
+- **Real-time analytics**: Cache hit rates, similarity hit rates, and adaptive threshold adjustments
+
+#### New Admin Endpoints
+- `GET /admin/cache/stats` - Detailed cache statistics with time-series data
+- `GET /admin/cache/analytics` - Advanced analytics including per-model breakdowns
+- `POST /admin/cache/reset` - Reset cache statistics (preserves cache data)
+- `GET /admin/cache/series` - Raw time-series data for external monitoring
+
+#### Configuration Settings
+- `ROUTER_CACHE_STATS_ENABLED` - Enable/disable cache statistics collection (default: true)
+- `ROUTER_CACHE_STATS_RETENTION_HOURS` - Time-series retention period (default: 24)
+
+### Model Hot‑Swap / Live Reload
+
+#### Dynamic Model Management
+- **Live model discovery**: Automatically detects newly added models without restart
+- **Automatic profiling**: Optionally profiles new models on detection (`ROUTER_MODEL_AUTO_PROFILE_ENABLED`)
+- **Cleanup of missing models**: Marks missing models as inactive (`ROUTER_MODEL_CLEANUP_ENABLED`)
+
+#### New Admin Endpoints
+- `POST /admin/models/refresh` - Trigger immediate model refresh
+- `POST /admin/models/reprofile` - Re-profile all models (or only those needing updates)
+
+#### Configuration Settings
+- `ROUTER_MODEL_POLLING_ENABLED` - Enable periodic model polling (default: true)
+- `ROUTER_MODEL_POLLING_INTERVAL` - Polling interval in seconds (default: 60)
+- `ROUTER_MODEL_CLEANUP_ENABLED` - Mark missing models as inactive (default: false)
+- `ROUTER_MODEL_AUTO_PROFILE_ENABLED` - Auto-profile new models (default: false)
+
+#### Database Schema Updates
+- Added `active` (boolean) and `last_seen` (datetime) columns to `model_profiles` table
+- Existing profiles automatically marked as active on upgrade
+
+### Performance Optimizations
+- **Cache statistics overhead reduced**: Time-series recording uses batched writes
+- **Model polling optimized**: Parallel model discovery and profiling
+- **Database queries optimized**: Reduced contention with proper session management
+
+### Backward Compatibility
+- All existing configurations continue to work unchanged
+- New features are opt-in via configuration (defaults preserve existing behavior)
+- Database migration automatically adds new columns with safe defaults
+
+---
+
 ## [2.1.5] - 2026-02-26
 
 ### Semantic Cache V2: Complete Four-Phase Implementation

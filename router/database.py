@@ -131,6 +131,7 @@ def _run_migrations() -> None:
         # Get existing columns
         result = conn.execute(text("PRAGMA table_info(model_profiles)"))
         existing_columns = {row[1] for row in result.fetchall()}
+        logger.info(f"Existing model_profiles columns: {sorted(existing_columns)}")
 
         # Add adaptive_timeout_used column if missing
         if "adaptive_timeout_used" not in existing_columns:
@@ -143,6 +144,49 @@ def _run_migrations() -> None:
             logger.info("Adding column: profiling_token_rate")
             conn.execute(text("ALTER TABLE model_profiles ADD COLUMN profiling_token_rate FLOAT"))
             conn.commit()
+
+        # Add active column if missing (SmarterRouter 2.1.6+)
+        if "active" not in existing_columns:
+            logger.info("Adding column: active")
+            try:
+                conn.execute(text("ALTER TABLE model_profiles ADD COLUMN active INTEGER DEFAULT 1"))
+                conn.commit()
+                logger.info("Successfully added active column")
+            except Exception as e:
+                logger.error(f"Failed to add active column: {e}")
+                # Continue - maybe column already exists with different definition
+
+        # Add last_seen column if missing (SmarterRouter 2.1.6+)
+        if "last_seen" not in existing_columns:
+            logger.info("Adding column: last_seen")
+            try:
+                conn.execute(text("ALTER TABLE model_profiles ADD COLUMN last_seen DATETIME"))
+                conn.commit()
+                logger.info("Successfully added last_seen column")
+            except Exception as e:
+                logger.error(f"Failed to add last_seen column: {e}")
+                # Continue
+
+        # Verify columns were added
+        result = conn.execute(text("PRAGMA table_info(model_profiles)"))
+        final_columns = {row[1] for row in result.fetchall()}
+        logger.info(f"Final model_profiles columns: {sorted(final_columns)}")
+        if "active" not in final_columns:
+            logger.error("Active column still missing after migration attempt")
+            raise RuntimeError(
+                "Database migration failed: 'active' column missing in model_profiles table"
+            )
+        if "last_seen" not in final_columns:
+            logger.warning("Last_seen column still missing after migration attempt (optional)")
+
+        # Ensure active column has proper values
+        if "active" in final_columns:
+            try:
+                conn.execute(text("UPDATE model_profiles SET active = 1 WHERE active IS NULL"))
+                conn.commit()
+                logger.info("Updated existing rows with active=1")
+            except Exception as e:
+                logger.error(f"Failed to update active column: {e}")
 
         # Add extra_data column to model_benchmarks if missing (for ArtificialAnalysis)
         result = conn.execute(
