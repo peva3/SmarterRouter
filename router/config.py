@@ -80,10 +80,10 @@ class Settings(BaseSettings):
 
         return values
 
-    polling_interval: int = Field(default=60)
+    polling_interval: int = Field(default=300)
     # Model Polling & Hot‑Swap (SmarterRouter 2.1.6+)
     model_polling_enabled: bool = Field(default=True)  # Enable automatic model discovery
-    model_polling_interval: int = Field(default=60)  # Seconds between model availability checks
+    model_polling_interval: int = Field(default=300)  # Seconds between model availability checks
     model_cleanup_enabled: bool = Field(
         default=False
     )  # Mark missing models as inactive (requires schema migration)

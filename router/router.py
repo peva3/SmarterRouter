@@ -1249,7 +1249,7 @@ Select the model that best matches the user's prompt needs."""
             )
 
         analysis = self._analyze_prompt(prompt, request_obj)
-        logger.info(f"Prompt analysis: {analysis}")
+        logger.debug(f"Prompt analysis: {analysis}")
 
         # Gather model selection frequencies for diversity penalty if cache enabled
         model_frequencies: dict[str, float] = {}
@@ -1302,7 +1302,7 @@ Select the model that best matches the user's prompt needs."""
             }
             if vision_models:
                 candidates_filter &= vision_models
-                logger.info(f"Vision detected. Filtering candidates: {candidates_filter}")
+                logger.debug(f"Vision detected. Filtering candidates: {candidates_filter}")
             else:
                 logger.warning("Vision task detected but no vision models found!")
 
@@ -1328,7 +1328,7 @@ Select the model that best matches the user's prompt needs."""
             # Fallback: if no specific tool models, allow all but warn
             if tool_models:
                 candidates_filter &= tool_models
-                logger.info(f"Tool use detected. Filtering candidates: {candidates_filter}")
+                logger.debug(f"Tool use detected. Filtering candidates: {candidates_filter}")
 
         if not candidates_filter:
             # If we filtered everything out, reset to all models

@@ -147,6 +147,42 @@ class AppState:
         self.requests_by_category: dict[str, int] = {}
 
 
+async def get_available_models_with_cache(timeout: float = 10.0) -> list:
+    """Get available models with caching to reduce backend API calls.
+    Uses a global cache with 10-second TTL.
+
+    Args:
+        timeout: Maximum time to wait for backend if cache is stale
+
+    Returns:
+        List of ModelInfo objects from cache or fresh backend call
+    """
+    now = time.time()
+
+    # Check cache first
+    if (
+        app_state.model_list_cache
+        and (now - app_state.model_list_cache_time) < app_state.MODEL_LIST_CACHE_TTL
+    ):
+        logger.debug("Using cached model list (age: %.1fs)", now - app_state.model_list_cache_time)
+        return app_state.model_list_cache
+
+    # Cache miss or stale - fetch fresh models
+    logger.debug("Fetching fresh model list from backend (cache expired or empty)")
+
+    if not app_state.backend:
+        logger.error("No backend available")
+        return []
+
+    models = await list_models_with_timeout(app_state.backend, timeout=timeout)
+
+    # Update cache
+    app_state.model_list_cache = models
+    app_state.model_list_cache_time = now
+
+    return models
+
+
 app_state = AppState()
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
@@ -763,20 +799,22 @@ async def chat_completions(
 
             reasoning = f"User-specified model override: {selected_model}"
             confidence = 1.0
-            logger.info(f"Model override: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
+            logger.debug(
+                f"Model override: {selected_model}, prompt: {sanitize_for_logging(prompt)}"
+            )
         else:
             # Pass full request object for capability detection
             last_content = messages[-1].content
             if last_content is None:
                 last_content = ""
             routing_result = await app_state.router_engine.select_model(
-                last_content, validated_request
+                last_content, validated_request, available_models=available_models
             )
             selected_model = routing_result.selected_model
             reasoning = routing_result.reasoning
             confidence = routing_result.confidence
             # Use sanitized logging
-            logger.info(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
+            logger.debug(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
         logger.error(f"Routing failed: {e}")
         models = await list_models_with_timeout(app_state.backend)

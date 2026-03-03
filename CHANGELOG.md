@@ -1,3 +1,25 @@
+## [2.1.8] - 2026-03-03
+
+### Performance Optimizations
+
+#### Reduced Backend API Calls
+- **Model list caching**: Added 10-second TTL cache for `list_models()` calls, eliminating ~100-500ms latency per request (router/router.py:33-155, main.py:125-184)
+- **Router engine accepts pre-fetched models**: `select_model()` now accepts optional `available_models` parameter to avoid redundant backend calls (router/router.py:1064-1079)
+
+#### Lower Resource Consumption
+- **Reduced model polling frequency**: Default intervals increased from 60s to 300s (5 minutes) to reduce background CPU/network overhead (router/config.py:83,86)
+- **Lowered logging verbosity**: Per-request routing logs (prompt analysis, vision/tool detection, model override) changed from INFO to DEBUG level, significantly reducing disk I/O in production (router/router.py:1256,1309,1335; main.py:807,820)
+
+#### Improved Benchmark Coverage
+- **Provider.db model name normalization**: Added fallback fuzzy matching in `ProviderDB.get_benchmarks_for_models()` to match local model names against external provider.db entries using normalized names (lowercase, stripped special characters). This improves benchmark coverage for OpenAI, Anthropic, and other external models when used through provider.db (router/provider_db.py:144-198)
+
+### Backward Compatibility
+- All performance improvements are fully backward compatible
+- No configuration changes required (uses sensible defaults)
+- Existing environment variables continue to work unchanged
+
+---
+
 ## [2.1.7] - 2026-02-27
 
 ### Critical Bug Fixes & Stability Improvements
