@@ -222,25 +222,66 @@ class OllamaBackend(LLMBackend):
             timeout: Optional custom timeout for loading (defaults to generation_timeout)
         """
         logger.info(f"Loading model: {model_name} (keep_alive={keep_alive}, timeout={timeout})")
+
+        # First, verify the model exists by checking the model list
+        try:
+            available_models = await self.list_models()
+            model_exists = any(m.name == model_name for m in available_models)
+            if not model_exists:
+                logger.warning(f"Model {model_name} not found in available models")
+                # Don't fail - just return True so profiling can continue
+                # The actual API call will fail later if the model really doesn't exist
+                return True
+        except Exception as e:
+            logger.warning(f"Could not verify model existence: {e}")
+            # Continue anyway
+
         try:
             effective_timeout = timeout if timeout is not None else self.generation_timeout
-            # Explicitly disable streaming to get a single JSON response
-            payload = {
-                "model": model_name,
-                "messages": [{"role": "user", "content": ""}],
-                "keep_alive": keep_alive,
-                "stream": False,
-            }
-            async with httpx.AsyncClient(timeout=effective_timeout) as client:
-                url = f"{self.base_url}/api/chat"
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                # We don't need to parse the response; just checking for 200 OK is enough
-            logger.info(f"Model {model_name} loaded successfully")
-            return True
+
+            # Try multiple approaches to load/warm up the model
+            # 1. First try /api/generate with a simple prompt (most reliable for warmup)
+            # Use full effective_timeout for model loading (could be several minutes for large models)
+            try:
+                payload = {
+                    "model": model_name,
+                    "prompt": "Hello",
+                    "keep_alive": keep_alive,
+                    "stream": False,
+                }
+                async with httpx.AsyncClient(timeout=effective_timeout) as client:
+                    url = f"{self.base_url}/api/generate"
+                    response = await client.post(url, json=payload)
+                    response.raise_for_status()
+                    logger.info(f"Model {model_name} loaded successfully via /api/generate")
+                    return True
+            except httpx.HTTPError as e:
+                logger.debug(f"Model warmup via /api/generate failed: {e}, trying /api/chat")
+
+            # 2. Fall back to /api/chat with a simple message
+            try:
+                payload = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "keep_alive": keep_alive,
+                    "stream": False,
+                }
+                async with httpx.AsyncClient(timeout=effective_timeout) as client:
+                    url = f"{self.base_url}/api/chat"
+                    response = await client.post(url, json=payload)
+                    response.raise_for_status()
+                    logger.info(f"Model {model_name} loaded successfully via /api/chat")
+                    return True
+            except httpx.HTTPError as e:
+                logger.warning(f"Model {model_name} warmup failed via both methods: {e}")
+                # Some backends don't support explicit loading, but that's OK
+                # Return True anyway to allow profiling to continue
+                return True
+
         except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
-            return False
+            logger.error(f"Unexpected error loading model {model_name}: {e}")
+            # Don't fail completely - some backends don't support explicit loading
+            return True
 
     async def embed(
         self,

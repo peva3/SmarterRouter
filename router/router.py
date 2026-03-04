@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from router.backends.base import LLMBackend
+from router.backends.base import LLMBackend, ModelInfo
 from router.benchmark_db import (
     get_benchmarks_for_models,
     invalidate_all_caches,
@@ -29,12 +29,23 @@ logger = logging.getLogger(__name__)
 
 _PROFILE_CACHE_TTL = 60.0
 
+# Cache for merged benchmarks (local + external) to avoid repeated DB/network calls
+_MERGED_BENCHMARKS_CACHE: dict[frozenset, tuple[float, list[dict]]] = {}
+_MERGED_BENCHMARKS_CACHE_TTL = 300.0  # 5 minutes
+
+# Cache for merged benchmarks (local + external) to avoid repeated DB/network calls
+_MERGED_BENCHMARKS_CACHE: dict[frozenset, tuple[float, list[dict]]] = {}
+_MERGED_BENCHMARKS_CACHE_TTL = 300.0  # 5 minutes
+
+# Cache for prompt analysis to avoid repeated computation
+_PROMPT_ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
+_PROMPT_ANALYSIS_CACHE_TTL = 300.0  # 5 minutes
+
 
 def get_benchmarks_for_models_with_external(
     model_names: list[str],
 ) -> list[dict]:
-    """
-    Get benchmarks for models from both local router.db and provider.db.
+    """Get benchmarks for models from both local router.db and provider.db.
 
     This function merges benchmark data from:
     1. Local router.db - for Ollama models
@@ -42,6 +53,23 @@ def get_benchmarks_for_models_with_external(
 
     Returns a list of benchmark dicts compatible with _calculate_combined_scores.
     """
+
+    # Check merged cache first
+    cache_key = frozenset(model_names)
+    now = time.monotonic()
+    if cache_key in _MERGED_BENCHMARKS_CACHE:
+        cached_time, cached_result = _MERGED_BENCHMARKS_CACHE[cache_key]
+        if (now - cached_time) < _MERGED_BENCHMARKS_CACHE_TTL:
+            logger.debug(f"Using cached merged benchmarks for {len(model_names)} models (age: {now - cached_time:.1f}s)")
+            return cached_result
+    # Check merged cache first
+    cache_key = frozenset(model_names)
+    now = time.monotonic()
+    if cache_key in _MERGED_BENCHMARKS_CACHE:
+        cached_time, cached_result = _MERGED_BENCHMARKS_CACHE[cache_key]
+        if (now - cached_time) < _MERGED_BENCHMARKS_CACHE_TTL:
+            logger.debug(f"Using cached merged benchmarks for {len(model_names)} models (age: {now - cached_time:.1f}s)")
+            return cached_result
     # Get local benchmarks (from router.db)
     local_benchmarks = get_benchmarks_for_models(model_names)
 
@@ -81,7 +109,10 @@ def get_benchmarks_for_models_with_external(
         if model_name not in merged and model_name in external_benchmarks:
             merged[model_name] = external_benchmarks[model_name]
 
-    return list(merged.values())
+    # Store in cache before returning
+    result = list(merged.values())
+    _MERGED_BENCHMARKS_CACHE[cache_key] = (now, result)
+    return result
 
 
 _profiles_cache: list[dict] | None = None
@@ -211,8 +242,8 @@ class SemanticCache:
         self.cache_stats_enabled = cache_stats_enabled
 
         if self.cache_stats_enabled:
-            self.time_series_stats = TimeSeriesStats(retention_hours=cache_stats_retention_hours)
-            self.cache_analytics = CacheAnalytics(self)
+            self.time_series_stats: TimeSeriesStats | None = TimeSeriesStats(retention_hours=cache_stats_retention_hours)
+            self.cache_analytics: CacheAnalytics | None = CacheAnalytics(self)
         else:
             self.time_series_stats = None
             self.cache_analytics = None
@@ -894,7 +925,7 @@ class SemanticCache:
             # Get time-series stats for last hour
             assert self.time_series_stats is not None
             time_series = await self.time_series_stats.get_stats(window_minutes=60)
-            analytics = {
+            analytics: dict[str, Any] = {
                 "time_series": time_series,
                 "top_prompts": await self.cache_analytics.get_top_prompts(limit=20),
                 "model_stats": await self.cache_analytics.get_model_stats(),
@@ -930,6 +961,11 @@ class RouterEngine:
         self.cache_stats_enabled = cache_stats_enabled
         self.cache_stats_retention_hours = cache_stats_retention_hours
         self.semantic_cache: SemanticCache | None
+
+        # Model list caching to reduce backend API calls
+        self._models_cache: list[ModelInfo] | None = None
+        self._models_cache_time: float = 0.0
+        self._models_cache_ttl: float = 10.0
 
         if cache_enabled:
             # Create persistent cache manager if enabled
@@ -999,13 +1035,30 @@ class RouterEngine:
         if cleanup is None:
             cleanup = settings.model_cleanup_enabled
 
+        # Use cached model list if available
+        now = time.monotonic()
+        if self._models_cache and (now - self._models_cache_time) < self._models_cache_ttl:
+            available_models = self._models_cache
+            logger.debug("Using cached model list (age: %.1fs)", now - self._models_cache_time)
+        else:
+            self._models_cache = None
+            self._models_cache_time = 0.0
+            # Invalidate model cache on explicit refresh
+        self._models_cache = None
+        self._models_cache_time = 0.0
         available_models = await self.client.list_models()
+        self._models_cache = available_models
+        self._models_cache_time = now
         available_names = {m.name for m in available_models}
 
         with get_session() as session:
             # Update last_seen for active models
+            # Get all existing profiles in one query
             profiles = session.query(ModelProfile).all()
+            existing_names = {p.name for p in profiles}
             changes = {"added": 0, "removed": 0, "updated": 0}
+
+            # Process existing profiles
             for profile in profiles:
                 if profile.name in available_names:
                     if not profile.active or profile.last_seen is None:
@@ -1019,13 +1072,13 @@ class RouterEngine:
                     if cleanup and profile.active:
                         profile.active = False
                         changes["removed"] += 1
-            session.commit()
 
             # Count new models not in profiles
-            existing_names = {p.name for p in profiles}
             logger.debug(f"Existing names: {existing_names}, available names: {available_names}")
             new_models = [m for m in available_models if m.name not in existing_names]
             changes["added"] = len(new_models)
+
+            session.commit()
 
             # Trigger profiling for new models if auto-profile enabled
             if new_models and settings.model_auto_profile_enabled:
@@ -1075,7 +1128,18 @@ class RouterEngine:
             if cached:
                 return cached
 
-        available_models = await self.client.list_models()
+        # Use cached model list if available
+        now = time.monotonic()
+        if self._models_cache and (now - self._models_cache_time) < self._models_cache_ttl:
+            available_models = self._models_cache
+            logger.debug("Using cached model list (age: %.1fs)", now - self._models_cache_time)
+        else:
+            # Invalidate model cache on explicit refresh
+            self._models_cache = None
+            self._models_cache_time = 0.0
+            available_models = await self.client.list_models()
+            self._models_cache = available_models
+            self._models_cache_time = now
 
         # Apply model filtering if configured
         include = settings.model_filter_include
@@ -1248,8 +1312,26 @@ Select the model that best matches the user's prompt needs."""
                 reasoning="No profiling data available, defaulting to first model",
             )
 
-        analysis = self._analyze_prompt(prompt, request_obj)
-        logger.debug(f"Prompt analysis: {analysis}")
+        # Check prompt analysis cache first
+        prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+        now = time.monotonic()
+
+        if prompt_hash in _PROMPT_ANALYSIS_CACHE:
+            cached_time, cached_analysis = _PROMPT_ANALYSIS_CACHE[prompt_hash]
+            if (now - cached_time) < _PROMPT_ANALYSIS_CACHE_TTL:
+                analysis = cached_analysis
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Using cached prompt analysis (age: {now - cached_time:.1f}s)")
+            else:
+                # Cache expired
+                analysis = self._analyze_prompt(prompt, request_obj)
+                _PROMPT_ANALYSIS_CACHE[prompt_hash] = (now, analysis)
+        else:
+            analysis = self._analyze_prompt(prompt, request_obj)
+            _PROMPT_ANALYSIS_CACHE[prompt_hash] = (now, analysis)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Prompt analysis: {analysis}")
 
         # Gather model selection frequencies for diversity penalty if cache enabled
         model_frequencies: dict[str, float] = {}
@@ -1274,8 +1356,9 @@ Select the model that best matches the user's prompt needs."""
             )
             for m, s in sorted_scores[:8]
         ]
-        logger.info(f"Model scores (top 8): {top5}")
-        logger.info("  (format: model, total_score, base_score, coding, creativity)")
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(f"Model scores (top 8): {top5}")
+            logger.info("  (format: model, total_score, base_score, coding, creativity)")
 
         # Determine dominant category (threshold > 0.5) - but exclude complexity!
         task_categories = {k: v for k, v in analysis.items() if k != "complexity"}
@@ -1302,7 +1385,8 @@ Select the model that best matches the user's prompt needs."""
             }
             if vision_models:
                 candidates_filter &= vision_models
-                logger.debug(f"Vision detected. Filtering candidates: {candidates_filter}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Vision detected. Filtering candidates: {candidates_filter}")
             else:
                 logger.warning("Vision task detected but no vision models found!")
 
@@ -1328,7 +1412,8 @@ Select the model that best matches the user's prompt needs."""
             # Fallback: if no specific tool models, allow all but warn
             if tool_models:
                 candidates_filter &= tool_models
-                logger.debug(f"Tool use detected. Filtering candidates: {candidates_filter}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Tool use detected. Filtering candidates: {candidates_filter}")
 
         if not candidates_filter:
             # If we filtered everything out, reset to all models
@@ -1418,59 +1503,77 @@ Select the model that best matches the user's prompt needs."""
             quality_pref + SCORING_CONFIG["quality_preference_boost"]
         )  # Boost quality signals if preferred
 
+        # Pre-process benchmark names for faster matching
+        processed_benchmarks = {}
+        for bm_name, bm in benchmark_map.items():
+            bm_base = bm_name.split(":")[0].lower().replace("-", "").replace("_", "").replace(".", "")
+            # Store variations for matching
+            processed_benchmarks[bm_name] = {
+                "benchmark": bm,
+                "base": bm_base,
+                "parts": {bm_base, bm_base.split("2")[0] if "2" in bm_base else bm_base}
+            }
+
         normalized_benchmark_map = {}
         for name in model_names:
             # Extract base name - handle versions and quantizations
             base = name.split(":")[0].lower().replace("-", "").replace("_", "").replace(".", "")
-
-            # Also try with just the first part before numbers
-            base.split("2")[0] if "2" in base else base
+            base_variations = [base, base.split("2")[0] if "2" in base else base]
 
             best_match = None
             best_score = 0.0
 
-            for bm_name, bm in benchmark_map.items():
-                bm_base = (
-                    bm_name.split(":")[0].lower().replace("-", "").replace("_", "").replace(".", "")
-                )
-
-                # Exact match
+            # Check for exact matches first
+            for bm_data in processed_benchmarks.values():
+                bm_base = bm_data["base"]
                 if base == bm_base:
-                    best_match = bm
+                    best_match = bm_data["benchmark"]
                     best_score = 100.0
                     break
 
-                # Partial match - check if major model name matches
-                # e.g., "qwen2.5" matches "qwen2.5coder" or "qwen"
-                if base in bm_base or bm_base in base:
-                    score = len(base) / max(len(base), len(bm_base), 1)
-                    if score > best_score:
-                        best_match = bm
-                        best_score = score
-                elif any(part in bm_base for part in base.split() if len(part) > 2):
-                    # Try matching individual parts
-                    for part in [base, base[:4], base[:6]]:
-                        if part in bm_base and len(part) > 2:
-                            best_match = bm
-                            best_score = 0.5
-                            break
+            # If no exact match, check partial matches
+            if not best_match:
+                for bm_data in processed_benchmarks.values():
+                    bm_base = bm_data["base"]
+                    bm_parts = bm_data["parts"]
+
+                    # Check if any variation matches
+                    for var in base_variations:
+                        if var in bm_base or bm_base in var:
+                            score = len(var) / max(len(var), len(bm_base), 1)
+                            if score > best_score:
+                                best_match = bm_data["benchmark"]
+                                best_score = score
+                                break
+
+                    # Check for partial word matches
+                    if not best_match:
+                        for var in base_variations:
+                            for part in [var, var[:4], var[:6]]:
+                                if len(part) > 2 and part in bm_parts:
+                                    best_match = bm_data["benchmark"]
+                                    best_score = 0.5
+                                    break
+                            if best_match:
+                                break
 
             if best_match:
                 normalized_benchmark_map[name] = best_match
 
-        logger.info(
-            f"Benchmark matching: {len(normalized_benchmark_map)}/{len(model_names)} models matched"
-        )
+        if logger.isEnabledFor(logging.INFO):
+            logger.info(
+                f"Benchmark matching: {len(normalized_benchmark_map)}/{len(model_names)} models matched"
+            )
 
-        # Log benchmark match details for each model
-        for name in model_names:
-            bench_match = normalized_benchmark_map.get(name)
-            if bench_match:
-                logger.info(
-                    f"  {name} -> benchmark: reasoning={bench_match.get('reasoning_score')}, coding={bench_match.get('coding_score')}, elo={bench_match.get('elo_rating')}"
-                )
-            else:
-                logger.info(f"  {name} -> NO benchmark match")
+            # Log benchmark match details for each model
+            for name in model_names:
+                bench_match = normalized_benchmark_map.get(name)
+                if bench_match:
+                    logger.info(
+                        f"  {name} -> benchmark: reasoning={bench_match.get('reasoning_score')}, coding={bench_match.get('coding_score')}, elo={bench_match.get('elo_rating')}"
+                    )
+                else:
+                    logger.info(f"  {name} -> NO benchmark match")
 
         # Build model category affinity based on model name patterns
         model_category_affinity = self._build_model_category_affinity(

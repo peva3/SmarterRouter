@@ -43,6 +43,7 @@ That's it! SmarterRouter will:
 - ✅ Discover all your Ollama models automatically
 - ✅ Profile each model for performance on your hardware (first run takes 30-60 min)
 - ✅ Start routing queries to the best model
+- ✅ **New in v2.1.9**: Optimized performance with async GPU I/O, batched queries, and prompt caching
 
 **Access the router at:** `http://localhost:11436`
 

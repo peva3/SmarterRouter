@@ -89,6 +89,56 @@ def get_model_vram_estimate(model_name: str) -> float:
     return estimate
 
 
+def get_model_vram_estimates_batch(model_names: list[str]) -> dict[str, float]:
+    """
+    Get VRAM estimates for multiple models in a single query.
+    Reduces N+1 query pattern when checking multiple models.
+    """
+    import time
+
+    now = time.monotonic()
+    result: dict[str, float] = {}
+    uncached_models: list[str] = []
+
+    # Check cache first
+    for model_name in model_names:
+        if model_name in _VRAM_ESTIMATE_CACHE:
+            estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
+            if (now - timestamp) < _VRAM_CACHE_TTL:
+                result[model_name] = estimate
+            else:
+                uncached_models.append(model_name)
+        else:
+            uncached_models.append(model_name)
+
+    # Fetch uncached models in batch
+    if uncached_models:
+        try:
+            with get_session() as session:
+                # Single query for all uncached models
+                profiles = session.query(ModelProfile).filter(
+                    ModelProfile.name.in_(uncached_models)
+                ).all()
+
+                profile_map = {p.name: p for p in profiles}
+                for model_name in uncached_models:
+                    profile = profile_map.get(model_name)
+                    if profile and profile.vram_required_gb:
+                        estimate = profile.vram_required_gb
+                    else:
+                        estimate = settings.vram_default_estimate_gb
+
+                    result[model_name] = estimate
+                    _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
+        except Exception as e:
+            logger.debug(f"Could not fetch batch VRAM estimates: {e}")
+            # Fallback to individual lookups
+            for model_name in uncached_models:
+                result[model_name] = get_model_vram_estimate(model_name)
+
+    return result
+
+
 def invalidate_vram_estimate_cache(model_name: str | None = None) -> None:
     """
     Invalidate VRAM estimate cache.
@@ -144,6 +194,10 @@ class AppState:
         self.total_requests: int = 0
         self.total_errors: int = 0
         self.requests_by_model: dict[str, int] = {}
+        # Model list caching for performance
+        self.model_list_cache: list = []
+        self.model_list_cache_time: float = 0.0
+        self.MODEL_LIST_CACHE_TTL: float = 10.0
         self.requests_by_category: dict[str, int] = {}
 
 
@@ -231,8 +285,8 @@ async def rate_limit_request(request: Request, config: Settings, is_admin: bool 
 
     # Use lock to prevent race conditions
     async with app_state.rate_limit_lock:
-        # Clean up old requests
-        if client_ip in app_state.rate_limiter:
+        # Only clean up when list gets too large (>1000 entries) to reduce overhead
+        if client_ip in app_state.rate_limiter and len(app_state.rate_limiter[client_ip]) > 1000:
             app_state.rate_limiter[client_ip] = [
                 t for t in app_state.rate_limiter[client_ip] if now - t < 60
             ]
@@ -292,7 +346,7 @@ async def startup_event():
         )
 
         try:
-            available_models = await list_models_with_timeout(app_state.backend)
+            available_models = await get_available_models_with_cache()
 
             # Apply model filtering if configured
             include = settings.model_filter_include
@@ -487,7 +541,7 @@ async def background_sync_task():
                 if should_sync:
                     logger.info("Starting benchmark sync...")
                     # Get available model names to match against benchmarks
-                    models = await list_models_with_timeout(app_state.backend)
+                    models = await get_available_models_with_cache()
 
                     # Apply model filtering if configured
                     include = settings.model_filter_include
@@ -508,7 +562,13 @@ async def background_sync_task():
 
                 # 3. Profile New Models
                 # This will only profile models that haven't been profiled yet
-                await profile_all_models(app_state.backend)
+                try:
+                    await profile_all_models(app_state.backend)
+                except ValueError as e:
+                    if "No models available after filtering" in str(e):
+                        logger.debug(f"No models to profile: {e}")
+                    else:
+                        raise
 
         except Exception as e:
             logger.error(f"Background sync task failed: {e}")
@@ -770,11 +830,16 @@ async def chat_completions(
     if hasattr(app_state, "total_requests"):
         app_state.total_requests += 1
 
+    # Fetch available models once per request (uses cache)
     try:
+        available_models = await get_available_models_with_cache()
+        model_names = [m.name for m in available_models]
+
         # Model override - skip routing and use specified model
         if model_override:
-            available_models = await list_models_with_timeout(app_state.backend)
-            model_names = [m.name for m in available_models]
+            # Use already fetched model_names for validation
+            # (no need to refetch)
+            selected_model = None
 
             # Try exact match first, then partial match
             selected_model = None
@@ -808,7 +873,7 @@ async def chat_completions(
             if last_content is None:
                 last_content = ""
             routing_result = await app_state.router_engine.select_model(
-                last_content, validated_request, available_models=available_models
+                last_content, validated_request
             )
             selected_model = routing_result.selected_model
             reasoning = routing_result.reasoning
@@ -817,7 +882,7 @@ async def chat_completions(
             logger.debug(f"Routed to: {selected_model}, prompt: {sanitize_for_logging(prompt)}")
     except Exception as e:
         logger.error(f"Routing failed: {e}")
-        models = await list_models_with_timeout(app_state.backend)
+        models = await get_available_models_with_cache()
         if models:
             selected_model = models[0].name
             reasoning = "Fallback to first available model"
@@ -903,7 +968,7 @@ async def chat_completions(
 
     # Get available models for fallback
     try:
-        available_models = await list_models_with_timeout(app_state.backend)
+        available_models = await get_available_models_with_cache()
         fallback_list = [m.name for m in available_models if m.name != selected_model]
         # Put selected_model first in retry list
         fallback_list = [selected_model] + fallback_list
@@ -913,44 +978,8 @@ async def chat_completions(
     # Pre-fetch VRAM estimates for all fallback models to avoid N+1 queries
     vram_estimate_map: dict[str, float] = {}
     if app_state.vram_manager:
-        import time
-
-        now = time.monotonic()
-        # First check cache for all models
-        for model_name in fallback_list:
-            if model_name in _VRAM_ESTIMATE_CACHE:
-                estimate, timestamp = _VRAM_ESTIMATE_CACHE[model_name]
-                if (now - timestamp) < _VRAM_CACHE_TTL:
-                    vram_estimate_map[model_name] = estimate
-
-        # Find models not in cache or expired
-        uncached_models = [m for m in fallback_list if m not in vram_estimate_map]
-
-        if uncached_models:
-            # Chunk queries to avoid SQLite parameter limit (999)
-            chunk_size = 250
-            for i in range(0, len(uncached_models), chunk_size):
-                chunk = uncached_models[i : i + chunk_size]
-                with get_session() as session:
-                    profiles = (
-                        session.query(ModelProfile).filter(ModelProfile.name.in_(chunk)).all()
-                    )
-                    for p in profiles:
-                        estimate = (
-                            p.vram_required_gb
-                            if p.vram_required_gb is not None
-                            else config.vram_default_estimate_gb
-                        )
-                        vram_estimate_map[p.name] = estimate
-                        # Update cache
-                        _VRAM_ESTIMATE_CACHE[p.name] = (estimate, now)
-
-        # For models not found in database, use default and cache
-        for model_name in fallback_list:
-            if model_name not in vram_estimate_map:
-                estimate = config.vram_default_estimate_gb
-                vram_estimate_map[model_name] = estimate
-                _VRAM_ESTIMATE_CACHE[model_name] = (estimate, now)
+        # Use batched VRAM estimates function
+        vram_estimate_map = get_model_vram_estimates_batch(fallback_list)
 
     # If cascading is enabled, we might want to ensure we don't just randomly fallback,
     # but that's handled by the router mostly returning the "best" model first.
@@ -1084,7 +1113,11 @@ async def chat_completions(
 
         for tool_call in tool_calls:
             tool_name = tool_call["function"]["name"]
-            tool_args = json.loads(tool_call["function"]["arguments"])
+            try:
+                tool_args = json.loads(tool_call["function"]["arguments"])
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse tool arguments for {tool_name}: {e}")
+                continue
 
             logger.info(f"Executing tool: {tool_name}({tool_args})")
             tool_result = await skills_registry.execute_skill(tool_name, **tool_args)
@@ -1533,23 +1566,28 @@ async def get_detailed_cache_stats(
     await rate_limit_request(request, config, is_admin=True)
 
     cache = app_state.router_engine.semantic_cache
-    result = {}
+    result: dict[str, Any] = {}
 
     # Basic cache stats (already enhanced with analytics)
     result["basic"] = await cache.get_stats()
 
     # Time-series data if cache stats enabled
     if cache.time_series_stats:
-        result["time_series"] = await cache.time_series_stats.get_time_series(
+        time_series_data = await cache.time_series_stats.get_time_series(
             interval_minutes=interval_minutes,
             window_minutes=window_minutes,
         )
+        result["time_series"] = list(time_series_data) if time_series_data else []
 
     # Advanced analytics if available
     if cache.cache_analytics:
-        result["top_prompts"] = await cache.cache_analytics.get_top_prompts(limit=limit)
-        result["model_stats"] = await cache.cache_analytics.get_model_stats()
-        result["eviction_stats"] = await cache.cache_analytics.get_eviction_stats()
+        top_prompts = await cache.cache_analytics.get_top_prompts(limit=limit)
+        model_stats = await cache.cache_analytics.get_model_stats()
+        eviction_stats = await cache.cache_analytics.get_eviction_stats()
+
+        result["top_prompts"] = list(top_prompts) if top_prompts else []
+        result["model_stats"] = dict(model_stats) if model_stats else {}
+        result["eviction_stats"] = dict(eviction_stats) if eviction_stats else {}
 
     return result
 
@@ -1691,7 +1729,7 @@ async def sync_benchmarks_endpoint(
 
     await rate_limit_request(request, config, is_admin=True)
 
-    models = await list_models_with_timeout(app_state.backend)
+    models = await get_available_models_with_cache()
     model_names = [m.name for m in models]
 
     count, matched = await sync_benchmarks(model_names)
@@ -1801,7 +1839,7 @@ async def explain_routing(
 
     try:
         # Get available models
-        available_models = await list_models_with_timeout(app_state.backend)
+        available_models = await get_available_models_with_cache()
         if not available_models:
             return JSONResponse(
                 {"error": {"message": "No models available", "type": "internal_error"}},

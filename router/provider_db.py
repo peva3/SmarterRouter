@@ -137,7 +137,7 @@ class ProviderDB:
             # Truncate to max allowed
             model_ids = model_ids[:999]
         for model_id in model_ids:
-            if not re.match(r"^[a-zA-Z0-9_\-/\.]+$", model_id):
+            if not re.match(r"^[a-zA-Z0-9_\-/\.:]+$", model_id):
                 logger.warning(f"Invalid model_id format: {model_id}")
                 return {}
 

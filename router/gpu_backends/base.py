@@ -1,5 +1,6 @@
 """Base classes and protocols for GPU backends."""
 
+import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -72,3 +73,15 @@ class GPUBackend(Protocol):
                        be marked as unavailable and skipped by manager)
         """
         ...
+
+    async def get_memory_info_async(self) -> list[GPUMemory]:
+        """Async version of get_memory_info.
+
+        Default implementation runs sync version in executor.
+        Backends can override for native async support.
+
+        Returns:
+            List of GPUMemory objects.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.get_memory_info)

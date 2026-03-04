@@ -271,9 +271,9 @@ class CacheAnalytics:
             Dictionary mapping model names to cache statistics
         """
         async with self.semantic_cache._routing_lock:
-            stats = {}
-            model_cache_counts = defaultdict(int)
-            model_access_counts = defaultdict(int)
+            stats: dict[str, dict[str, Any]] = {}
+            model_cache_counts: dict[str, int] = defaultdict(int)
+            model_access_counts: dict[str, int] = defaultdict(int)
 
             # Count cache entries and access counts per model
             for _key, (result, _, _, _, access_count) in self.semantic_cache.cache.items():
@@ -304,7 +304,7 @@ class CacheAnalytics:
         """
         # Return eviction counts collected by SemanticCache
         if hasattr(self.semantic_cache, "_eviction_counts"):
-            return self.semantic_cache._eviction_counts.copy()
+            return dict(self.semantic_cache._eviction_counts.copy())
         return {}
 
     async def clear_cache(

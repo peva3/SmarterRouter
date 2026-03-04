@@ -210,7 +210,7 @@ class ModelProfiler:
 
         try:
             success = await asyncio.wait_for(
-                self.client.load_model(model, keep_alive=-1),
+                self.client.load_model(model, keep_alive=300),  # Keep loaded for 5 minutes for profiling
                 timeout=warmup_timeout,
             )
             if success:
@@ -424,7 +424,7 @@ class ModelProfiler:
         times = [r[1] for r in results]
         tokens = [r[2] for r in results]
 
-        avg_score = sum(scores) / len(scores)
+        avg_score = sum(scores) / len(scores) if scores else 0.0
         total_time = sum(times)
         max_time = max(times)
         total_tokens = sum(tokens)
@@ -482,6 +482,16 @@ class ModelProfiler:
                 tool_calling=self._detect_tool_capability(model),
             )
             self._save_profile(result, vram_gb=None)
+
+            # Try to unload model after profiling to free VRAM
+            try:
+                if hasattr(self.client, 'unload_model'):
+                    await self.client.unload_model(model)
+                    logger.debug(f"Unloaded model {model} after failed screening")
+            except Exception as e:
+                logger.debug(f"Failed to unload model {model} after failed screening: {e}")
+                # Not critical - some backends don't support unloading
+
             return result
 
         # Phase 2: Calculate adaptive timeout based on screening performance
@@ -568,7 +578,7 @@ class ModelProfiler:
                             )
 
         all_times = list(category_times.values())
-        avg_time = sum(all_times) / len(all_times)
+        avg_time = sum(all_times) / len(all_times) if all_times else 0.0
         speed_score = 1.0 - min(avg_time / 30000.0, 1.0)
 
         # Capability Detection
@@ -602,9 +612,18 @@ class ModelProfiler:
             f"creativity={result.creativity:.2f}, "
             f"speed={result.speed:.2f}, vision={result.vision}, tools={result.tool_calling}, "
             f"total={total_score:.2f}, time={elapsed_total:.1f}s"
-            + (f", vram={measured_vram_gb:.2f}GB" if measured_vram_gb else "")
-            + (f", timeout={self.adaptive_timeout:.0f}s" if self.adaptive_timeout else "")
-        )
+             + (f", vram={measured_vram_gb:.2f}GB" if measured_vram_gb else "")
+             + (f", timeout={self.adaptive_timeout:.0f}s" if self.adaptive_timeout else "")
+         )
+
+        # Try to unload model after profiling to free VRAM
+        try:
+            if hasattr(self.client, 'unload_model'):
+                await self.client.unload_model(model)
+                logger.debug(f"Unloaded model {model} after profiling")
+        except Exception as e:
+            logger.debug(f"Failed to unload model {model} after profiling: {e}")
+            # Not critical - some backends don't support unloading
 
         return result
 

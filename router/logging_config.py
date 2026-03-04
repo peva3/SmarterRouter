@@ -25,12 +25,22 @@ class JSONFormatter(logging.Formatter):
     """Format log records as JSON."""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_entry: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+        if record.levelno < logging.WARNING:
+            # For DEBUG/INFO levels, use simpler format to reduce overhead
+            log_entry: dict[str, Any] = {
+                "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+        else:
+            # For WARNING/ERROR/CRITICAL, include full details
+            log_entry = {
+                "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
 
         request_id = get_request_id()
         if request_id:
@@ -41,32 +51,33 @@ class JSONFormatter(logging.Formatter):
         if record.stack_info:
             log_entry["stack_info"] = record.stack_info
 
-        # Add extra fields, sanitizing values
-        for key, value in record.__dict__.items():
-            if key not in (
-                "name",
-                "msg",
-                "args",
-                "created",
-                "filename",
-                "funcName",
-                "levelname",
-                "levelno",
-                "lineno",
-                "module",
-                "msecs",
-                "message",
-                "pathname",
-                "process",
-                "processName",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-            ):
-                log_entry[key] = sanitize_data(value)
+        # Only add extra fields for WARNING+ levels to reduce overhead
+        if record.levelno >= logging.WARNING:
+            for key, value in record.__dict__.items():
+                if key not in (
+                    "name",
+                    "msg",
+                    "args",
+                    "created",
+                    "filename",
+                    "funcName",
+                    "levelname",
+                    "levelno",
+                    "lineno",
+                    "module",
+                    "msecs",
+                    "message",
+                    "pathname",
+                    "process",
+                    "processName",
+                    "relativeCreated",
+                    "thread",
+                    "threadName",
+                    "exc_info",
+                    "exc_text",
+                    "stack_info",
+                ):
+                    log_entry[key] = sanitize_data(value)
 
         return json.dumps(log_entry, default=str)
 

@@ -74,4 +74,11 @@ async def sync_benchmarks(ollama_models: list[str]) -> tuple[int, list[str]]:
     update_sync_status("completed", count)
     logger.info(f"Benchmark sync completed: {count} models synced")
 
+    # Invalidate merged benchmarks cache to force refresh on next request
+    try:
+        from router.router import _MERGED_BENCHMARKS_CACHE
+        _MERGED_BENCHMARKS_CACHE.clear()
+    except ImportError:
+        pass  # Module not loaded yet, cache will be clear on next use
+
     return count, list(matched_models)

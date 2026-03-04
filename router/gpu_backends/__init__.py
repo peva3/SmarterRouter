@@ -128,6 +128,34 @@ class GPUBackendManager:
 
         return all_gpus
 
+    async def get_all_memory_info_async(self) -> list[GPUMemory]:
+        """Async version of get_all_memory_info.
+
+        Uses async backend methods when available to avoid blocking.
+        """
+        all_gpus: list[GPUMemory] = []
+        global_index = 0
+
+        for backend in self.backends:
+            try:
+                # Use async method if available, fallback to sync
+                if hasattr(backend, 'get_memory_info_async'):
+                    gpus = await backend.get_memory_info_async()
+                else:
+                    gpus = backend.get_memory_info()
+
+                for gpu in gpus:
+                    # Assign global index
+                    gpu.index = global_index
+                    global_index += 1
+                    all_gpus.append(gpu)
+            except Exception as e:
+                logger.warning(f"Error getting memory info from {backend.vendor} backend: {e}")
+                # Continue with other backends
+                continue
+
+        return all_gpus
+
     def get_total_vram(self) -> float:
         """Get total VRAM across all detected GPUs.
 

@@ -217,8 +217,12 @@ class VRAMMonitor:
         # Normal path: use GPU backend manager
         if not gpus:
             try:
-                # Get memory info from all GPUs via manager
-                gpus = await loop.run_in_executor(None, self.gpu_manager.get_all_memory_info)
+                # Use async method if available
+                if hasattr(self.gpu_manager, 'get_all_memory_info_async'):
+                    gpus = await self.gpu_manager.get_all_memory_info_async()
+                else:
+                    # Fallback to sync version in executor
+                    gpus = await loop.run_in_executor(None, self.gpu_manager.get_all_memory_info)
             except Exception as e:
                 logger.error(f"Failed to get GPU memory info: {e}")
                 gpus = []

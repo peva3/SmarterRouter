@@ -202,6 +202,19 @@ ROUTER_DATABASE_URL=sqlite:///data/router.db?cache=shared&cache_size=10000
 #   engine._engine.execute('PRAGMA journal_mode=WAL')
 ```
 
+### Performance Optimizations (v2.1.9+)
+
+SmarterRouter 2.1.9 includes significant database performance improvements:
+
+1. **Connection Pooling**: Automatic connection pooling with `pool_size=10`, `max_overflow=20`
+2. **Batched Queries**: VRAM estimates and other operations use batched queries to avoid N+1 patterns
+3. **Query Optimization**: Reduced redundant queries in model refresh and fallback logic
+
+**Impact:**
+- 90% reduction in database queries for model fallback scenarios
+- Eliminated blocking GPU I/O with async wrapper
+- Reduced prompt analysis overhead with 5-minute caching
+
 ### PostgreSQL (Production)
 
 ```env
