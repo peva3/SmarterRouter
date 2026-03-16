@@ -1,197 +1,73 @@
 ## [2.2.0] - 2026-03-16
 
-- **Integrated encrypted API key consumption paths**: Runtime now decrypts encrypted API keys before backend/judge usage so `enc:` values work end-to-end (router/backends/__init__.py, router/backends/external.py, router/judge.py).
-- **Hardened encryption optional dependency behavior**: `router/encryption.py` now degrades gracefully when `cryptography` is unavailable, avoiding import-time crashes in environments without the package.
-- **Repaired newly added test suites with API drift**:
-  - Rebuilt snapshot tests to use current `RouterEngine` APIs and deterministic prompt-analysis snapshots (`tests/test_snapshot_routing.py`).
-  - Rebuilt cache persistence tests on real `SemanticCache` methods (`set/get`, `set_response/get_response`, persistence reload) (`tests/test_cache_persistence.py`).
-  - Rebuilt concurrency stress tests against current cache APIs (`tests/test_concurrency_stress.py`).
-  - Updated backend failover tests for current circuit-breaker semantics and removed invalid backend-registry dependency paths (`tests/test_backend_failover.py`).
-  - Stabilized Ollama integration tests to skip cleanly by default without broken pytest config access (`tests/integration/test_ollama_real.py`).
-- **Removed chat prompt moderation/injection enforcement from request path**: `/v1/chat/completions` no longer performs prompt-injection/content-moderation checks before routing/generation, restoring unfiltered prompt passthrough behavior (`router/api/chat.py`).
-- **Fixed `RouterEngine.refresh_models` cache regression**: Removed unconditional cache invalidation/fetch path that bypassed model-list caching on every refresh (`router/router.py`).
-- **Respected auto-profiling toggle**: Background profiling now honors `ROUTER_MODEL_AUTO_PROFILE_ENABLED` before calling `profile_all_models` (`router/lifecycle.py`).
-- **Fixed Docker SQLite persistence path**: Compose now uses absolute SQLite URL (`sqlite:////app/data/router.db`) so profile DB persists correctly across rebuilds/restarts (`docker-compose.yml`, `docker-compose.external.yml`).
-- **Improved SQLite path parsing for absolute URLs**: Database setup and startup checks now correctly parse `sqlite:////...` paths without stripping the root slash (`router/database.py`, `router/entrypoint.py`).
-- **Reduced chat-path security overhead**: Added lightweight token prefilters before regex scans in prompt-injection/content-moderation checks, skipping expensive pattern loops for obviously benign prompts (`router/security.py`).
-- **Optimized request-size middleware hot path**: Added `Content-Length` fast path to avoid unnecessary request body buffering/copying for normal in-limit requests (`router/middleware.py`).
-- **Cached external provider model discovery**: `BackendRegistry.list_models()` now caches provider.db external model list for 30s to reduce repeated full benchmark scans (`router/backends/registry.py`).
-- **Increased model list cache TTL**: Global model list cache window increased from 10s to 30s to reduce backend list-model calls under steady traffic (`router/state.py`).
-- **Reduced health probe overhead**: Metrics middleware now skips Prometheus accounting for `/health` probes to lower hot-path monitoring cost (`router/middleware.py`).
-- **Made security edge-case tests null-safe and type-safe**: Updated assertions and malformed JSON request payload handling to avoid false failures from `None`/typing mismatches (`tests/test_security_edge_cases.py`).
-- **Aligned property-based tests with live internal APIs**: Updated helper wiring to current router methods/signatures and made Hypothesis import optional via `importorskip` (`tests/test_property_based.py`).
+### Highlights
+- Major platform update with performance improvements, reliability hardening, expanded security controls, and large documentation/testing expansion.
+- Main application architecture refactored into focused modules (`router/state.py`, `router/middleware.py`, `router/lifecycle.py`, `router/api/*`) with `main.py` reduced to an app shell.
 
-#### Validation Notes
-- Targeted regression run completed for corrected failover/integration test subsets: `8 passed, 6 skipped`.
-- Full-suite execution remains partially blocked by local virtualenv issues (`pydantic_core`/`cryptography` availability), which is environment-specific.
+### Performance & Scalability
+- Added configurable response compression (`ROUTER_ENABLE_RESPONSE_COMPRESSION`, `ROUTER_COMPRESSION_MINIMUM_SIZE`).
+- Added cursor-based admin pagination for large profile/benchmark datasets.
+- Moved persistent cache cleanup to a background task (`ROUTER_CACHE_CLEANUP_INTERVAL_HOURS`).
+- Added optional slow-request profiling middleware (`ROUTER_ENABLE_SLOW_QUERY_LOGGING`, `ROUTER_SLOW_QUERY_THRESHOLD_MS`).
+- Fixed `RouterEngine.refresh_models` cache bypass regression.
+- Optimized request-size middleware with a `Content-Length` fast path.
+- Added external provider model-list caching in backend registry (30s TTL).
+- Increased global model-list cache TTL from 10s to 30s.
+- Reduced `/health` probe overhead by skipping metrics accounting for that endpoint.
 
-### Security Enhancements
+### Reliability & Operations
+- Added backend retry controls and unified retry orchestration for transient HTTP failures.
+- Added backend circuit-breaker controls and resilience wrappers for core backends.
+- Expanded `/health` checks (DB, backend readiness, GPU monitor, cache backend, background task count, request ID, DLQ counts).
+- Added provider.db degradation/staleness status and slow-query fallback window.
+- Added global request timeout middleware (`ROUTER_REQUEST_TIMEOUT_ENABLED`, `ROUTER_REQUEST_TIMEOUT_SECONDS`).
+- Improved resource cleanup on error paths and profiler-owned judge client cleanup.
+- Added persistent DLQ with retry scheduling, retry worker, admin inspect/retry endpoints, and health observability.
+- Fixed Docker SQLite persistence path to absolute URL (`sqlite:////app/data/router.db`) and corrected absolute-path parsing in startup/database checks.
+- Made model auto-profiling respect `ROUTER_MODEL_AUTO_PROFILE_ENABLED`.
 
-#### CORS Configuration
-- **Added CORS middleware**: Configurable CORS support via `ROUTER_CORS_ORIGINS`, `ROUTER_CORS_ALLOW_CREDENTIALS`, `ROUTER_CORS_ALLOW_METHODS`, `ROUTER_CORS_ALLOW_HEADERS`, `ROUTER_CORS_MAX_AGE`
-- **Implementation**: `router/config.py`, `main.py`
+### Security
+- Added configurable CORS controls (`ROUTER_CORS_ORIGINS`, credentials/methods/headers/max-age settings).
+- Added encrypted API key storage utilities (Fernet + PBKDF2) and wired runtime decryption for backend/judge key usage.
+- Added optional-dependency hardening for encryption path when `cryptography` is unavailable.
+- Added admin audit logging with persisted event records and query endpoint.
+- Added TLS verification toggle (`ROUTER_VERIFY_TLS`) across backend/provider/judge/webhook clients.
+- Added admin IP whitelist support (exact IP + CIDR, with proxy header handling).
+- Added configurable request-size and per-message content-length limits.
+- Added dependency scanning workflow with scheduled/on-demand vulnerability checks.
+- Added prompt-injection and content-moderation utility modules/configuration; chat request path currently passes prompts through without moderation enforcement.
 
-#### Encrypted API Key Storage
-- **Added Fernet encryption**: Secure encryption for external provider API keys in database
-- **Features**: PBKDF2HMAC key derivation, automatic encryption/decryption with `enc:` prefix detection
-- **Configuration**: `ROUTER_ENCRYPTION_KEY` environment variable
-- **Implementation**: `router/encryption.py`
+### API & Routing Behavior
+- Added dedicated chat endpoint rate limit (`ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE`).
+- Improved model-name sanitization across chat, embeddings, feedback, and admin model override paths.
+- Added richer error log context (`request_id`, `user_ip`, `model_name`, `prompt_hash`) across core failure paths.
+- Removed chat prompt moderation/injection enforcement from `/v1/chat/completions` request path.
+
+### Code Quality & Refactoring
+- Split monolithic `main.py` into modular API/middleware/lifecycle/state packages.
+- Removed dead code and duplicate declarations in router/profiler paths.
+- Standardized assorted lint/type quality fixes across utility/runtime code.
 
 ### Documentation
+- Added `docs/kubernetes.md` deployment guide (Helm/manifests, ingress, HPA, monitoring).
+- Added `docs/architecture.md` with Mermaid diagrams and data-flow views.
+- Added `docs/contributing.md` with development and PR workflow guidance.
+- Maintained comprehensive `docs/troubleshooting.md` and `docs/configuration.md` coverage.
+- API docs available via FastAPI `/docs` and `/redoc`.
 
-#### Kubernetes Deployment Guide
-- **Created `docs/kubernetes.md`**: Comprehensive 543-line guide covering:
-  - Helm chart installation and configuration
-  - Manual manifest deployment (ConfigMap, Secret, PVC, Service, Ingress)
-  - GPU support and node selectors
-  - Horizontal Pod Autoscaling (HPA)
-  - Monitoring with Prometheus/Grafana
+### Testing
+- Expanded integration and unit coverage for provider.db reliability, request timeout behavior, model sanitization, DLQ flows, chat rate limits, audit logging, TLS toggle, admin IP whitelist, and request-size limits.
+- Added and stabilized new suites for property-based tests, backend failover, security edge cases, concurrency stress, routing snapshots, cache persistence recovery, provider fixtures, and optional Ollama integration.
+- Fixed API drift in newly added tests to align with current runtime interfaces.
 
-#### Architecture Documentation
-- **Created `docs/architecture.md`**: 412-line document with:
-  - Mermaid diagrams showing system architecture
-  - Data flow visualization: request → router → backend → response
-  - Component breakdowns for all subsystems
-
-#### Developer Contribution Guide
-- **Created `docs/contributing.md`**: 351-line guide covering:
-  - Development environment setup
-  - Coding standards and type annotations
-  - Testing guidelines and commands
-  - Pull request process
-  - Issue triage procedures
-
-#### Existing Documentation
-- **Troubleshooting guide** (Item #45): `docs/troubleshooting.md` (254 lines) - comprehensive error solutions
-- **Configuration reference** (Item #46): `docs/configuration.md` (624 lines) - complete settings documentation
-- **Auto-generated API docs** (Item #43): FastAPI native `/docs` (Swagger UI) and `/redoc` endpoints
-
-### Testing Infrastructure
-
-#### Property-Based Testing
-- **Created `tests/test_property_based.py`**: Hypothesis fuzz testing for:
-  - `_cosine_similarity` function with various vector dimensions
-  - Model filtering logic
-  - Prompt sanitization edge cases
-
-#### Real Ollama Integration
-- **Created `tests/integration/test_ollama_real.py`**: Docker-based integration test
-- **Features**: Spins up actual Ollama container, tests real API calls
-- **Usage**: Skipped by default, requires Docker (`pytest -m integration`)
-
-#### Load Testing Suite
-- **Created `tests/load/locustfile.py`**: Locust Python script for load testing
-- **Created `tests/load/k6-script.js`**: k6 JavaScript script for performance testing
-- **Features**: Simulates 100 concurrent requests, measures P99 latency
-
-#### Multi-Backend Failover
-- **Created `tests/test_backend_failover.py`**: Tests circuit breaker and retry logic
-- **Coverage**: Primary backend down, fallback to secondary, circuit breaker state transitions
-
-#### Provider Fixtures
-- **Created `tests/test_provider_fixtures.py`**: Mock fixtures for external APIs
-- **Coverage**: HuggingFace, LMSYS, ArtificialAnalysis API responses
-
-#### Security Edge Cases
-- **Created `tests/test_security_edge_cases.py`**: 366-line comprehensive security test suite
-- **Coverage**: SQL injection, path traversal, XSS, NoSQL injection, command injection, oversized prompts, malformed JSON, Unicode normalization attacks, integer overflow, HTTP verb tampering
-
-#### Concurrency Stress Tests
-- **Created `tests/test_concurrency_stress.py`**: Thread-safety verification
-- **Coverage**: 100+ concurrent cache operations, race condition detection, embedding cache contention
-
-#### Snapshot Testing
-- **Created `tests/test_snapshot_routing.py`**: Routing decision recording
-- **Features**: Snapshot update mode (`UPDATE_SNAPSHOTS=1`), automatic comparison
-- **Coverage**: Routing decisions, complexity scoring, category detection
-
-#### Cache Persistence Recovery
-- **Created `tests/test_cache_persistence.py`**: 212-line crash recovery tests
-- **Coverage**: Persistent cache survives restart, embedding persistence, TTL respect, stats preservation, concurrent persistence, invalidation after restart, partial write recovery, corruption handling
-
-#### Test Coverage
-- **Status**: Partial - Test infrastructure complete but coverage audit blocked by virtual environment corruption (Pydantic import errors)
-- **Note**: 43 test files created, comprehensive test coverage added
+### Validation Notes
+- Targeted regression subset: `8 passed, 6 skipped`.
+- Full coverage audit remains blocked in the local environment due to virtualenv dependency corruption (`pydantic_core` / optional packages).
 
 ### Summary
-- **Documentation**: 6/6 items complete (Items #43-48)
-- **Testing**: 9/10 items complete (Items #50-58, #49 blocked)
-- **Total**: 57 of 58 GSoC items complete for v2.2.0
-
-### Bug Fixes
-
-#### Provider Database
-- **Fixed lost `last_build` value**: Corrected double `cursor.fetchone()` call in `get_stats()` (router/provider_db.py:89)
-
-#### Core Router  
-- **Removed duplicate cache declarations**: Eliminated redundant variable definitions (router/router.py:33-38)
-
-#### Main API
-- **Fixed SQLite parameter limit bug**: Added chunking to `get_model_vram_estimates_batch()` to handle >999 models safely (main.py:117-131)
-
-#### Profiler
-- **Removed dead code**: Deleted unused `len(models)` expression and unused set comprehension (router/profiler.py:735, 773)
-
-#### Code Quality
-- **Applied lint fixes**: Removed unused variables and fixed loop variable naming in utility scripts
-- **Fixed set literal syntax**: Modernized `set([...])` to `{...}` (router/router.py:1514)
-
-### Performance & Reliability Improvements
-
-#### Performance & Scalability
-- **Enabled configurable response compression**: Added optional gzip middleware controlled by `ROUTER_ENABLE_RESPONSE_COMPRESSION` and `ROUTER_COMPRESSION_MINIMUM_SIZE` (main.py, router/config.py)
-- **Added cursor-based admin pagination**: Enhanced `/admin/profiles` and `/admin/benchmarks` with `cursor`/`next_cursor` pagination while preserving backward-compatible offset support (main.py)
-- **Moved cache cleanup to background task**: Added periodic persistent-cache cleanup task controlled by `ROUTER_CACHE_CLEANUP_INTERVAL_HOURS` to avoid synchronous cleanup overhead (main.py, router/router.py, router/config.py)
-- **Added slow request profiling middleware**: Optional slow-query logging with request path, latency threshold, request ID, and stack snapshot via `ROUTER_ENABLE_SLOW_QUERY_LOGGING`/`ROUTER_SLOW_QUERY_THRESHOLD_MS` (main.py, router/config.py)
-
-#### Reliability & Error Handling
-- **Added backend retry controls**: Introduced configurable backend retry settings and unified retry orchestration for transient HTTP failures (429/5xx/timeouts) (router/config.py, router/backends/retry.py)
-- **Added backend circuit breaker controls**: Added configurable circuit breaker settings and resilience wrapper to fail fast on unhealthy backends while preserving retry behavior per logical operation (router/config.py, router/backends/resilience.py, router/backends/*)
-- **Integrated resilience wrapper into all core backends**: Ollama, llama.cpp, and OpenAI backends now execute request/stream setup through shared retry+circuit-breaker orchestration (router/backends/ollama.py, router/backends/llama_cpp.py, router/backends/openai.py, router/backends/__init__.py)
-- **Expanded `/health` endpoint**: Health checks now include DB connectivity, backend readiness, GPU monitor metrics, cache backend (including Redis ping when configured), background task count, and request ID (main.py)
-- **Added provider.db graceful degradation status**: Provider DB stats now expose `degraded` and `stale` signals, including staleness checks via configurable max-age windows (router/provider_db.py, router/config.py)
-- **Added DB-slowness fallback window**: provider.db benchmark lookups now detect slow queries, enter a temporary degraded window, and serve fresh-enough in-memory fallback cache to maintain response times (router/provider_db.py, router/config.py)
-- **Removed duplicate benchmark merge cache checks**: Cleaned redundant cache-check block in merged benchmark retrieval path (router/router.py)
-- **Added global request timeout enforcement**: Added request-scoped timeout middleware with cancellation and 504 timeout responses, configurable via `ROUTER_REQUEST_TIMEOUT_ENABLED` and `ROUTER_REQUEST_TIMEOUT_SECONDS` (main.py, router/config.py)
-- **Strengthened resource cleanup on error paths**: Ensured temporary provider.db validation connections use context managers and added explicit profiler-owned judge client cleanup after each model profiling task (main.py, router/profiler.py)
-- **Hardened model name sanitization across API paths**: Unified whitelist-based model name validation for chat overrides, embeddings, feedback, and admin model override inputs to prevent unsafe backend URL/model identifier injection (router/schemas.py, main.py, tests)
-- **Enriched error logs with correlation context**: Added helper-backed error logging with structured `request_id`, `user_ip`, `model_name`, and `prompt_hash` context in key request, routing, streaming, embeddings, explain, and feedback failure paths (main.py)
-- **Added DLQ for failed background tasks**: Introduced persistent dead letter queue storage, retry scheduling with exponential backoff, and automatic retry worker for background sync/cleanup failures (router/models.py, router/dlq.py, main.py, router/config.py, router/database.py)
-- **Added DLQ observability in health checks**: `/health` now reports DLQ counts (`failed`, `retrying`, `dead`) when enabled (main.py)
-- **Added admin DLQ management endpoints**: Added `GET /admin/dlq` for inspection and `POST /admin/dlq/retry/{entry_id}` for manual retry of failed jobs (main.py)
-- **Added dedicated chat endpoint rate limit**: `/v1/chat/completions` now uses a chat-specific per-IP cap configurable via `ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE` (main.py, router/config.py)
-
-#### Security
-- **Added prompt injection detection (Item #23)**: Heuristic pattern-matching engine in `router/security.py` detects common prompt injection techniques (system prompt override, persona hijack, DAN jailbreaks, special token injection, hidden comments). Configurable action via `ROUTER_PROMPT_INJECTION_ACTION` (`log`/`warn`/`block`). Integrated into `/v1/chat/completions` (router/security.py, main.py, router/config.py)
-- **Added content moderation hook (Item #28)**: Keyword-based scanning for dangerous content categories (weapons/explosives, self-harm, illegal drugs, child exploitation) with optional external webhook support. Configurable via `ROUTER_CONTENT_MODERATION_ENABLED`, `ROUTER_CONTENT_MODERATION_ACTION`, `ROUTER_CONTENT_MODERATION_WEBHOOK_URL`, `ROUTER_CONTENT_MODERATION_CATEGORIES` (router/security.py, main.py, router/config.py)
-- **Added admin audit logging (Item #24)**: All admin POST actions (reprofile, model refresh, cache clear/invalidate/warm/evict, sync benchmarks, DLQ retry) are logged to `admin_audit_log` table with timestamp, action, endpoint, IP address, user agent, parameters, result summary, status code, and duration. Query via `GET /admin/audit-log` with action filtering and pagination. Configurable via `ROUTER_ADMIN_AUDIT_ENABLED` (router/audit.py, router/models.py, main.py, router/config.py, router/database.py)
-- **Added TLS verification toggle (Item #25)**: All httpx clients across all backends (Ollama, llama.cpp, OpenAI), providers (HuggingFace, LMSYS, ArtificialAnalysis), judge, security webhook, skills, and CLI now respect `ROUTER_VERIFY_TLS` setting. Set to `false` to allow self-signed certificates in development environments. Default: `true` (router/backends/*.py, router/judge.py, router/security.py, router/providers/*.py, router/skills.py, router/cli.py, main.py, router/config.py)
-- **Added admin endpoint IP whitelist (Item #26)**: Admin endpoints now enforce IP whitelist when `ROUTER_ADMIN_ALLOWED_IPS` is set. Supports exact IPs and CIDR notation (e.g., `10.0.0.0/8`, `192.168.1.0/24`). IP check happens before credential validation for fail-fast behavior. Respects X-Forwarded-For header for proxied requests. Empty list (default) allows all IPs with valid API key (main.py, router/config.py)
-- **Added configurable request size limits (Item #27)**: Request body size middleware now uses `ROUTER_MAX_REQUEST_BODY_BYTES` setting instead of hardcoded 10MB. Per-message content length validation added to `ChatMessage.validate_content()` using `ROUTER_MAX_MESSAGE_CONTENT_LENGTH` (default 100k chars). Multimodal text parts are also validated. (main.py, router/schemas.py, router/config.py)
-- **Added dependency scanning CI (Item #29)**: GitHub Actions workflow (`.github/workflows/security.yml`) runs both `pip-audit` and `safety` vulnerability scanners weekly (Monday 08:00 UTC), on requirements.txt changes, and on-demand via workflow_dispatch. Automatically creates/updates GitHub issues with `security` and `dependencies` labels when vulnerabilities are found. Uploads JSON and text reports as artifacts with 90-day retention.
-
-#### Tests
-- **Updated Ollama backend load-model test mocks**: Adjusted `test_load_model_success` to match current load path (`/api/tags` verification + `/api/generate` warmup) (tests/test_ollama_backend.py)
-- **Added provider.db reliability tests**: Added coverage for stale-cache fallback, degraded-mode behavior, and stale `last_build` signaling (tests/test_provider_db.py)
-- **Added request-timeout integration coverage**: Added chat endpoint test validating 504 timeout behavior when request exceeds global timeout budget (tests/test_integration_extended.py)
-- **Added model sanitization coverage**: Added schema and integration tests for safe/unsafe model name handling in chat and embeddings/feedback request validation paths (tests/test_schemas.py, tests/test_integration_extended.py, tests/test_embeddings_feedback.py)
-- **Added DLQ unit coverage**: Added tests for enqueue/list/count behavior, retry transitions, due scheduling, and dead-state transitions (tests/test_dlq.py)
-- **Added DLQ admin integration coverage**: Added authenticated admin endpoint tests for DLQ listing and retry-not-found behavior (tests/test_integration.py)
-- **Added chat rate-limit integration coverage**: Added test asserting `/v1/chat/completions` returns HTTP 429 when the dedicated chat per-IP limit is exceeded (tests/test_integration_extended.py)
-- **Added admin audit logging tests (Item #24)**: 15 tests covering AuditEntry dataclass, database persistence, query filtering/pagination, async context manager (success/error/X-Forwarded-For/no client), and DB error resilience (tests/test_audit.py)
-- **Added TLS verification toggle tests (Item #25)**: Config tests for default/env-var toggling, backend construction tests verifying `verify_tls` propagation, and async test verifying httpx.AsyncClient receives `verify=False` when disabled (tests/test_config.py, tests/test_backend_contract.py)
-- **Added admin IP whitelist tests (Item #26)**: 25 tests covering IP extraction (X-Forwarded-For, client.host, no client), CIDR matching (/8, /24, IPv6), exact IP matching, mixed whitelist entries, invalid IPs, and verify_admin_token integration (whitelist enforcement, 403 rejection, fail-fast before credentials) (tests/test_admin_ip_whitelist.py)
-- **Added request size limit tests (Item #27)**: 6 tests covering per-message content length validation (normal, at-limit, over-limit), multimodal text part validation, image part passthrough, and None content handling (tests/test_schemas.py)
-- **Major refactoring: Split main.py into modules (Item #31)**: Reduced main.py from 2843 lines to ~150 lines by extracting:
-  - `router/state.py` - Shared application state, helpers, authentication, rate limiting
-  - `router/middleware.py` - All 5 middleware functions + registration helper
-  - `router/lifecycle.py` - Startup/shutdown events and background tasks
-  - `router/api/health.py` - Root, health, and metrics endpoints
-  - `router/api/chat.py` - Chat completions endpoint + streaming generator
-  - `router/api/models.py` - Model listing, skills, feedback, and embeddings endpoints
-  - `router/api/admin.py` - All 17 admin endpoints (profiles, benchmarks, stats, cache, DLQ, VRAM, explain, audit-log)
-  - `router/api/__init__.py` - Package exports
-  - `main.py` - Now a thin shell that creates the FastAPI app, registers middleware, includes routers, and sets up lifespan
+- Documentation items complete.
+- Test infrastructure largely complete with one environment-blocked coverage target.
+- Overall: 57 of 58 planned improvements complete for this release.
 
 ---
 
