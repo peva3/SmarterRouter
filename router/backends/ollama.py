@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from router.backends.base import LLMBackend, ModelInfo
+from router.backends.resilience import with_backend_resilience
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,10 @@ class OllamaBackend(LLMBackend):
         timeout: float = 60.0,
         generation_timeout: float = 120.0,
         models_cache_ttl: float = 30.0,  # Cache model list for 30 seconds
+        config: Any | None = None,
     ):
+        from router.config import settings as global_settings
+
         self.base_url = base_url.rstrip("/")
         self.model_prefix = model_prefix
         self.timeout = timeout  # Short timeout for quick operations (list, etc)
@@ -31,6 +35,7 @@ class OllamaBackend(LLMBackend):
         self._models_cache: tuple[list[ModelInfo], float] | None = None  # (models, timestamp)
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        self.config = config or global_settings
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create persistent HTTP client for connection reuse."""
@@ -40,6 +45,7 @@ class OllamaBackend(LLMBackend):
                     self._client = httpx.AsyncClient(
                         timeout=httpx.Timeout(self.generation_timeout, connect=10.0),
                         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                        verify=self.config.verify_tls,
                     )
         return self._client
 
@@ -66,24 +72,33 @@ class OllamaBackend(LLMBackend):
         effective_timeout = timeout if timeout is not None else self.timeout
         client = await self._get_client()
 
-        # Create a new client with specific timeout if needed
-        if effective_timeout != self.generation_timeout:
-            async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
-                response = await temp_client.request(method, url, **kwargs)
-                response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, dict):
-                    logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
-                    return {}
-                return data
+        async def perform_request() -> dict[str, Any]:
+            # Create a new client with specific timeout if needed
+            if effective_timeout != self.generation_timeout:
+                async with httpx.AsyncClient(
+                    timeout=effective_timeout, verify=self.config.verify_tls
+                ) as temp_client:
+                    response = await temp_client.request(method, url, **kwargs)
+                    response.raise_for_status()
+                    data = response.json()
+                    if not isinstance(data, dict):
+                        logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                        return {}
+                    return data
 
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
-            return {}
-        return data
+            response = await client.request(method, url, **kwargs)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                return {}
+            return data
+
+        return await with_backend_resilience(
+            operation_name="ollama_request",
+            operation=perform_request,
+            config=self.config,
+        )
 
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests.
@@ -158,33 +173,42 @@ class OllamaBackend(LLMBackend):
         url = f"{self.base_url}/api/chat"
         full_model = self._full_model_name(model)
 
-        start_time = time.perf_counter()
-        first_token_time: float | None = None
-        latency_ms = 0.0
+        async def attempt_stream() -> tuple[AsyncIterator[dict[str, Any]], float]:
+            start_time = time.perf_counter()
+            first_token_time: float | None = None
+            latency_ms = 0.0
 
-        async def stream_generator() -> AsyncIterator[dict[str, Any]]:
-            nonlocal latency_ms, first_token_time
-            async with httpx.AsyncClient(timeout=self.generation_timeout) as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    json={
-                        "model": full_model,
-                        "messages": messages,
-                        "stream": True,
-                        "keep_alive": keep_alive,
-                    },
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.strip():
-                            # Measure time to first token
-                            if first_token_time is None:
-                                first_token_time = time.perf_counter()
-                                latency_ms = (first_token_time - start_time) * 1000
-                            yield json.loads(line)
+            async def stream_generator() -> AsyncIterator[dict[str, Any]]:
+                nonlocal latency_ms, first_token_time
+                async with httpx.AsyncClient(
+                    timeout=self.generation_timeout, verify=self.config.verify_tls
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        json={
+                            "model": full_model,
+                            "messages": messages,
+                            "stream": True,
+                            "keep_alive": keep_alive,
+                        },
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if line.strip():
+                                # Measure time to first token
+                                if first_token_time is None:
+                                    first_token_time = time.perf_counter()
+                                    latency_ms = (first_token_time - start_time) * 1000
+                                yield json.loads(line)
 
-        return stream_generator(), latency_ms
+            return stream_generator(), latency_ms
+
+        return await with_backend_resilience(
+            operation_name="ollama_stream_setup",
+            operation=attempt_stream,
+            config=self.config,
+        )
 
     async def unload_model(self, model_name: str) -> bool:
         """Unload model from VRAM by setting keep_alive to 0."""
@@ -249,7 +273,9 @@ class OllamaBackend(LLMBackend):
                     "keep_alive": keep_alive,
                     "stream": False,
                 }
-                async with httpx.AsyncClient(timeout=effective_timeout) as client:
+                async with httpx.AsyncClient(
+                    timeout=effective_timeout, verify=self.config.verify_tls
+                ) as client:
                     url = f"{self.base_url}/api/generate"
                     response = await client.post(url, json=payload)
                     response.raise_for_status()
@@ -266,7 +292,9 @@ class OllamaBackend(LLMBackend):
                     "keep_alive": keep_alive,
                     "stream": False,
                 }
-                async with httpx.AsyncClient(timeout=effective_timeout) as client:
+                async with httpx.AsyncClient(
+                    timeout=effective_timeout, verify=self.config.verify_tls
+                ) as client:
                     url = f"{self.base_url}/api/chat"
                     response = await client.post(url, json=payload)
                     response.raise_for_status()

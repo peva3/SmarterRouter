@@ -1,11 +1,17 @@
 """Extended integration tests with mock backend for full chat flow."""
 
+import asyncio
+import sys
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, app_state, get_settings
+# Local test environment can lack compiled pandas wheels; providers only need pandas at import time.
+sys.modules.setdefault("pandas", MagicMock())
+
+from main import app, app_state, get_settings, settings
 from router.backends.base import ModelInfo
 from router.config import Settings
 
@@ -187,6 +193,17 @@ class TestChatCompletions:
         # Should fall back gracefully or return error
         assert response.status_code in [200, 400]
 
+    def test_unsafe_model_override_rejected(self, configured_client):
+        """Reject unsafe model override characters before routing."""
+        response = configured_client.post(
+            "/v1/chat/completions?model=../bad model",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["type"] == "invalid_request_error"
+
     def test_invalid_content_type(self, configured_client):
         """Test error for non-JSON content."""
         response = configured_client.post(
@@ -215,6 +232,36 @@ class TestChatCompletions:
         )
 
         assert response.status_code == 200
+
+    def test_request_timeout_returns_504(self, configured_client):
+        """Test global request timeout enforcement for chat endpoint."""
+        backend = app_state.backend
+        assert backend is not None
+        backend_obj: Any = backend
+        original_chat = backend_obj.chat
+        original_timeout_enabled = settings.request_timeout_enabled
+        original_timeout_seconds = settings.request_timeout_seconds
+
+        async def slow_chat(model, messages, stream=False, **kwargs):
+            await asyncio.sleep(1.2)
+            return {"message": {"role": "assistant", "content": "slow response"}}
+
+        backend_obj.chat = AsyncMock(side_effect=slow_chat)
+        settings.request_timeout_enabled = True
+        settings.request_timeout_seconds = 1
+
+        try:
+            response = configured_client.post(
+                "/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "Hello"}]},
+            )
+            assert response.status_code == 504
+            data = response.json()
+            assert data["error"]["type"] == "timeout_error"
+        finally:
+            backend_obj.chat = original_chat
+            settings.request_timeout_enabled = original_timeout_enabled
+            settings.request_timeout_seconds = original_timeout_seconds
 
 
 class TestErrorHandling:
@@ -352,6 +399,7 @@ class TestRateLimiting:
             admin_api_key=None,
             rate_limit_enabled=True,
             rate_limit_requests_per_minute=2,  # Very low for testing
+            rate_limit_chat_requests_per_minute=2,
             rate_limit_admin_requests_per_minute=2,
         )
 
@@ -362,10 +410,47 @@ class TestRateLimiting:
         # Verify rate limiting settings are properly set
         assert settings.rate_limit_enabled is True
         assert settings.rate_limit_requests_per_minute == 2
+        assert settings.rate_limit_chat_requests_per_minute == 2
         assert settings.rate_limit_admin_requests_per_minute == 2
 
         # Note: Full rate limit testing requires proper app state initialization
         # which is complex in unit tests. Integration tests cover this better.
+
+    def test_chat_endpoint_rate_limit_returns_429(self, configured_client):
+        """Chat endpoint should enforce dedicated per-IP limit."""
+        original_override = app.dependency_overrides.get(get_settings)
+
+        def rate_limited_settings():
+            return Settings(
+                admin_api_key=None,
+                cache_enabled=True,
+                signature_enabled=True,
+                rate_limit_enabled=True,
+                rate_limit_requests_per_minute=1000,
+                rate_limit_chat_requests_per_minute=2,
+                rate_limit_admin_requests_per_minute=1000,
+            )
+
+        app.dependency_overrides[get_settings] = rate_limited_settings
+
+        try:
+            app_state.rate_limiter.clear()
+
+            payload = {"messages": [{"role": "user", "content": "Hello"}]}
+            resp1 = configured_client.post("/v1/chat/completions", json=payload)
+            resp2 = configured_client.post("/v1/chat/completions", json=payload)
+            resp3 = configured_client.post("/v1/chat/completions", json=payload)
+
+            assert resp1.status_code == 200
+            assert resp2.status_code == 200
+            assert resp3.status_code == 429
+            assert resp3.json()["detail"] == "Rate limit exceeded"
+        finally:
+            if original_override is not None:
+                app.dependency_overrides[get_settings] = original_override
+            else:
+                app.dependency_overrides.pop(get_settings, None)
+            app_state.rate_limiter.clear()
 
     def test_rate_limit_per_ip(self):
         """Test that rate limits are per-IP."""

@@ -8,6 +8,7 @@ Supports:
 """
 
 import logging
+import time
 from typing import Any
 
 from router.backends import create_backend
@@ -34,6 +35,9 @@ class BackendRegistry:
         self._local_backend: LLMBackend | None = None
         self._provider_db: ProviderDB | None = None
         self._initialized = False
+        self._external_models_cache: list[ModelInfo] = []
+        self._external_models_cache_time: float = 0.0
+        self._external_models_cache_ttl: float = 30.0
 
     def initialize(self) -> None:
         """Initialize all configured backends."""
@@ -98,20 +102,40 @@ class BackendRegistry:
             and self._provider_db.is_available()
         ):
             try:
-                external_benchmarks = self._provider_db.get_all_benchmarks()
-                # Convert benchmark entries to ModelInfo
-                for bench in external_benchmarks:
-                    model_id = bench.get("model_id", "")
-                    if model_id:
-                        # Create ModelInfo for external models
-                        # Note: These don't have size/modified_at from local backend
-                        external_model = ModelInfo(
-                            name=model_id,
-                            size=None,
-                            modified_at=None,
-                        )
-                        models.append(external_model)
-                logger.debug(f"Found {len(external_benchmarks)} external models from provider.db")
+                now = time.time()
+                if (
+                    self._external_models_cache
+                    and (now - self._external_models_cache_time) < self._external_models_cache_ttl
+                ):
+                    models.extend(self._external_models_cache)
+                    logger.debug(
+                        "Using cached external model list (age: %.1fs)",
+                        now - self._external_models_cache_time,
+                    )
+                else:
+                    external_benchmarks = self._provider_db.get_all_benchmarks()
+                    external_models: list[ModelInfo] = []
+                    # Convert benchmark entries to ModelInfo
+                    for bench in external_benchmarks:
+                        model_id = bench.get("model_id", "")
+                        if model_id:
+                            # Create ModelInfo for external models
+                            # Note: These don't have size/modified_at from local backend
+                            external_models.append(
+                                ModelInfo(
+                                    name=model_id,
+                                    size=None,
+                                    modified_at=None,
+                                )
+                            )
+
+                    self._external_models_cache = external_models
+                    self._external_models_cache_time = now
+                    models.extend(external_models)
+                    logger.debug(
+                        "Found %d external models from provider.db",
+                        len(external_models),
+                    )
             except Exception as e:
                 logger.warning(f"Failed to list external models: {e}")
 

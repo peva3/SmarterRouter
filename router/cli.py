@@ -45,9 +45,16 @@ async def detect_ollama(urls: list[str] | None = None) -> tuple[str | None, list
 
     timeout = httpx.Timeout(5.0, connect=3.0)
 
+    try:
+        from router.config import settings
+
+        verify_tls = settings.verify_tls
+    except Exception:
+        verify_tls = True
+
     for url in urls:
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, verify=verify_tls) as client:
                 # Try /api/tags endpoint
                 response = await client.get(f"{url}/api/tags")
                 if response.status_code == 200:

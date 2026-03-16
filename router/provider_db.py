@@ -12,7 +12,9 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,59 @@ ProviderDBError = RouterDatabaseError
 _PROVIDER_DB_CACHE_TTL = 60.0
 # Unified cache instance
 _provider_cache = get_cache("provider_db", default_ttl=_PROVIDER_DB_CACHE_TTL)
+
+
+# Slow DB fallback state (process-local)
+_provider_db_degraded_until: float = 0.0
+_provider_db_last_good_cache_time: float = 0.0
+
+
+def _get_cached_all_benchmarks_if_fresh(max_age_seconds: int) -> dict[str, dict[str, Any]] | None:
+    """Return cached benchmark map if within stale-allowed age."""
+    global _provider_db_last_good_cache_time
+    cached_all = _provider_cache.get("all_benchmarks")
+    if cached_all is None:
+        return None
+
+    if max_age_seconds <= 0:
+        return cached_all
+
+    age = time.monotonic() - _provider_db_last_good_cache_time
+    if _provider_db_last_good_cache_time > 0 and age <= max_age_seconds:
+        return cached_all
+    return None
+
+
+def _mark_degraded(window_seconds: int) -> None:
+    """Mark provider DB as temporarily degraded for fallback serving."""
+    global _provider_db_degraded_until
+    _provider_db_degraded_until = time.monotonic() + max(window_seconds, 0)
+
+
+def _clear_degraded_if_elapsed() -> None:
+    """Clear degraded mode when fallback window has elapsed."""
+    global _provider_db_degraded_until
+    if _provider_db_degraded_until and time.monotonic() > _provider_db_degraded_until:
+        _provider_db_degraded_until = 0.0
+
+
+def _is_stale(last_build: str | None, max_age_hours: int) -> bool:
+    """Return True if provider.db build timestamp is older than max_age_hours."""
+    if max_age_hours <= 0 or not last_build:
+        return False
+    try:
+        # Expected format from provider metadata: ISO-8601 UTC timestamp
+        ts = last_build.replace("Z", "+00:00")
+        try:
+            built_dt = datetime.fromisoformat(ts)
+            built_at = built_dt.timestamp()
+        except Exception:
+            # Non-ISO metadata formats are treated as non-stale to avoid false blocking
+            return False
+        age_hours = (time.time() - built_at) / 3600
+        return age_hours > max_age_hours
+    except Exception:
+        return False
 
 
 class ProviderDB:
@@ -74,7 +129,7 @@ class ProviderDB:
     def get_stats(self) -> dict[str, Any]:
         """Get provider.db statistics."""
         if not self.is_available():
-            return {"available": False, "total_models": 0}
+            return {"available": False, "total_models": 0, "degraded": False, "stale": False}
 
         try:
             with self._get_connection() as conn:
@@ -86,17 +141,26 @@ class ProviderDB:
                 archived = cursor.fetchone()[0]
 
                 cursor.execute("SELECT value FROM metadata WHERE key = 'last_build'")
-                last_build = cursor.fetchone()[0] if cursor.fetchone() else None
+                row = cursor.fetchone()
+                last_build = row[0] if row else None
+                stale = _is_stale(last_build, settings.provider_db_max_age_hours)
 
                 return {
                     "available": True,
                     "total_models": total,
                     "archived_models": archived,
                     "last_build": last_build,
+                    "degraded": _provider_db_degraded_until > time.monotonic(),
+                    "stale": stale,
                 }
         except Exception as e:
             logger.warning(f"Failed to get provider.db stats: {e}")
-            return {"available": False, "error": str(e)}
+            return {
+                "available": False,
+                "error": str(e),
+                "degraded": _provider_db_degraded_until > time.monotonic(),
+                "stale": False,
+            }
 
     def get_benchmark(self, model_id: str) -> dict[str, Any] | None:
         """Get benchmark for a single model."""
@@ -124,7 +188,13 @@ class ProviderDB:
 
         Returns dict keyed by model_id with benchmark data.
         """
+        _clear_degraded_if_elapsed()
+
         if not self.is_available():
+            if settings.db_slow_fallback_enabled:
+                cached_all = _get_cached_all_benchmarks_if_fresh(settings.db_stale_cache_max_age_seconds)
+                if cached_all is not None:
+                    return {m: cached_all[m] for m in model_ids if m in cached_all}
             return {}
 
         if not model_ids:
@@ -161,8 +231,21 @@ class ProviderDB:
         if not missing_models:
             return results
 
+        # If currently degraded due to recent DB slowness/errors, serve stale cache if available
+        if settings.db_slow_fallback_enabled and _provider_db_degraded_until > time.monotonic():
+            cached_all = _get_cached_all_benchmarks_if_fresh(settings.db_stale_cache_max_age_seconds)
+            if cached_all is not None:
+                fallback_results = {m: cached_all[m] for m in model_ids if m in cached_all}
+                if fallback_results:
+                    logger.debug(
+                        "provider.db in degraded mode; serving stale in-memory fallback for %d models",
+                        len(fallback_results),
+                    )
+                    return fallback_results
+
         # Need to query database for missing models
         try:
+            started = time.monotonic()
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
@@ -196,9 +279,32 @@ class ProviderDB:
                     current_cache.update(queried_results)
                     # Store back with TTL
                     _provider_cache.set("all_benchmarks", current_cache)
+                    global _provider_db_last_good_cache_time
+                    _provider_db_last_good_cache_time = time.monotonic()
+
+                elapsed_ms = (time.monotonic() - started) * 1000
+                if (
+                    settings.db_slow_fallback_enabled
+                    and elapsed_ms > settings.db_slow_query_threshold_ms
+                ):
+                    _mark_degraded(settings.db_slow_fallback_window_seconds)
+                    logger.warning(
+                        "provider.db query slow (%.1fms > %dms); enabling degraded fallback window",
+                        elapsed_ms,
+                        settings.db_slow_query_threshold_ms,
+                    )
 
                 return results
         except Exception as e:
+            if settings.db_slow_fallback_enabled:
+                _mark_degraded(settings.db_slow_fallback_window_seconds)
+                cached_all = _get_cached_all_benchmarks_if_fresh(settings.db_stale_cache_max_age_seconds)
+                if cached_all is not None:
+                    logger.warning(
+                        "provider.db query failed, serving stale fallback cache: %s",
+                        e,
+                    )
+                    return {m: cached_all[m] for m in model_ids if m in cached_all}
             logger.warning(f"Failed to get benchmarks for models: {e}")
             return {}
 
@@ -270,5 +376,8 @@ def get_provider_db() -> ProviderDB:
 
 def invalidate_provider_cache() -> None:
     """Invalidate the provider.db cache."""
+    global _provider_db_last_good_cache_time, _provider_db_degraded_until
     _provider_cache.invalidate("all_benchmarks")
+    _provider_db_last_good_cache_time = 0.0
+    _provider_db_degraded_until = 0.0
     logger.debug("Provider.db cache invalidated")

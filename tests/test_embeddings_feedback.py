@@ -357,3 +357,32 @@ class TestEmbeddingsRequestValidation:
         req = EmbeddingsRequest(model="test", input="test", encoding_format="base64")
 
         assert req.encoding_format == "base64"
+
+    def test_embeddings_request_invalid_model_name_rejected(self):
+        """Reject embeddings model names with unsafe characters."""
+        from pydantic import ValidationError
+
+        from router.schemas import EmbeddingsRequest
+
+        with pytest.raises(ValidationError):
+            EmbeddingsRequest(model="bad model;rm -rf", input="hello")
+
+
+class TestFeedbackModelNameValidation:
+    """Test model_name sanitization in feedback request."""
+
+    def test_feedback_model_name_trimmed(self):
+        """Trim surrounding whitespace for model_name."""
+        from router.schemas import FeedbackRequest
+
+        fb = FeedbackRequest(score=0.2, model_name="  llama3:8b  ")
+        assert fb.model_name == "llama3:8b"
+
+    def test_feedback_invalid_model_name_rejected(self):
+        """Reject feedback model names with unsafe characters."""
+        from pydantic import ValidationError
+
+        from router.schemas import FeedbackRequest
+
+        with pytest.raises(ValidationError):
+            FeedbackRequest(score=0.0, model_name="../bad model")

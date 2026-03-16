@@ -1,12 +1,14 @@
 """Tests for provider_db module."""
 
 import os
+import time
 from unittest.mock import patch
 
 import pytest
 
 from router.provider_db import (
     ProviderDB,
+    _provider_cache,
     get_provider_db,
     invalidate_provider_cache,
 )
@@ -105,6 +107,95 @@ class TestProviderDBCache:
         # Verify the function exists and runs without error
         invalidate_provider_cache()
         # If we got here without exception, test passes
+
+    def test_fallback_returns_stale_cache_when_db_unavailable(self, mock_provider_db_path):
+        """Fallback serves stale cache when provider.db is unavailable."""
+        db = ProviderDB(mock_provider_db_path)
+
+        # Prime cache with known benchmark map
+        cached = {"openai/gpt-4": {"model_id": "openai/gpt-4", "general_score": 88.0}}
+        _provider_cache.set("all_benchmarks", cached)
+
+        import router.provider_db as provider_db_module
+
+        provider_db_module._provider_db_last_good_cache_time = time.monotonic()
+
+        with patch("router.provider_db.settings") as mock_settings:
+            mock_settings.db_slow_fallback_enabled = True
+            mock_settings.db_stale_cache_max_age_seconds = 300
+            result = db.get_benchmarks_for_models(["openai/gpt-4"])
+
+        assert "openai/gpt-4" in result
+
+    def test_db_error_marks_degraded_and_uses_cache(self, mock_provider_db_path):
+        """DB query errors trigger degraded mode and stale fallback."""
+        db = ProviderDB(mock_provider_db_path)
+
+        import router.provider_db as provider_db_module
+
+        # Force availability so query path is reached
+        with patch.object(db, "is_available", return_value=True):
+            # Prime stale fallback cache
+            cached = {"openai/gpt-4": {"model_id": "openai/gpt-4", "general_score": 88.0}}
+            _provider_cache.set("all_benchmarks", cached)
+            provider_db_module._provider_db_last_good_cache_time = time.monotonic()
+
+            with (
+                patch.object(db, "_get_connection", side_effect=RuntimeError("db down")),
+                patch("router.provider_db.settings") as mock_settings,
+            ):
+                mock_settings.db_slow_fallback_enabled = True
+                mock_settings.db_slow_fallback_window_seconds = 30
+                mock_settings.db_stale_cache_max_age_seconds = 300
+                # Include one uncached model to force DB query path (which errors)
+                result = db.get_benchmarks_for_models(["openai/gpt-4", "anthropic/claude-3"])
+
+            assert "openai/gpt-4" in result
+            assert provider_db_module._provider_db_degraded_until > time.monotonic()
+
+    def test_stats_reports_stale_when_last_build_old(self, mock_provider_db_path):
+        """Stats include stale=true when metadata last_build exceeds threshold."""
+        db = ProviderDB(mock_provider_db_path)
+
+        class FakeCursor:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchone(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return [10]  # total models
+                if self.calls == 2:
+                    return [1]  # archived
+                return ["2000-01-01T00:00:00Z"]  # very old build
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def close(self):
+                return None
+
+        with (
+            patch.object(db, "is_available", return_value=True),
+            patch.object(db, "_get_connection", return_value=FakeConn()),
+            patch("router.provider_db.settings") as mock_settings,
+        ):
+            mock_settings.provider_db_max_age_hours = 1
+            stats = db.get_stats()
+
+        assert stats["available"] is True
+        assert stats["stale"] is True
+        assert "degraded" in stats
 
 
 class TestProviderDBIntegration:

@@ -80,7 +80,9 @@ class ArtificialAnalysisProvider(BenchmarkProvider):
         # Fetch from API
         headers = {"x-api-key": self.api_key}
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            from router.config import settings
+
+            async with httpx.AsyncClient(timeout=30.0, verify=settings.verify_tls) as client:
                 response = await client.get(f"{AA_BASE_URL}{AA_MODELS_ENDPOINT}", headers=headers)
                 response.raise_for_status()
                 data = response.json()

@@ -41,6 +41,7 @@ class TestDatabaseConnection:
             assert "routing_decisions" in tables
             assert "model_benchmarks" in tables
             assert "benchmark_sync" in tables
+            assert "background_task_dlq" in tables
 
     def test_get_session_commit(self, test_db):
         """Test that get_session does NOT commit automatically; manual commit required."""

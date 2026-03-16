@@ -33,10 +33,6 @@ _PROFILE_CACHE_TTL = 60.0
 _MERGED_BENCHMARKS_CACHE: dict[frozenset, tuple[float, list[dict]]] = {}
 _MERGED_BENCHMARKS_CACHE_TTL = 300.0  # 5 minutes
 
-# Cache for merged benchmarks (local + external) to avoid repeated DB/network calls
-_MERGED_BENCHMARKS_CACHE: dict[frozenset, tuple[float, list[dict]]] = {}
-_MERGED_BENCHMARKS_CACHE_TTL = 300.0  # 5 minutes
-
 # Cache for prompt analysis to avoid repeated computation
 _PROMPT_ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
 _PROMPT_ANALYSIS_CACHE_TTL = 300.0  # 5 minutes
@@ -54,14 +50,6 @@ def get_benchmarks_for_models_with_external(
     Returns a list of benchmark dicts compatible with _calculate_combined_scores.
     """
 
-    # Check merged cache first
-    cache_key = frozenset(model_names)
-    now = time.monotonic()
-    if cache_key in _MERGED_BENCHMARKS_CACHE:
-        cached_time, cached_result = _MERGED_BENCHMARKS_CACHE[cache_key]
-        if (now - cached_time) < _MERGED_BENCHMARKS_CACHE_TTL:
-            logger.debug(f"Using cached merged benchmarks for {len(model_names)} models (age: {now - cached_time:.1f}s)")
-            return cached_result
     # Check merged cache first
     cache_key = frozenset(model_names)
     now = time.monotonic()
@@ -999,9 +987,7 @@ class RouterEngine:
         """Load cache data from persistent storage."""
         if self.cache_enabled and self.semantic_cache:
             await self.semantic_cache.load_from_persistence()
-            # Clean up expired entries from persistent cache
-            if self.semantic_cache.persistent_cache:
-                await self.semantic_cache.persistent_cache.delete_expired_entries()
+            # Expired entries cleanup is handled by background task
 
     async def warmup_caches(self, model_names: list[str] | None = None) -> None:
         """Pre-warm caches on startup to avoid first-request latency."""
@@ -1044,11 +1030,9 @@ class RouterEngine:
             self._models_cache = None
             self._models_cache_time = 0.0
             # Invalidate model cache on explicit refresh
-        self._models_cache = None
-        self._models_cache_time = 0.0
-        available_models = await self.client.list_models()
-        self._models_cache = available_models
-        self._models_cache_time = now
+            available_models = await self.client.list_models()
+            self._models_cache = available_models
+            self._models_cache_time = now
         available_names = {m.name for m in available_models}
 
         with get_session() as session:

@@ -196,8 +196,33 @@ pytest tests/test_backend_contract.py -v
 ### OpenAI API rate limits
 
 - Check provider dashboard for usage
-- Add retry logic in your application (SmarterRouter doesn't retry failed API calls)
+- SmarterRouter now supports built-in retry + circuit breaker resilience controls (see configuration docs)
 - Consider adding multiple API keys for load balancing (coming soon)
+
+---
+
+## Backend Resilience Controls
+
+SmarterRouter includes configurable retry and circuit-breaker resilience for backend calls.
+
+### Retry Settings
+
+- `ROUTER_BACKEND_RETRY_ENABLED` (default: `true`)
+- `ROUTER_BACKEND_MAX_RETRIES` (default: `3`)
+- `ROUTER_BACKEND_RETRY_BASE_DELAY` (default: `0.5`)
+- `ROUTER_BACKEND_RETRY_MAX_DELAY` (default: `8.0`)
+
+Retries apply to transient failures (timeouts, network errors, HTTP 429, and HTTP 5xx).
+
+### Circuit Breaker Settings
+
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_ENABLED` (default: `true`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_FAILURE_THRESHOLD` (default: `5`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_RESET_TIMEOUT` (default: `60.0` seconds)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_HALF_OPEN_MAX_ATTEMPTS` (default: `3`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_SLIDING_WINDOW_SIZE` (default: `100`)
+
+Circuit breakers are tracked per backend operation (for example, request and stream-setup paths), so one unstable path can open independently without globally disabling all backend functionality.
 
 ---
 

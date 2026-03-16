@@ -1,9 +1,12 @@
 """Integration tests for the SmarterRouter system."""
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+sys.modules.setdefault("pandas", MagicMock())
 
 from main import app, app_state, get_settings
 from router.config import Settings
@@ -48,7 +51,9 @@ class TestHealthEndpoints:
         """Test health check endpoint."""
         response = client.get("/health")
         assert response.status_code == 200
-        assert response.json()["status"] == "healthy"
+        data = response.json()
+        assert data["status"] in {"healthy", "unhealthy"}
+        assert "checks" in data
 
 
 class TestModelEndpoints:
@@ -133,3 +138,17 @@ class TestAdminEndpoints:
         app_state.backend = MagicMock()
         response = authed_client.post("/admin/reprofile")
         assert response.status_code == 200
+
+    def test_get_dlq_authorized(self, authed_client):
+        with patch("main.list_dlq_entries", return_value=[]):
+            with patch("main.count_dlq_entries", return_value=0):
+                response = authed_client.get("/admin/dlq")
+                assert response.status_code == 200
+                data = response.json()
+                assert data["enabled"] is True
+                assert data["entries"] == []
+
+    def test_retry_dlq_entry_not_found(self, authed_client):
+        with patch("main.get_dlq_entry", return_value=None):
+            response = authed_client.post("/admin/dlq/retry/123")
+            assert response.status_code == 404

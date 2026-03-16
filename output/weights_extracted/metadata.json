@@ -1,0 +1,42 @@
+{
+  "architecture": {
+    "architecture": "llama",
+    "n_layers": 2,
+    "hidden_dim": 8,
+    "ffn_dim": 16
+  },
+  "layers_extracted": [
+    0,
+    1
+  ],
+  "tensor_shapes": {
+    "0": {
+      "up": [
+        8,
+        16
+      ],
+      "gate": [
+        8,
+        16
+      ],
+      "down": [
+        16,
+        8
+      ]
+    },
+    "1": {
+      "up": [
+        8,
+        16
+      ],
+      "gate": [
+        8,
+        16
+      ],
+      "down": [
+        16,
+        8
+      ]
+    }
+  }
+}

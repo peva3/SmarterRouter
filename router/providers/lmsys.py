@@ -25,8 +25,12 @@ class LMSYSProvider(BenchmarkProvider):
         logger.info(f"Fetching data from {self.name} provider")
 
         try:
+            from router.config import settings
+
             # Try fetching Arena Hard CSV first (easier to parse)
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True, verify=settings.verify_tls
+            ) as client:
                 response = await client.get(LMSYS_ARENA_HARD_URL)
                 if response.status_code == 200:
                     df = pd.read_csv(BytesIO(response.content))

@@ -179,7 +179,17 @@ class TestOllamaBackend:
         backend = OllamaBackend("http://localhost:11434")
 
         with respx.mock() as mock_http:
-            mock_http.post("http://localhost:11434/api/chat").mock(
+            mock_http.get("http://localhost:11434/api/tags").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {"name": "llama3", "size": 1000000000, "modified_at": "2024-01-01"}
+                        ]
+                    },
+                )
+            )
+            mock_http.post("http://localhost:11434/api/generate").mock(
                 return_value=httpx.Response(200, json={})
             )
             result = await backend.load_model("llama3")

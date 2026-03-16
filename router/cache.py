@@ -2,6 +2,7 @@
 Unified cache manager for SmarterRouter.
 
 Provides thread-safe caching with TTL, eviction, and consistent invalidation.
+Supports both in-memory and Redis backends.
 """
 
 import threading
@@ -9,11 +10,13 @@ import time
 from collections import OrderedDict
 from typing import Generic, TypeVar
 
+from router.config import settings
+
 T = TypeVar("T")
 
 
 class Cache(Generic[T]):
-    """Thread-safe cache with TTL and LRU eviction."""
+    """Thread-safe cache with TTL and LRU eviction (memory backend)."""
 
     def __init__(self, default_ttl: float = 60.0, max_size: int = 1000):
         """
@@ -30,6 +33,10 @@ class Cache(Generic[T]):
             OrderedDict()
         )  # key -> last_access_time for LRU
         self._lock = threading.RLock()
+
+    def close(self) -> None:
+        """Close cache resources (no-op for in-memory)."""
+        pass
 
     def get(self, key: str) -> T | None:
         """Get value from cache if present and not expired."""
@@ -117,17 +124,52 @@ class Cache(Generic[T]):
 
 
 class CacheManager:
-    """Manager for multiple named caches."""
+    """Manager for multiple named caches with backend selection."""
 
     def __init__(self):
         self._caches: dict[str, Cache] = {}
         self._lock = threading.RLock()
+        self._initialized = False
 
-    def get_cache(self, name: str, default_ttl: float = 60.0, max_size: int = 1000) -> Cache:
+    def _initialize_backend(self) -> None:
+        """Initialize the configured cache backend."""
+        if self._initialized:
+            return
+
+        backend = settings.cache_backend
+        if backend == "redis":
+            # Redis backend will be created on-demand in get_cache
+            pass
+        # memory is the default, no special initialization needed
+        self._initialized = True
+
+    def get_cache(
+        self,
+        name: str,
+        default_ttl: float = 60.0,
+        max_size: int = 1000,
+    ) -> Cache:
         """Get or create a named cache."""
         with self._lock:
             if name not in self._caches:
-                self._caches[name] = Cache(default_ttl=default_ttl, max_size=max_size)
+                self._initialize_backend()
+
+                if settings.cache_backend == "redis":
+                    # Create Redis cache
+                    from router.cache_redis import RedisCache
+
+                    cache = RedisCache(
+                        default_ttl=default_ttl,
+                        max_size=max_size,
+                        redis_url=settings.redis_url or "redis://localhost:6379/0",
+                        max_connections=settings.redis_max_connections,
+                        key_prefix=settings.redis_cache_prefix,
+                    )
+                else:
+                    # Default to in-memory cache
+                    cache = Cache(default_ttl=default_ttl, max_size=max_size)
+
+                self._caches[name] = cache
             return self._caches[name]
 
     def invalidate_all(self) -> None:
@@ -136,12 +178,22 @@ class CacheManager:
             for cache in self._caches.values():
                 cache.clear()
 
+    def close_all(self) -> None:
+        """Close all cache resources."""
+        with self._lock:
+            for cache in self._caches.values():
+                cache.close()
+
 
 # Global cache manager instance
 _cache_manager = CacheManager()
 
 
-def get_cache(name: str, default_ttl: float = 60.0, max_size: int = 1000) -> Cache:
+def get_cache(
+    name: str,
+    default_ttl: float = 60.0,
+    max_size: int = 1000,
+) -> Cache:
     """Get a named cache from the global cache manager."""
     return _cache_manager.get_cache(name, default_ttl, max_size)
 
@@ -149,3 +201,8 @@ def get_cache(name: str, default_ttl: float = 60.0, max_size: int = 1000) -> Cac
 def invalidate_all_caches() -> None:
     """Invalidate all caches in the global cache manager."""
     _cache_manager.invalidate_all()
+
+
+def close_all_caches() -> None:
+    """Close all cache connections (call during shutdown)."""
+    _cache_manager.close_all()

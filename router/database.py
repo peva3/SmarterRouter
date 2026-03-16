@@ -25,8 +25,14 @@ def _ensure_sqlite_setup():
     if "sqlite" not in settings.database_url.lower():
         return
 
-    db_path = settings.database_url.replace("sqlite:///", "")
-    db_path = db_path.replace("sqlite://", "")
+    database_url = settings.database_url
+
+    # Handle absolute SQLite URLs first (sqlite:////abs/path.db)
+    if database_url.startswith("sqlite:////"):
+        db_path = "/" + database_url.replace("sqlite:////", "", 1)
+    else:
+        db_path = database_url.replace("sqlite:///", "")
+        db_path = db_path.replace("sqlite://", "")
 
     # Remove any query parameters
     if "?" in db_path:
@@ -80,6 +86,8 @@ def _ensure_sqlite_setup():
 # Run setup logic
 _ensure_sqlite_setup()
 
+# Configure pool settings based on database type
+# For SQLite, many pool settings are not applicable but still safe to pass
 engine = create_engine(
     settings.database_url,
     connect_args={
@@ -89,10 +97,10 @@ engine = create_engine(
     if "sqlite" in settings.database_url
     else {},
     echo=False,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=3600,
+    pool_size=settings.database_pool_size,
+    max_overflow=settings.database_max_overflow,
+    pool_pre_ping=settings.database_pool_pre_ping,
+    pool_recycle=settings.database_pool_recycle,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -110,7 +118,11 @@ def init_db() -> None:
         logger.error(f"Failed to initialize database: {e}")
         # Provide extra context for SQLite errors
         if "unable to open database file" in str(e).lower():
-            db_path = settings.database_url.replace("sqlite:///", "").split("?")[0]
+            database_url = settings.database_url
+            if database_url.startswith("sqlite:////"):
+                db_path = "/" + database_url.replace("sqlite:////", "", 1).split("?")[0]
+            else:
+                db_path = database_url.replace("sqlite:///", "").split("?")[0]
             logger.error(f"DEBUG INFO: DB Path={db_path}, Absolute={Path(db_path).absolute()}")
             logger.error(
                 f"DEBUG INFO: Exists={Path(db_path).exists()}, IsDir={Path(db_path).is_dir()}"
@@ -256,6 +268,9 @@ def _run_migrations() -> None:
             ("idx_model_feedback_model_timestamp", "model_feedback", "model_name, timestamp"),
             ("idx_routing_decision_selected_model", "routing_decisions", "selected_model"),
             ("idx_benchmark_sync_last_sync", "benchmark_sync", "last_sync"),
+            ("idx_dlq_status_next_retry", "background_task_dlq", "status, next_retry_at"),
+            ("idx_dlq_task_created", "background_task_dlq", "task_name, created_at"),
+            ("idx_audit_action_timestamp", "admin_audit_log", "action, timestamp"),
         ]
 
         for index_name, table_name, columns in indexes_to_create:

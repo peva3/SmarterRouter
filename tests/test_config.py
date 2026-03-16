@@ -37,6 +37,7 @@ class TestSettings:
             assert default_settings.polling_interval == 300
             assert default_settings.profile_timeout == 90
             assert default_settings.model_keep_alive == -1
+            assert default_settings.rate_limit_chat_requests_per_minute == 100
 
     def test_benchmark_sources_default(self):
         """Test default benchmark sources."""
@@ -105,3 +106,39 @@ class TestInitLogging:
                     call_args = mock_setup.call_args
                     assert call_args.kwargs["level"] == level_int
                     assert call_args.kwargs["log_format"] == "text"
+
+
+class TestTLSVerification:
+    """Test TLS verification toggle (Item #25)."""
+
+    @staticmethod
+    def _create_test_settings(**kwargs):
+        """Create Settings instance for testing without loading .env file."""
+
+        class TestSettingsClass(Settings):
+            model_config = SettingsConfigDict(
+                env_file=None,
+                env_file_encoding="utf-8",
+                env_prefix="ROUTER_",
+                extra="ignore",
+            )
+
+        return TestSettingsClass(**kwargs)
+
+    def test_verify_tls_default_true(self):
+        """Test that TLS verification is enabled by default."""
+        with patch.dict("os.environ", {}, clear=True):
+            test_settings = self._create_test_settings()
+            assert test_settings.verify_tls is True
+
+    def test_verify_tls_disabled_via_env(self):
+        """Test that TLS verification can be disabled via environment variable."""
+        with patch.dict("os.environ", {"ROUTER_VERIFY_TLS": "false"}, clear=True):
+            test_settings = self._create_test_settings()
+            assert test_settings.verify_tls is False
+
+    def test_verify_tls_enabled_via_env(self):
+        """Test explicit TLS verification enable."""
+        with patch.dict("os.environ", {"ROUTER_VERIFY_TLS": "true"}, clear=True):
+            test_settings = self._create_test_settings()
+            assert test_settings.verify_tls is True

@@ -126,6 +126,13 @@ General endpoint rate limit per client IP.
 
 **Default:** `60`
 
+### `ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE`
+Dedicated chat endpoint (`/v1/chat/completions`) rate limit per client IP.
+
+This limit is applied specifically to chat completions and takes precedence over the general per-minute limit for that endpoint.
+
+**Default:** `100`
+
 ### `ROUTER_RATE_LIMIT_ADMIN_REQUESTS_PER_MINUTE`
 Admin endpoint rate limit per client IP.
 
@@ -180,6 +187,16 @@ Timeout for model generation requests (seconds).
 **Default:** `120`
 
 **Increase for:** Large models (14B+), complex reasoning tasks
+
+### `ROUTER_REQUEST_TIMEOUT_ENABLED`
+Enable global request timeout enforcement across full request processing (routing, model loading, generation, and post-processing).
+
+**Default:** `true`
+
+### `ROUTER_REQUEST_TIMEOUT_SECONDS`
+Overall request timeout budget in seconds. Requests exceeding this limit are cancelled and return HTTP 504.
+
+**Default:** `300`
 
 ### `ROUTER_PROFILE_TIMEOUT`
 Base timeout for profiling operations (seconds).
@@ -238,6 +255,29 @@ Maximum number of routing cache entries (SHA-256 hash based).
 Time-to-live for cache entries (seconds).
 
 **Default:** `3600` (1 hour)
+
+### `ROUTER_CACHE_BACKEND`
+Cache backend implementation.
+
+- `memory` (default)
+- `redis`
+
+### `ROUTER_REDIS_URL`
+Redis connection URL used when `ROUTER_CACHE_BACKEND=redis`.
+
+**Default:** `redis://localhost:6379`
+
+### `ROUTER_REDIS_CACHE_PREFIX`
+Prefix for Redis cache keys.
+
+**Default:** `smarterrouter:`
+
+### `ROUTER_CACHE_CLEANUP_INTERVAL_HOURS`
+Interval for background persistent-cache cleanup task.
+
+Set to `0` to disable the periodic cleanup task.
+
+**Default:** `24`
 
 ### `ROUTER_CACHE_RESPONSE_MAX_SIZE`
 Maximum number of response cache entries.
@@ -380,10 +420,34 @@ Log format: `text` (human-readable) or `json` (structured for log aggregation)
 
 **For production:** Use `json` for easy parsing by log aggregation tools
 
+When using `json` logging, warning/error records include structured context fields where available (e.g., `request_id`, `user_ip`, `model_name`, `prompt_hash`) to improve incident triage and cross-service correlation.
+
 ### `ROUTER_POLLING_INTERVAL`
 How often to check for new models in backend (seconds).
 
 **Default:** `60`
+
+### `ROUTER_ENABLE_RESPONSE_COMPRESSION`
+Enable gzip compression middleware for API responses.
+
+**Default:** `false`
+
+### `ROUTER_COMPRESSION_MINIMUM_SIZE`
+Minimum response size (bytes) before gzip compression is applied.
+
+**Default:** `1024`
+
+### `ROUTER_ENABLE_SLOW_QUERY_LOGGING`
+Enable slow-request logging middleware.
+
+When enabled, requests that exceed `ROUTER_SLOW_QUERY_THRESHOLD_MS` are logged with request metadata and a stack snapshot.
+
+**Default:** `false`
+
+### `ROUTER_SLOW_QUERY_THRESHOLD_MS`
+Slow request threshold in milliseconds.
+
+**Default:** `500`
 
 ---
 
@@ -400,6 +464,81 @@ postgresql://user:password@localhost:5432/smarterrouter
 ```
 
 **Note:** The database file and parent directories are automatically created on startup.
+
+### Connection Pooling
+
+These settings tune SQLAlchemy connection pooling (primarily for non-SQLite backends):
+
+- `ROUTER_DATABASE_POOL_SIZE` (default: `10`)
+- `ROUTER_DATABASE_MAX_OVERFLOW` (default: `20`)
+- `ROUTER_DATABASE_POOL_RECYCLE` (default: `3600`)
+- `ROUTER_DATABASE_POOL_PRE_PING` (default: `true`)
+
+For SQLite, pool settings are less impactful due to file-based locking, but are still accepted.
+
+### provider.db Reliability Controls
+
+- `ROUTER_PROVIDER_DB_ENABLED` - Enable provider.db benchmark usage (**default:** `true`)
+- `ROUTER_PROVIDER_DB_PATH` - Path to provider.db (**default:** `data/provider.db`)
+- `ROUTER_PROVIDER_DB_MAX_AGE_HOURS` - Mark provider.db stale if `last_build` is older than this many hours (**default:** `168`)
+- `ROUTER_PROVIDER_DB_AUTO_UPDATE_HOURS` - Background auto-update interval (**default:** `4`)
+- `ROUTER_PROVIDER_DB_DOWNLOAD_URL` - Download source URL for provider.db
+
+#### DB slowness fallback
+
+- `ROUTER_DB_SLOW_FALLBACK_ENABLED` - Enable temporary stale-cache fallback when provider.db is slow/unavailable (**default:** `true`)
+- `ROUTER_DB_SLOW_QUERY_THRESHOLD_MS` - Query latency threshold that triggers degraded fallback window (**default:** `250`)
+- `ROUTER_DB_SLOW_FALLBACK_WINDOW_SECONDS` - Duration of degraded fallback window after slow/failing query (**default:** `30`)
+- `ROUTER_DB_STALE_CACHE_MAX_AGE_SECONDS` - Maximum age of in-memory benchmark cache allowed for fallback serving (**default:** `300`)
+
+---
+
+## Backend Resilience
+
+### Retry Controls
+
+- `ROUTER_BACKEND_RETRY_ENABLED` - Enable retry for transient backend errors (**default:** `true`)
+- `ROUTER_BACKEND_MAX_RETRIES` - Maximum retry attempts (**default:** `3`)
+- `ROUTER_BACKEND_RETRY_BASE_DELAY` - Initial backoff delay in seconds (**default:** `0.5`)
+- `ROUTER_BACKEND_RETRY_MAX_DELAY` - Maximum backoff delay in seconds (**default:** `8.0`)
+
+Retryable failures include timeouts, network errors, HTTP 429, and HTTP 5xx.
+
+### Circuit Breaker Controls
+
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_ENABLED` (**default:** `true`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_FAILURE_THRESHOLD` (**default:** `5`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_RESET_TIMEOUT` (**default:** `60.0`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_HALF_OPEN_MAX_ATTEMPTS` (**default:** `3`)
+- `ROUTER_BACKEND_CIRCUIT_BREAKER_SLIDING_WINDOW_SIZE` (**default:** `100`)
+
+When enabled, backend operations open their circuit after repeated failures, fail fast while open, and probe recovery in half-open state.
+
+---
+
+## Dead Letter Queue (DLQ)
+
+### `ROUTER_DLQ_ENABLED`
+Enable persistent dead-letter-queue capture for failed background jobs.
+
+**Default:** `true`
+
+### `ROUTER_DLQ_MAX_RETRIES`
+Maximum retry attempts per failed background task before marking it `dead`.
+
+**Default:** `3`
+
+### `ROUTER_DLQ_RETRY_BASE_DELAY_SECONDS`
+Base retry delay in seconds for DLQ retries. Backoff is exponential per attempt.
+
+**Default:** `60`
+
+### `ROUTER_DLQ_AUTO_RETRY_BATCH_SIZE`
+Maximum number of due DLQ entries retried per retry-worker iteration.
+
+**Default:** `10`
+
+DLQ captures failures from background sync/cleanup workflows and stores them in `background_task_dlq` for later inspection and retry.
 
 ---
 

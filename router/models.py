@@ -239,3 +239,50 @@ class EmbeddingCache(Base):
     )
     access_count: Mapped[int] = mapped_column(Integer, default=1)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AdminAuditLog(Base):
+    """Audit log for admin actions."""
+
+    __tablename__ = "admin_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+    action: Mapped[str] = mapped_column(String, index=True)  # e.g. "reprofile", "cache_clear"
+    endpoint: Mapped[str] = mapped_column(String)  # e.g. "/admin/reprofile"
+    method: Mapped[str] = mapped_column(String)  # HTTP method: GET, POST, etc.
+
+    ip_address: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Request details (sanitized)
+    parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Response summary
+    result_summary: Mapped[str | None] = mapped_column(String, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, default=200)
+
+    # Duration in milliseconds
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class BackgroundTaskDLQ(Base):
+    """Dead letter queue for failed background tasks."""
+
+    __tablename__ = "background_task_dlq"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_name: Mapped[str] = mapped_column(String, index=True)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, index=True, default="failed")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

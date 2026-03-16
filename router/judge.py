@@ -8,6 +8,7 @@ from collections import deque
 import httpx
 
 from router.config import settings
+from router.encryption import get_encryption_manager
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class JudgeClient:
         self.enabled = settings.judge_enabled
         self.model = settings.judge_model
         self.base_url = settings.judge_base_url
-        self.api_key = settings.judge_api_key
+        self.api_key = get_encryption_manager().maybe_decrypt(settings.judge_api_key)
         self.http_referer = settings.judge_http_referer
         self.x_title = settings.judge_x_title
         self.max_retries = settings.judge_max_retries
@@ -120,8 +121,12 @@ class JudgeClient:
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create shared HTTP client with connection pooling."""
         if self._client is None or self._client.is_closed:
+            from router.config import settings
+
             self._client = httpx.AsyncClient(
-                timeout=30.0, limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+                timeout=30.0,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                verify=settings.verify_tls,
             )
         return self._client
 
@@ -362,7 +367,9 @@ class JudgeClient:
         }
 
         if client is None:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            from router.config import settings
+
+            async with httpx.AsyncClient(timeout=30.0, verify=settings.verify_tls) as client:
                 return await self._make_request(client, headers, payload)
         else:
             return await self._make_request(client, headers, payload)

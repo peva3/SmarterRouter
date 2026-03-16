@@ -21,18 +21,27 @@ Admin endpoints require header: `Authorization: Bearer your-admin-api-key`
 
 ### `GET /health`
 
-Health check endpoint.
+Health check endpoint with subsystem diagnostics.
 
 **Response:**
 ```json
 {
   "status": "healthy",
-  "profiling_complete": true,
-  "models_available": 5,
-  "backend_connected": true,
-  "timestamp": "2024-02-20T12:34:56.789Z"
+  "checks": {
+    "database": {"status": "healthy", "details": "Database connection successful"},
+    "backend": {"status": "healthy", "details": "Backend initialized"},
+    "gpu_monitor": {"status": "healthy", "details": {"gpus": [], "total_gb": 0.0, "used_gb": 0.0}},
+    "cache": {"status": "healthy", "details": {"backend": "memory"}},
+    "background_tasks": {"status": "healthy", "details": {"count": 3}}
+  },
+  "version": "2.2.0",
+  "request_id": "req_abc123"
 }
 ```
+
+**Provider DB note:** `checks.database.details.provider_db` includes `available`, `degraded`, and `stale` indicators so operators can detect when provider benchmark data is temporarily serving fallback behavior.
+
+**DLQ note:** When DLQ is enabled, `checks.dlq` includes aggregate counts for `failed`, `retrying`, and `dead` background jobs.
 
 ### `GET /metrics`
 
@@ -85,6 +94,12 @@ Main chat completion endpoint. Compatible with OpenAI API format.
 ```
 
 **Streaming:** Set `"stream": true` for Server-Sent Events (SSE) format.
+
+**Rate limiting:** When enabled, chat uses a dedicated per-IP limit via `ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE` and returns HTTP `429` (`Rate limit exceeded`) when the threshold is exceeded.
+
+**Request timeout:** End-to-end request processing is bounded by a global timeout (`ROUTER_REQUEST_TIMEOUT_SECONDS`, enabled by default). If exceeded, the endpoint returns HTTP `504` with a `timeout_error` payload.
+
+**Error observability:** Failure paths on chat and related APIs emit structured error logs with correlation fields (`request_id`, `user_ip`, `model_name`, `prompt_hash`) when available, enabling easier tracing from API responses to backend logs.
 
 **Response:**
 ```json
@@ -185,9 +200,18 @@ All admin endpoints require `Authorization: Bearer your-admin-api-key` header.
 
 View performance profiles of all models.
 
+**Query params:**
+- `limit` (default 1000)
+- `offset` (legacy pagination, ignored when `cursor` is set)
+- `cursor` (cursor-based pagination; returns rows with `name > cursor`)
+
 **Response:**
 ```json
 {
+  "cursor": null,
+  "next_cursor": "llama3:70b",
+  "offset": 0,
+  "limit": 100,
   "profiles": [
     {
       "model_name": "llama3:70b",
@@ -209,19 +233,26 @@ View aggregated benchmark data from external sources (HuggingFace, LMSYS).
 
 **Query params:**
 - `?model=llama3:70b` - Filter to specific model
+- `?limit=100` - Page size
+- `?offset=0` - Legacy offset mode (ignored when `cursor` is set)
+- `?cursor=llama3:8b` - Cursor mode (returns rows with `ollama_name > cursor`)
 
 **Response:**
 ```json
 {
-  "benchmarks": {
-    "llama3:70b": {
-      "mmlu": 0.82,
-      "humaneval": 0.78,
-      "gsm8k": 0.85,
-      "source": "huggingface",
-      "last_updated": "2024-02-20T00:00:00Z"
+  "cursor": null,
+  "next_cursor": "llama3:70b",
+  "offset": 0,
+  "limit": 100,
+  "benchmarks": [
+    {
+      "ollama_name": "llama3:70b",
+      "mmlu_score": 0.82,
+      "gpqa_score": 0.58,
+      "humaneval_score": 0.78,
+      "math_500_score": 0.85
     }
-  }
+  ]
 }
 ```
 
@@ -239,6 +270,56 @@ Trigger manual reprofiling of models.
   "message": "Reprofiling started for 3 models",
   "task_id": "abc123",
   "check_status": "/admin/profiling_status/abc123"
+}
+```
+
+### `GET /admin/dlq`
+
+List dead-letter-queue entries for failed background tasks.
+
+**Query params:**
+- `status` (optional): `failed`, `retrying`, `dead`, or `resolved`
+- `limit` (default `50`, max `200`)
+- `offset` (default `0`)
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "total": 2,
+  "limit": 50,
+  "offset": 0,
+  "status": "failed",
+  "entries": [
+    {
+      "id": 12,
+      "task_name": "benchmark_sync",
+      "status": "failed",
+      "attempts": 1,
+      "max_retries": 3,
+      "error_message": "timeout calling provider",
+      "payload": {"source": "huggingface"},
+      "created_at": "2026-03-16T10:15:00+00:00",
+      "last_attempt_at": "2026-03-16T10:16:00+00:00",
+      "next_retry_at": "2026-03-16T10:17:00+00:00",
+      "resolved_at": null
+    }
+  ]
+}
+```
+
+### `POST /admin/dlq/retry/{entry_id}`
+
+Manually retry a specific DLQ entry.
+
+**Response:**
+```json
+{
+  "entry_id": 12,
+  "success": true,
+  "status": "resolved",
+  "attempts": 2,
+  "next_retry_at": null
 }
 ```
 

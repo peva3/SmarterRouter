@@ -149,7 +149,11 @@ async def validate_environment():
 
         if "sqlite" in settings.database_url.lower():
             # Extract file path
-            db_path = settings.database_url.replace("sqlite:///", "").replace("sqlite://", "")
+            database_url = settings.database_url
+            if database_url.startswith("sqlite:////"):
+                db_path = "/" + database_url.replace("sqlite:////", "", 1)
+            else:
+                db_path = database_url.replace("sqlite:///", "").replace("sqlite://", "")
             if "?" in db_path:
                 db_path = db_path.split("?")[0]
             db_file = Path(db_path)

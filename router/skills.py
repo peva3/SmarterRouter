@@ -21,7 +21,9 @@ class WebSearchSkill(Skill):
         if not query:
             return "Error: query parameter is required for web search."
         try:
-            async with httpx.AsyncClient() as client:
+            from router.config import settings
+
+            async with httpx.AsyncClient(verify=settings.verify_tls) as client:
                 response = await client.get(
                     "https://api.duckduckgo.com/",
                     params={"q": query, "format": "json", "no_html": 1},

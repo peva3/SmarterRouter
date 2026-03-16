@@ -17,6 +17,30 @@ class Settings(BaseSettings):
     # Provider selection
     provider: str = Field(default="ollama")
 
+    # Response compression
+    enable_response_compression: bool = Field(default=False)
+    compression_minimum_size: int = Field(default=1024)
+
+    # Cache cleanup
+    cache_cleanup_interval_hours: int = Field(default=24)
+
+    # Slow query logging
+    enable_slow_query_logging: bool = Field(default=False)
+    slow_query_threshold_ms: int = Field(default=500)
+
+    # Backend retry configuration
+    backend_retry_enabled: bool = Field(default=True)
+    backend_max_retries: int = Field(default=3)
+    backend_retry_base_delay: float = Field(default=1.0)  # seconds
+    backend_retry_max_delay: float = Field(default=10.0)  # seconds
+
+    # Backend circuit breaker configuration
+    backend_circuit_breaker_enabled: bool = Field(default=False)
+    backend_circuit_breaker_failure_threshold: int = Field(default=5)
+    backend_circuit_breaker_reset_timeout: float = Field(default=60.0)  # seconds
+    backend_circuit_breaker_half_open_max_attempts: int = Field(default=3)
+    backend_circuit_breaker_sliding_window_size: int = Field(default=100)
+
     # Ollama settings
     ollama_url: str = Field(default="http://localhost:11434")
 
@@ -92,6 +116,12 @@ class Settings(BaseSettings):
     generation_timeout: int = Field(
         default=120
     )  # Timeout for model generation (larger models need more time)
+    request_timeout_enabled: bool = Field(
+        default=True
+    )  # Enforce overall request timeout across routing + generation
+    request_timeout_seconds: int = Field(
+        default=300
+    )  # Overall request timeout budget in seconds
     profile_prompts_per_category: int = Field(default=3)
 
     router_model: str | None = Field(default=None)
@@ -123,6 +153,13 @@ class Settings(BaseSettings):
     log_format: str = Field(default="text")  # "text" or "json"
 
     database_url: str = Field(default="sqlite:///data/router.db")
+
+    # Database connection pooling (for non-SQLite databases)
+    # SQLite uses file-based locking, pool settings only apply to other backends
+    database_pool_size: int = Field(default=10)  # Base number of connections to maintain
+    database_max_overflow: int = Field(default=20)  # Additional connections allowed beyond pool_size
+    database_pool_recycle: int = Field(default=3600)  # Recycle connections after this many seconds (prevents stale connections)
+    database_pool_pre_ping: bool = Field(default=True)  # Check connection health before using
 
     pinned_model: str | None = Field(default=None)  # Model to keep loaded in VRAM
 
@@ -160,7 +197,63 @@ class Settings(BaseSettings):
     )  # API key for admin endpoints (if not set, admin endpoints are open)
     rate_limit_enabled: bool = Field(default=False)  # Enable rate limiting
     rate_limit_requests_per_minute: int = Field(default=60)  # Requests per minute limit
+    rate_limit_chat_requests_per_minute: int = Field(
+        default=100
+    )  # Chat endpoint rate limit
     rate_limit_admin_requests_per_minute: int = Field(default=10)  # Admin endpoint rate limit
+
+    # Prompt injection detection (Item #23)
+    prompt_injection_detection_enabled: bool = Field(default=True)
+    prompt_injection_action: str = Field(
+        default="log"
+    )  # "log" = log only, "warn" = add warning to response, "block" = reject request
+
+    # TLS verification (Item #25)
+    verify_tls: bool = Field(default=True)  # Set to False for self-signed certs in dev
+
+    # CORS configuration (Item #22)
+    cors_origins: str = Field(
+        default="*"
+    )  # Comma-separated list of allowed origins (e.g. "http://localhost:3000,https://myapp.com")
+    cors_allow_credentials: bool = Field(default=False)  # Allow credentials (cookies, auth headers)
+    cors_allow_methods: str = Field(default="GET,POST,PUT,DELETE,OPTIONS")  # Allowed HTTP methods
+    cors_allow_headers: str = Field(default="*")  # Allowed headers
+    cors_max_age: int = Field(default=600)  # Max age for preflight cache in seconds
+
+    # Admin IP whitelist (Item #26)
+    admin_allowed_ips: list[str] = Field(
+        default_factory=list
+    )  # Empty = allow all (with API key). E.g. ["127.0.0.1", "10.0.0.0/8"]
+
+    # Request size limits (Item #27)
+    max_request_body_bytes: int = Field(default=10 * 1024 * 1024)  # 10MB default
+    max_message_content_length: int = Field(default=100_000)  # 100k chars per message
+
+    # Admin audit logging (Item #24)
+    admin_audit_enabled: bool = Field(default=True)  # Record admin actions to audit log
+
+    # Content moderation (Item #28)
+    content_moderation_enabled: bool = Field(default=False)
+    content_moderation_action: str = Field(
+        default="block"
+    )  # "log" = log only, "block" = reject request
+    content_moderation_webhook_url: str | None = Field(
+        default=None
+    )  # Optional external moderation webhook
+    content_moderation_categories: list[str] = Field(
+        default_factory=lambda: [
+            "weapons_explosives",
+            "self_harm",
+            "illegal_drugs",
+            "child_exploitation",
+        ]
+    )
+
+    # Dead Letter Queue (DLQ) for failed background tasks
+    dlq_enabled: bool = Field(default=True)
+    dlq_max_retries: int = Field(default=3)
+    dlq_retry_base_delay_seconds: int = Field(default=60)
+    dlq_auto_retry_batch_size: int = Field(default=10)
 
     # Smart Cache settings
     cache_enabled: bool = Field(default=True)  # Enable smart caching
@@ -179,6 +272,20 @@ class Settings(BaseSettings):
     # Enhanced Cache Statistics & Analytics (SmarterRouter 2.1.6+)
     cache_stats_enabled: bool = Field(default=True)  # Enable enhanced cache statistics
     cache_stats_retention_hours: int = Field(default=24)  # Hours to keep time-series data
+
+    # Redis Cache Backend (Item 3: distributed cache option)
+    cache_backend: str = Field(
+        default="memory"
+    )  # Cache backend: "memory" (default) or "redis"
+    redis_url: str | None = Field(
+        default=None
+    )  # Redis connection URL (e.g., "redis://localhost:6379/0")
+    redis_max_connections: int = Field(
+        default=20
+    )  # Max connections in Redis connection pool
+    redis_cache_prefix: str = Field(
+        default="smarterrouter:"
+    )  # Prefix for Redis keys
 
     # VRAM Monitoring & Management
     vram_monitor_enabled: bool = Field(
@@ -237,12 +344,21 @@ class Settings(BaseSettings):
     # Path to provider.db containing benchmark data for external models
     provider_db_enabled: bool = Field(default=True)
     provider_db_path: str = Field(default="data/provider.db")
+    # Max age for provider.db in hours before considered stale (0 = disable staleness check)
+    provider_db_max_age_hours: int = Field(default=168)
     # Auto-update provider.db (in hours, 0 = disabled)
     provider_db_auto_update_hours: int = Field(default=4)
     # URL to download provider.db from
     provider_db_download_url: str = Field(
         default="https://raw.githubusercontent.com/peva3/smarterrouter-provider/refs/heads/main/data/provider.db"
     )
+
+    # DB slowness fallback controls
+    # If DB is slow/unavailable, temporarily serve stale in-memory cache for resilience
+    db_slow_fallback_enabled: bool = Field(default=True)
+    db_slow_query_threshold_ms: int = Field(default=250)
+    db_slow_fallback_window_seconds: int = Field(default=30)
+    db_stale_cache_max_age_seconds: int = Field(default=300)
 
     # External Provider API Configuration
     # When enabled, route to external providers (OpenAI, Anthropic, etc.)

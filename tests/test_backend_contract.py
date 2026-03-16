@@ -316,3 +316,79 @@ class TestBackendContract:
                 chunks.append(chunk)
 
             assert any("message" in c for c in chunks)
+
+
+class TestTLSVerification:
+    """Test that TLS verification setting is propagated to httpx clients (Item #25)."""
+
+    def test_ollama_client_respects_verify_tls_false(self):
+        """Ollama backend passes verify=False when verify_tls is disabled."""
+        from unittest.mock import MagicMock
+
+        from router.backends.ollama import OllamaBackend
+
+        config = MagicMock()
+        config.verify_tls = False
+        backend = OllamaBackend(
+            base_url="http://localhost:11434",
+            config=config,
+        )
+        assert backend.config.verify_tls is False
+
+    def test_openai_client_respects_verify_tls_false(self):
+        """OpenAI backend passes verify=False when verify_tls is disabled."""
+        from unittest.mock import MagicMock
+
+        from router.backends.openai import OpenAIBackend
+
+        config = MagicMock()
+        config.verify_tls = False
+        backend = OpenAIBackend(
+            base_url="http://localhost:8000",
+            api_key="test",
+            config=config,
+        )
+        assert backend.config.verify_tls is False
+
+    def test_llama_cpp_client_respects_verify_tls_false(self):
+        """Llama.cpp backend passes verify=False when verify_tls is disabled."""
+        from unittest.mock import MagicMock
+
+        from router.backends.llama_cpp import LlamaCppBackend
+
+        config = MagicMock()
+        config.verify_tls = False
+        backend = LlamaCppBackend(
+            base_url="http://localhost:8080",
+            config=config,
+        )
+        assert backend.config.verify_tls is False
+
+    @pytest.mark.asyncio
+    async def test_ollama_persistent_client_uses_verify(self):
+        """Verify the persistent httpx client uses verify_tls from config."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from router.backends.ollama import OllamaBackend
+
+        config = MagicMock()
+        config.verify_tls = False
+        backend = OllamaBackend(
+            base_url="http://localhost:11434",
+            config=config,
+        )
+
+        with patch("router.backends.ollama.httpx.AsyncClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_instance.is_closed = False
+            mock_client_class.return_value = mock_instance
+
+            await backend._get_client()
+
+            # Verify httpx.AsyncClient was called with verify=False
+            mock_client_class.assert_called_once()
+            call_kwargs = mock_client_class.call_args
+            assert call_kwargs.kwargs.get("verify") is False
+
+        # Cleanup
+        backend._client = None

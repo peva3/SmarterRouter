@@ -16,6 +16,7 @@ import logging
 from router.backends.base import LLMBackend
 from router.backends.openai import OpenAIBackend
 from router.config import settings
+from router.encryption import get_encryption_manager
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,10 @@ class ExternalBackendFactory:
 
         api_key: str | None = getattr(settings, api_key_field, None) if api_key_field else None
         base_url: str | None = getattr(settings, base_url_field, None) if base_url_field else None
+
+        # Decrypt API key if encrypted in env/config
+        if api_key:
+            api_key = get_encryption_manager().maybe_decrypt(api_key)
 
         # Use default URL if not specified
         if not base_url:

@@ -5,6 +5,23 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
+
+
+def sanitize_model_name(model_name: str | None) -> str | None:
+    """Validate and normalize model names used in backend/API calls."""
+    if model_name is None:
+        return None
+
+    normalized = model_name.strip()
+    if not normalized:
+        raise ValueError("Model name cannot be empty")
+
+    if not MODEL_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError("Model name contains invalid characters")
+
+    return normalized
+
 
 class ChatMessage(BaseModel):
     """A single chat message with validation."""
@@ -35,7 +52,19 @@ class ChatMessage(BaseModel):
             # Remove null bytes
             v = v.replace("\x00", "")
             # Simple text sanitization
-            return v.strip()
+            v = v.strip()
+            # Enforce per-message content length limit
+            # Import lazily to avoid circular imports
+            try:
+                from router.config import settings
+                max_len = settings.max_message_content_length
+            except Exception:
+                max_len = 100_000  # Fallback default
+            if len(v) > max_len:
+                raise ValueError(
+                    f"Message content too long ({len(v)} chars, max {max_len})"
+                )
+            return v
 
         if isinstance(v, list):
             # Multimodal content validation
@@ -44,6 +73,17 @@ class ChatMessage(BaseModel):
                     raise ValueError("Content parts must be dictionaries")
                 if "type" not in part:
                     raise ValueError("Content part must have a 'type'")
+                # Check text parts for length
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    try:
+                        from router.config import settings
+                        max_len = settings.max_message_content_length
+                    except Exception:
+                        max_len = 100_000
+                    if len(part["text"]) > max_len:
+                        raise ValueError(
+                            f"Message text part too long ({len(part['text'])} chars, max {max_len})"
+                        )
             return v
 
         return v
@@ -83,12 +123,7 @@ class ChatCompletionRequest(BaseModel):
     @classmethod
     def validate_model_name(cls, v: str | None) -> str | None:
         """Validate model name doesn't contain dangerous characters."""
-        if v is None:
-            return v
-        # Allow alphanumeric, hyphens, underscores, colons, dots, and slashes
-        if not re.match(r"^[\w\-:.\/]+$", v):
-            raise ValueError("Model name contains invalid characters")
-        return v
+        return sanitize_model_name(v)
 
 
 class FeedbackRequest(BaseModel):
@@ -106,6 +141,12 @@ class FeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=500, description="Optional comment")
     category: str | None = Field(default=None, description="Optional task category")
 
+    @field_validator("model_name")
+    @classmethod
+    def validate_model_name(cls, v: str | None) -> str | None:
+        """Validate optional model_name when provided."""
+        return sanitize_model_name(v)
+
 
 class EmbeddingsRequest(BaseModel):
     """OpenAI-compatible embeddings request."""
@@ -114,6 +155,15 @@ class EmbeddingsRequest(BaseModel):
     input: str | list[str] = Field(..., description="Input text or list of texts to embed")
     user: str | None = Field(default=None, max_length=100)
     encoding_format: Literal["float", "base64"] | None = Field(default="float")
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_name(cls, v: str) -> str:
+        """Validate embeddings model name."""
+        validated = sanitize_model_name(v)
+        if validated is None:
+            raise ValueError("Model name is required")
+        return validated
 
 
 class EmbeddingData(BaseModel):

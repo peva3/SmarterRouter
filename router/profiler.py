@@ -52,6 +52,10 @@ class ModelProfiler:
         self.screening_max_time_ms: float = 0.0
         self.screening_total_tokens: int = 0
 
+    async def close(self) -> None:
+        """Close profiler-owned resources (e.g., judge HTTP client)."""
+        await self.judge.close()
+
     def _calculate_timeout(self, model_name: str) -> float:
         """Calculate appropriate timeout based on model size.
 
@@ -732,7 +736,6 @@ class ModelProfiler:
 async def profile_all_models(client: LLMBackend, force: bool = False) -> list[ProfileResult]:
     """Profile all models, optionally in parallel based on configuration."""
     models = await client.list_models()
-    len(models)
 
     # Apply model filtering if configured
     include = settings.model_filter_include
@@ -770,7 +773,6 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
 
     models = local_models
 
-    {m.name for m in models}
     new_models = [m for m in models if m.name not in existing_profiles]
 
     if not force and existing_profiles:
@@ -799,6 +801,7 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
         async def profile_single(model_info: ModelInfo, index: int) -> ProfileResult | None:
             nonlocal completed_count
             async with semaphore:
+                profiler: ModelProfiler | None = None
                 try:
                     profiler = ModelProfiler(
                         client,
@@ -819,6 +822,14 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
                 except Exception as e:
                     logger.error(f"Failed to profile {model_info.name}: {e}")
                     return None
+                finally:
+                    if profiler is not None:
+                        try:
+                            await profiler.close()
+                        except Exception as e:
+                            logger.debug(
+                                f"Failed to close profiler resources for {model_info.name}: {e}"
+                            )
 
         tasks = [profile_single(model_info, i) for i, model_info in enumerate(new_models, 1)]
         task_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -830,6 +841,7 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
                 logger.error(f"Profiling task raised exception: {r}")
     else:
         for i, model_info in enumerate(new_models, 1):
+            profiler: ModelProfiler | None = None
             try:
                 profiler = ModelProfiler(
                     client,
@@ -846,6 +858,12 @@ async def profile_all_models(client: LLMBackend, force: bool = False) -> list[Pr
                     )
             except Exception as e:
                 logger.error(f"Failed to profile {model_info.name}: {e}")
+            finally:
+                if profiler is not None:
+                    try:
+                        await profiler.close()
+                    except Exception as e:
+                        logger.debug(f"Failed to close profiler resources for {model_info.name}: {e}")
 
     logger.info(
         f"PROGRESS: Profiling complete! {len(results)}/{len(new_models)} models profiled successfully"

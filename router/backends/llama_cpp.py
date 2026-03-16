@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from router.backends.base import LLMBackend, ModelInfo
+from router.backends.resilience import with_backend_resilience
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,10 @@ class LlamaCppBackend(LLMBackend):
         model_prefix: str = "",
         timeout: float = 60.0,
         models_cache_ttl: float = 30.0,  # Cache model list for 30 seconds
+        config: Any | None = None,
     ):
+        from router.config import settings as global_settings
+
         self.base_url = base_url.rstrip("/")
         self.model_prefix = model_prefix
         self.timeout = timeout
@@ -33,6 +37,7 @@ class LlamaCppBackend(LLMBackend):
         self._models_cache: tuple[list[ModelInfo], float] | None = None  # (models, timestamp)
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        self.config = config or global_settings
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create persistent HTTP client for connection reuse."""
@@ -42,6 +47,7 @@ class LlamaCppBackend(LLMBackend):
                     self._client = httpx.AsyncClient(
                         timeout=httpx.Timeout(self.timeout, connect=10.0),
                         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                        verify=self.config.verify_tls,
                     )
         return self._client
 
@@ -68,24 +74,33 @@ class LlamaCppBackend(LLMBackend):
         effective_timeout = timeout if timeout is not None else self.timeout
         client = await self._get_client()
 
-        # Create a new client with specific timeout if needed
-        if effective_timeout != self.timeout:
-            async with httpx.AsyncClient(timeout=effective_timeout) as temp_client:
-                response = await temp_client.request(method, url, **kwargs)
-                response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, dict):
-                    logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
-                    return {}
-                return data
+        async def perform_request() -> dict[str, Any]:
+            # Create a new client with specific timeout if needed
+            if effective_timeout != self.timeout:
+                async with httpx.AsyncClient(
+                    timeout=effective_timeout, verify=self.config.verify_tls
+                ) as temp_client:
+                    response = await temp_client.request(method, url, **kwargs)
+                    response.raise_for_status()
+                    data = response.json()
+                    if not isinstance(data, dict):
+                        logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                        return {}
+                    return data
 
-        response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
-            return {}
-        return data
+            response = await client.request(method, url, **kwargs)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                logger.warning(f"Unexpected response type from {method} {url}: {type(data)}")
+                return {}
+            return data
+
+        return await with_backend_resilience(
+            operation_name="llama_cpp_request",
+            operation=perform_request,
+            config=self.config,
+        )
 
     async def list_models(self) -> list[ModelInfo]:
         """List available models with caching to avoid repeated HTTP requests."""
@@ -164,52 +179,61 @@ class LlamaCppBackend(LLMBackend):
         url = f"{self.base_url}/v1/chat/completions"
         full_model = self._full_model_name(model)
 
-        start_time = time.perf_counter()
-        first_token_time: float | None = None
-        latency_ms = 0.0
+        async def attempt_stream() -> tuple[AsyncIterator[dict[str, Any]], float]:
+            start_time = time.perf_counter()
+            first_token_time: float | None = None
+            latency_ms = 0.0
 
-        async def stream_generator() -> AsyncIterator[dict[str, Any]]:
-            nonlocal latency_ms, first_token_time
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    json={
-                        "model": full_model,
-                        "messages": messages,
-                        "stream": True,
-                    },
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        # Handle [DONE] sentinel
-                        if line.startswith("data: [DONE]"):
-                            yield {"done": True}
-                            continue
-                        if line.startswith("data: "):
-                            try:
-                                data = json.loads(line[6:])
-                                # Measure time to first token
-                                if first_token_time is None:
-                                    first_token_time = time.perf_counter()
-                                    latency_ms = (first_token_time - start_time) * 1000
-                                # Normalize to Ollama format (already done in stream)
-                                content = ""
-                                finish_reason = None
-                                if "choices" in data and len(data["choices"]) > 0:
-                                    choice = data["choices"][0]
-                                    content = choice.get("delta", {}).get("content", "")
-                                    finish_reason = choice.get("finish_reason")
-                                yield {
-                                    "message": {"content": content},
-                                    "done": finish_reason == "stop",
-                                }
-                            except json.JSONDecodeError:
+            async def stream_generator() -> AsyncIterator[dict[str, Any]]:
+                nonlocal latency_ms, first_token_time
+                async with httpx.AsyncClient(
+                    timeout=self.timeout, verify=self.config.verify_tls
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        json={
+                            "model": full_model,
+                            "messages": messages,
+                            "stream": True,
+                        },
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line.strip():
                                 continue
+                            # Handle [DONE] sentinel
+                            if line.startswith("data: [DONE]"):
+                                yield {"done": True}
+                                continue
+                            if line.startswith("data: "):
+                                try:
+                                    data = json.loads(line[6:])
+                                    # Measure time to first token
+                                    if first_token_time is None:
+                                        first_token_time = time.perf_counter()
+                                        latency_ms = (first_token_time - start_time) * 1000
+                                    # Normalize to Ollama format (already done in stream)
+                                    content = ""
+                                    finish_reason = None
+                                    if "choices" in data and len(data["choices"]) > 0:
+                                        choice = data["choices"][0]
+                                        content = choice.get("delta", {}).get("content", "")
+                                        finish_reason = choice.get("finish_reason")
+                                    yield {
+                                        "message": {"content": content},
+                                        "done": finish_reason == "stop",
+                                    }
+                                except json.JSONDecodeError:
+                                    continue
 
-        return stream_generator(), latency_ms
+            return stream_generator(), latency_ms
+
+        return await with_backend_resilience(
+            operation_name="llama_cpp_stream_setup",
+            operation=attempt_stream,
+            config=self.config,
+        )
 
     async def unload_model(self, model_name: str) -> bool:
         """Llama.cpp doesn't support explicit unloading via API."""

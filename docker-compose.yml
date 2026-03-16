@@ -41,7 +41,7 @@ services:
         target: /tmp
     environment:
       # Use persistent database location matching volume mount
-      - ROUTER_DATABASE_URL=sqlite:///app/data/router.db
+      - ROUTER_DATABASE_URL=sqlite:////app/data/router.db
     restart: unless-stopped
     networks:
       - smarterrouter-network

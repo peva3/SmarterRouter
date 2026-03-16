@@ -55,7 +55,11 @@ class HuggingFaceProvider(BenchmarkProvider):
         ollama_base_names = {self._normalize_name(m) for m in ollama_models}
 
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            from router.config import settings
+
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True, verify=settings.verify_tls
+            ) as client:
                 response = await client.get(HF_DATASET_SERVER_URL)
                 response.raise_for_status()
                 data = response.json()
