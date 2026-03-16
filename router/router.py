@@ -21,6 +21,7 @@ from router.config import settings
 from router.database import get_session
 from router.model_filter import filter_model_infos, log_filter_summary
 from router.models import ModelFeedback, ModelProfile, RoutingDecision
+from router.modality import Modality, get_models_for_modality
 from router.persistent_cache import PersistentCacheManager
 from router.profiler import profile_all_models
 from router.provider_db import get_provider_db
@@ -1345,63 +1346,31 @@ Select the model that best matches the user's prompt needs."""
             logger.info("  (format: model, total_score, base_score, coding, creativity)")
 
         # Determine dominant category (threshold > 0.5) - but exclude complexity!
-        task_categories = {k: v for k, v in analysis.items() if k != "complexity"}
+        task_categories = {k: v for k, v in analysis.items() if k not in ("complexity", "vision", "tools")}
         top_category = max(task_categories.items(), key=lambda x: x[1])
         dominant_category = top_category[0] if top_category[1] > 0.5 else None
 
-        # STRICT FILTERING for Vision and Tools
-        candidates_filter = set(model_names)
+        # Determine modality from request object
+        modality = Modality.TEXT
+        if request_obj:
+            from router.modality import ModalityDetector
+            modality = ModalityDetector.from_chat_request(request_obj)
 
-        # 1. Vision Filter
-        if analysis.get("vision", 0) > 0:
-            # Filter for models that support vision (llava, pixtral, gpt-4o, etc)
-            vision_models = {
-                name
-                for name in model_names
-                if "llava" in name.lower()
-                or "pixtral" in name.lower()
-                or "vision" in name.lower()
-                or "gpt-4o" in name.lower()
-                or "claude-3" in name.lower()
-                or "gemini" in name.lower()
-                or "minicpm" in name.lower()
-                or "moondream" in name.lower()
-            }
-            if vision_models:
-                candidates_filter &= vision_models
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Vision detected. Filtering candidates: {candidates_filter}")
-            else:
-                logger.warning("Vision task detected but no vision models found!")
+        # Build model profiles dict for modality filtering
+        model_profiles = {p["name"]: p for p in profiles}
 
-        # 2. Tool Calling Filter
-        if analysis.get("tools", 0) > 0:
-            # Filter for models good at tool use
-            tool_models = {
-                name
-                for name in model_names
-                if any(
-                    kw in name.lower()
-                    for kw in [
-                        "gpt-4",
-                        "claude-3",
-                        "mistral-large",
-                        "qwen2.5",
-                        "llama3.1",
-                        "command-r",
-                        "hermes",
-                    ]
-                )
-            }
-            # Fallback: if no specific tool models, allow all but warn
-            if tool_models:
-                candidates_filter &= tool_models
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Tool use detected. Filtering candidates: {candidates_filter}")
+        # Apply modality-based filtering
+        modality_candidates = get_models_for_modality(
+            model_names, modality, model_profiles
+        )
+        candidates_filter = set(modality_candidates)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Detected modality: {modality}, filtered {len(model_names)} models to {len(candidates_filter)} candidates")
 
         if not candidates_filter:
-            # If we filtered everything out, reset to all models
-            logger.warning("Strict filtering removed all models. Resetting to full list.")
+            # Fallback to all models if modality filtering removed everything
+            logger.warning(f"Modality filtering ({modality}) removed all models, using fallback")
             candidates_filter = set(model_names)
 
         # Filter scores dict to only include candidates

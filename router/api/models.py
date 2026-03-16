@@ -20,6 +20,7 @@ from router.schemas import (
     FeedbackRequest,
     UsageInfo,
 )
+from router.modality import Modality, get_models_for_modality
 from router.skills import skills_registry
 from router.state import (
     _log_error_with_context,
@@ -249,8 +250,23 @@ async def embeddings(
     input_text = validated_request.input
 
     try:
-        # For embeddings, we just forward directly to the backend
-        # We don't route yet as embeddings models are usually specific
+        # Get available models and validate the requested model supports embeddings
+        if app_state.router_engine:
+            available_models = await app_state.router_engine.get_available_models_with_cache()
+            model_names = [m.name for m in available_models]
+            embedding_candidates = get_models_for_modality(
+                model_names, Modality.EMBEDDING
+            )
+
+            if model not in embedding_candidates:
+                # Model doesn't appear to support embeddings - warn but proceed
+                logger.warning(
+                    "Requested model %s may not support embeddings. "
+                    "Known embedding models: %s",
+                    model,
+                    embedding_candidates[:5],
+                )
+
         result = await app_state.backend.embed(model, input_text)
 
         # Map response to OpenAI format

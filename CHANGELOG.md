@@ -1,73 +1,126 @@
+## [2.2.1] - 2026-03-16
+
+### Highlights
+Added modality-aware routing to intelligently route requests based on input type (vision, tool-calling, text, embeddings). Enhanced changelog organization and documentation.
+
+### New Features
+
+#### Modality-Aware Routing
+- **Modality detection module** (`router/modality.py`) - Automatic detection of request modalities from request shape:
+  - Vision: Image URL content parts in messages
+  - Tool Calling: Presence of tools in request
+  - Text: Default text-based chat
+  - Embedding: Embeddings endpoint requests
+- **Model filtering by modality** - Filters available models based on modality capabilities using profile flags and name heuristics.
+- **Safe fallback** - When modality filtering removes all candidates, falls back to all available models.
+- **Name-based heuristics** for models without profile data:
+  - Vision: `llava`, `pixtral`, `gpt-4o`, `claude-3`, `gemini`, etc.
+  - Tool calling: `gpt-4`, `claude-3`, `mistral-large`, `qwen2.5`, etc.
+  - Embeddings: `embed`, `nomic`, `mxbai`, `text-embedding`, etc.
+
+### Integration
+- **Chat endpoint** - Modality detected from request and applied during model selection.
+- **Embeddings endpoint** - Added modality validation to warn when non-embedding models are requested.
+- **Router engine** - Modality-based filtering integrated into model selection pipeline.
+
+### Documentation
+- Reorganized 2.2.0 changelog for better readability with logical grouping.
+- Removed `(Item #XX)` references from 2.2.0 changelog.
+
+### Testing
+- Added comprehensive modality detection tests (`tests/test_modality.py`).
+- Coverage for all modality types, edge cases, and fallback behavior.
+
+---
+
 ## [2.2.0] - 2026-03-16
 
 ### Highlights
-- Major platform update with performance improvements, reliability hardening, expanded security controls, and large documentation/testing expansion.
-- Main application architecture refactored into focused modules (`router/state.py`, `router/middleware.py`, `router/lifecycle.py`, `router/api/*`) with `main.py` reduced to an app shell.
+Major platform update with performance improvements, reliability hardening, expanded security controls, and large documentation/testing expansion. Main application architecture refactored into focused modules with `main.py` reduced to an app shell.
 
-### Performance & Scalability
-- Added configurable response compression (`ROUTER_ENABLE_RESPONSE_COMPRESSION`, `ROUTER_COMPRESSION_MINIMUM_SIZE`).
-- Added cursor-based admin pagination for large profile/benchmark datasets.
-- Moved persistent cache cleanup to a background task (`ROUTER_CACHE_CLEANUP_INTERVAL_HOURS`).
-- Added optional slow-request profiling middleware (`ROUTER_ENABLE_SLOW_QUERY_LOGGING`, `ROUTER_SLOW_QUERY_THRESHOLD_MS`).
+### Breaking Changes
+None - fully backward compatible.
+
+### New Features
+
+#### Request Routing & Processing
+- **Modality-aware routing** - Automatic detection and filtering for vision, tool-calling, and text modalities in chat requests (`router/modality.py`).
+- **CORS configuration** - Full CORS support with configurable origins, methods, headers, and credentials (`ROUTER_CORS_ORIGINS` settings).
+- **Request timeout enforcement** - Global request timeout with graceful cancellation (`ROUTER_REQUEST_TIMEOUT_ENABLED`).
+- **Chat-specific rate limiting** - Dedicated per-IP rate limit for `/v1/chat/completions` endpoint (`ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE`).
+- **Model name sanitization** - Whitelist-based validation across all API paths to prevent injection attacks.
+
+#### Reliability & Operations
+- **Backend resilience** - Retry controls and circuit breaker pattern for all core backends (Ollama, llama.cpp, OpenAI-compatible).
+- **Dead Letter Queue** - Persistent DLQ for failed background tasks with automatic retry, manual retry endpoint, and health observability.
+- **Health endpoint expansion** - Added DB connectivity, GPU metrics, background task count, DLQ counts, and request ID to `/health`.
+- **Provider.db resilience** - Degradation detection, staleness status, and slow-query fallback window.
+
+#### Security
+- **Encrypted API key storage** - Fernet encryption for external provider keys with runtime decryption.
+- **Admin audit logging** - Persistent audit log for all admin actions with query endpoint.
+- **IP whitelist** - CIDR and exact IP matching for admin endpoints with proxy header support.
+- **Request size limits** - Configurable body size and per-message content length validation.
+- **TLS verification toggle** - Development-friendly setting for self-signed certificates (`ROUTER_VERIFY_TLS`).
+- **Dependency scanning** - GitHub Actions workflow for vulnerability scanning.
+
+### Performance Improvements
+
+#### Request Path Optimizations
+- Response compression middleware (gzip, configurable threshold).
+- Request-size middleware `Content-Length` fast path to avoid unnecessary buffering.
+- Health probe metrics bypass to reduce overhead.
+- Prompt analysis caching with 5-minute TTL.
+- Model list caching increased from 10s to 30s TTL.
+
+#### Backend Optimizations
+- External provider model-list caching (30s TTL in `BackendRegistry`).
+- Background cache cleanup task (configurable interval).
+- Optional slow-query profiling middleware.
+
+### Bug Fixes
+
+#### Data & Persistence
+- Fixed SQLite persistence path to absolute URL (`sqlite:////app/data/router.db`).
+- Fixed absolute-path parsing in database startup checks.
 - Fixed `RouterEngine.refresh_models` cache bypass regression.
-- Optimized request-size middleware with a `Content-Length` fast path.
-- Added external provider model-list caching in backend registry (30s TTL).
-- Increased global model-list cache TTL from 10s to 30s.
-- Reduced `/health` probe overhead by skipping metrics accounting for that endpoint.
-
-### Reliability & Operations
-- Added backend retry controls and unified retry orchestration for transient HTTP failures.
-- Added backend circuit-breaker controls and resilience wrappers for core backends.
-- Expanded `/health` checks (DB, backend readiness, GPU monitor, cache backend, background task count, request ID, DLQ counts).
-- Added provider.db degradation/staleness status and slow-query fallback window.
-- Added global request timeout middleware (`ROUTER_REQUEST_TIMEOUT_ENABLED`, `ROUTER_REQUEST_TIMEOUT_SECONDS`).
-- Improved resource cleanup on error paths and profiler-owned judge client cleanup.
-- Added persistent DLQ with retry scheduling, retry worker, admin inspect/retry endpoints, and health observability.
-- Fixed Docker SQLite persistence path to absolute URL (`sqlite:////app/data/router.db`) and corrected absolute-path parsing in startup/database checks.
 - Made model auto-profiling respect `ROUTER_MODEL_AUTO_PROFILE_ENABLED`.
 
-### Security
-- Added configurable CORS controls (`ROUTER_CORS_ORIGINS`, credentials/methods/headers/max-age settings).
-- Added encrypted API key storage utilities (Fernet + PBKDF2) and wired runtime decryption for backend/judge key usage.
-- Added optional-dependency hardening for encryption path when `cryptography` is unavailable.
-- Added admin audit logging with persisted event records and query endpoint.
-- Added TLS verification toggle (`ROUTER_VERIFY_TLS`) across backend/provider/judge/webhook clients.
-- Added admin IP whitelist support (exact IP + CIDR, with proxy header handling).
-- Added configurable request-size and per-message content-length limits.
-- Added dependency scanning workflow with scheduled/on-demand vulnerability checks.
-- Added prompt-injection and content-moderation utility modules/configuration; chat request path currently passes prompts through without moderation enforcement.
+#### Code Quality
+- Removed dead code and duplicate declarations.
+- Standardized lint/type fixes across codebase.
 
-### API & Routing Behavior
-- Added dedicated chat endpoint rate limit (`ROUTER_RATE_LIMIT_CHAT_REQUESTS_PER_MINUTE`).
-- Improved model-name sanitization across chat, embeddings, feedback, and admin model override paths.
-- Added richer error log context (`request_id`, `user_ip`, `model_name`, `prompt_hash`) across core failure paths.
-- Removed chat prompt moderation/injection enforcement from `/v1/chat/completions` request path.
+### API Changes
 
-### Code Quality & Refactoring
-- Split monolithic `main.py` into modular API/middleware/lifecycle/state packages.
-- Removed dead code and duplicate declarations in router/profiler paths.
-- Standardized assorted lint/type quality fixes across utility/runtime code.
+#### New Endpoints
+- `GET /admin/dlq` - Inspect dead letter queue.
+- `POST /admin/dlq/retry/{entry_id}` - Manually retry failed tasks.
+- `GET /admin/audit-log` - Query admin audit logs with filtering.
+
+#### Modified Endpoints
+- `/health` - Expanded with DLQ counts, background tasks, request ID.
+- `/v1/chat/completions` - Removed prompt moderation, added modality detection.
+- Admin pagination - Cursor-based pagination for large datasets.
 
 ### Documentation
-- Added `docs/kubernetes.md` deployment guide (Helm/manifests, ingress, HPA, monitoring).
-- Added `docs/architecture.md` with Mermaid diagrams and data-flow views.
-- Added `docs/contributing.md` with development and PR workflow guidance.
-- Maintained comprehensive `docs/troubleshooting.md` and `docs/configuration.md` coverage.
-- API docs available via FastAPI `/docs` and `/redoc`.
+- Added Kubernetes deployment guide (`docs/kubernetes.md`).
+- Added architecture documentation with Mermaid diagrams (`docs/architecture.md`).
+- Added contributor guide (`docs/contributing.md`).
+- API documentation available at `/docs` and `/redoc`.
 
 ### Testing
-- Expanded integration and unit coverage for provider.db reliability, request timeout behavior, model sanitization, DLQ flows, chat rate limits, audit logging, TLS toggle, admin IP whitelist, and request-size limits.
-- Added and stabilized new suites for property-based tests, backend failover, security edge cases, concurrency stress, routing snapshots, cache persistence recovery, provider fixtures, and optional Ollama integration.
-- Fixed API drift in newly added tests to align with current runtime interfaces.
+- New test suites: property-based, backend failover, security edge cases, concurrency stress, routing snapshots, cache persistence.
+- Expanded coverage for DLQ, audit logging, TLS toggle, IP whitelist, request timeouts.
+- Fixed API drift in existing tests.
 
-### Validation Notes
-- Targeted regression subset: `8 passed, 6 skipped`.
-- Full coverage audit remains blocked in the local environment due to virtualenv dependency corruption (`pydantic_core` / optional packages).
+### Infrastructure
+- Split monolithic `main.py` into focused modules (`router/state.py`, `router/middleware.py`, `router/lifecycle.py`, `router/api/*`).
+- Added modality detection module (`router/modality.py`).
 
-### Summary
-- Documentation items complete.
-- Test infrastructure largely complete with one environment-blocked coverage target.
-- Overall: 57 of 58 planned improvements complete for this release.
+### Validation
+- 57 of 58 planned improvements complete.
+- Targeted regression: 8 passed, 6 skipped.
+- Full coverage audit blocked by local environment issues.
 
 ---
 

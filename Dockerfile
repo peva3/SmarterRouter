@@ -18,9 +18,12 @@ COPY . .
 RUN chmod +x /app/router/entrypoint.py
 
 RUN useradd --create-home --shell /bin/bash router \
-    && chown -R router:router /app
+    && chown -R router:router /app \
+    && mkdir -p /app/data \
+    && chown router:router /app/data
 
-USER router
+# Note: We don't use USER here because we need to handle volume permissions at runtime
+# The entrypoint will switch to the router user after setting up permissions
 
 EXPOSE 11436
 

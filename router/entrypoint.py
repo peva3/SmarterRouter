@@ -168,7 +168,12 @@ async def validate_environment():
                     )
                     # Non-fatal, but will likely cause errors later
             else:
-                logger.info(f"Database directory {db_dir} does not exist, will be created")
+                logger.info(f"Database directory {db_dir} does not exist, creating it...")
+                try:
+                    db_dir.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"Created database directory: {db_dir}")
+                except PermissionError:
+                    logger.error(f"Permission denied creating {db_dir}. Ensure parent directory is writable.")
     except Exception as e:
         logger.debug(f"Could not check database permissions: {e}")
 
