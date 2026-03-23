@@ -314,3 +314,154 @@ class TestOllamaBackend:
             vram = await backend.get_model_vram_usage("llama3")
             assert vram is not None
             assert abs(vram - 3.26) < 0.01  # 3500000000 / (1024**3) ≈ 3.26 GB
+
+    @pytest.mark.asyncio
+    async def test_chat_multimodal_non_streaming(self):
+        """Test chat with multimodal messages transforms correctly for non-streaming."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.post("http://localhost:11434/api/chat").mock(
+                return_value=httpx.Response(200, json={"message": {"content": "Image described"}})
+            )
+            
+            # OpenAI-style multimodal message
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}},
+                    ]
+                }
+            ]
+            
+            await backend.chat("llava", messages, stream=False)
+            
+            # Check that the request was transformed to Ollama format
+            request = mock_http.calls.last.request
+            body = json.loads(request.content)
+            
+            # Should have transformed messages
+            assert len(body["messages"]) == 1
+            msg = body["messages"][0]
+            assert msg["role"] == "user"
+            assert msg["content"] == "What's in this image?"
+            assert "images" in msg
+            assert len(msg["images"]) == 1
+            # Should have stripped the data URL prefix
+            assert msg["images"][0] == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+    @pytest.mark.asyncio
+    async def test_chat_multimodal_streaming(self):
+        """Test chat with multimodal messages transforms correctly for streaming."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.post("http://localhost:11434/api/chat").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=b'{"message": {"content": "Image described"}}\n{"done": true}\n',
+                    headers={"content-type": "text/plain"},
+                )
+            )
+            
+            # OpenAI-style multimodal message with regular URL
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image"},
+                        {"type": "image_url", "image_url": {"url": "http://example.com/image.jpg"}},
+                    ]
+                }
+            ]
+            
+            stream, latency = await backend.chat_streaming("llava", messages)
+            
+            # Consume the stream
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk)
+            
+            # Check that the request was transformed to Ollama format
+            request = mock_http.calls.last.request
+            body = json.loads(request.content)
+            
+            # Should have transformed messages
+            assert len(body["messages"]) == 1
+            msg = body["messages"][0]
+            assert msg["role"] == "user"
+            assert msg["content"] == "Describe this image"
+            assert "images" in msg
+            assert len(msg["images"]) == 1
+            # Should have preserved the URL as-is
+            assert msg["images"][0] == "http://example.com/image.jpg"
+
+    @pytest.mark.asyncio
+    async def test_chat_multimodal_mixed_content(self):
+        """Test chat with mixed content types (text and multiple images)."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.post("http://localhost:11434/api/chat").mock(
+                return_value=httpx.Response(200, json={"message": {"content": "Two images described"}})
+            )
+            
+            # OpenAI-style multimodal message with multiple images
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Compare these images:"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,first"}},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,second"}},
+                    ]
+                }
+            ]
+            
+            await backend.chat("llava", messages, stream=False)
+            
+            # Check that the request was transformed to Ollama format
+            request = mock_http.calls.last.request
+            body = json.loads(request.content)
+            
+            # Should have transformed messages
+            assert len(body["messages"]) == 1
+            msg = body["messages"][0]
+            assert msg["role"] == "user"
+            assert msg["content"] == "Compare these images:"
+            assert "images" in msg
+            assert len(msg["images"]) == 2
+            # Should have stripped the data URL prefixes
+            assert msg["images"][0] == "first"
+            assert msg["images"][1] == "second"
+
+    @pytest.mark.asyncio
+    async def test_chat_regular_messages_unchanged(self):
+        """Test that regular text-only messages are unchanged."""
+        backend = OllamaBackend("http://localhost:11434")
+
+        with respx.mock() as mock_http:
+            mock_http.post("http://localhost:11434/api/chat").mock(
+                return_value=httpx.Response(200, json={"message": {"content": "Regular response"}})
+            )
+            
+            # Regular text-only message
+            messages = [
+                {"role": "user", "content": "Hello, how are you?"},
+                {"role": "assistant", "content": "I'm doing well!"},
+            ]
+            
+            await backend.chat("llama3", messages, stream=False)
+            
+            # Check that messages are unchanged
+            request = mock_http.calls.last.request
+            body = json.loads(request.content)
+            
+            assert len(body["messages"]) == 2
+            assert body["messages"][0] == {"role": "user", "content": "Hello, how are you?"}
+            assert body["messages"][1] == {"role": "assistant", "content": "I'm doing well!"}
+            # Should not have images field
+            assert "images" not in body["messages"][0]
+            assert "images" not in body["messages"][1]

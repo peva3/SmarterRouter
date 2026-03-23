@@ -49,6 +49,77 @@ class OllamaBackend(LLMBackend):
                     )
         return self._client
 
+    def _transform_multimodal_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Transform OpenAI-style multimodal messages to Ollama format.
+        
+        OpenAI format: messages[].content can be list of parts with type/image_url
+        Ollama format: messages[].content is string, messages[].images is list of image data
+        
+        Args:
+            messages: List of message dicts in OpenAI format
+            
+        Returns:
+            List of message dicts in Ollama format
+        """
+        transformed_messages = []
+        
+        for message in messages:
+            # Create a copy of the message to avoid modifying the original
+            transformed_message = dict(message)
+            
+            content = message.get("content")
+            
+            # If content is a list, we need to check for image parts
+            if isinstance(content, list):
+                text_parts = []
+                image_parts = []
+                
+                for part in content:
+                    if isinstance(part, dict):
+                        part_type = part.get("type")
+                        if part_type == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part_type == "image_url":
+                            image_url = part.get("image_url", {})
+                            url = image_url.get("url", "")
+                            
+                            # Extract base64 data or keep URL as-is
+                            if url.startswith("data:image/"):
+                                # Extract base64 part after the comma
+                                if "," in url:
+                                    base64_data = url.split(",", 1)[1]
+                                    image_parts.append(base64_data)
+                                else:
+                                    # Malformed data URL, skip
+                                    pass
+                            else:
+                                # Regular URL, pass through as-is
+                                image_parts.append(url)
+                        else:
+                            # Unknown part type, treat as text
+                            text_parts.append(str(part))
+                    else:
+                        # Non-dict part, treat as text
+                        text_parts.append(str(part))
+                
+                # Combine text parts
+                transformed_message["content"] = "".join(text_parts)
+                
+                # Add images if any were found
+                if image_parts:
+                    transformed_message["images"] = image_parts
+            else:
+                # Content is already a string or None, keep as-is
+                # Ollama expects string content, so we ensure it's a string
+                if content is None:
+                    transformed_message["content"] = ""
+                elif not isinstance(content, str):
+                    transformed_message["content"] = str(content)
+                    
+            transformed_messages.append(transformed_message)
+        
+        return transformed_messages
+
     async def close(self) -> None:
         """Close the HTTP client. Call during shutdown."""
         if self._client and not self._client.is_closed:
@@ -153,9 +224,11 @@ class OllamaBackend(LLMBackend):
         **kwargs: Any,
     ) -> dict[str, Any]:
         full_model = self._full_model_name(model)
+        # Transform OpenAI-style multimodal messages to Ollama format
+        transformed_messages = self._transform_multimodal_messages(messages)
         payload: dict[str, Any] = {
             "model": full_model,
-            "messages": messages,
+            "messages": transformed_messages,
             "stream": stream,
             "keep_alive": keep_alive,
         }
@@ -172,6 +245,9 @@ class OllamaBackend(LLMBackend):
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/api/chat"
         full_model = self._full_model_name(model)
+        
+        # Transform OpenAI-style multimodal messages to Ollama format
+        transformed_messages = self._transform_multimodal_messages(messages)
 
         async def attempt_stream() -> tuple[AsyncIterator[dict[str, Any]], float]:
             start_time = time.perf_counter()
@@ -188,7 +264,7 @@ class OllamaBackend(LLMBackend):
                         url,
                         json={
                             "model": full_model,
-                            "messages": messages,
+                            "messages": transformed_messages,
                             "stream": True,
                             "keep_alive": keep_alive,
                         },

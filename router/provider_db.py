@@ -91,17 +91,23 @@ class ProviderDB:
 
     def __init__(self, db_path: str | None = None):
         path = db_path or settings.provider_db_path
+        base_dir = Path(__file__).resolve().parents[1]
+
+        # Resolve relative paths against project root for stability across CWDs
+        candidate_path = Path(path)
+        if not candidate_path.is_absolute():
+            candidate_path = base_dir / candidate_path
 
         # Allow bypassing validation for tests
         if os.environ.get("ROUTER_TEST_MODE"):
             self.db_path = Path(path)
         else:
             # Security: Validate path is within allowed directory (prevent path traversal)
-            resolved = Path(path).resolve()
+            resolved = candidate_path.resolve()
             allowed_parents = [
+                (base_dir / "data").resolve(),
                 Path("/app/hubrouter/data").resolve(),
-                Path("./data").resolve(),
-                Path.cwd() / "data",
+                (Path.cwd() / "data").resolve(),
             ]
             if not any(
                 resolved.is_relative_to(parent) for parent in allowed_parents if parent.exists()
@@ -111,6 +117,7 @@ class ProviderDB:
                 )
             self.db_path = resolved
         self._conn: sqlite3.Connection | None = None
+        self._has_archived_column: bool | None = None
 
     @contextmanager
     def _get_connection(self):
@@ -126,6 +133,23 @@ class ProviderDB:
         """Check if provider.db is available."""
         return self.db_path.exists()
 
+    def _detect_archived_column(self) -> bool:
+        """Detect whether model_benchmarks has an 'archived' column."""
+        if self._has_archived_column is not None:
+            return self._has_archived_column
+        if not self.is_available():
+            self._has_archived_column = False
+            return self._has_archived_column
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(model_benchmarks)")
+                cols = [row[1] for row in cursor.fetchall()]
+                self._has_archived_column = "archived" in cols
+        except Exception:
+            self._has_archived_column = False
+        return self._has_archived_column
+
     def get_stats(self) -> dict[str, Any]:
         """Get provider.db statistics."""
         if not self.is_available():
@@ -134,11 +158,15 @@ class ProviderDB:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) as total FROM model_benchmarks WHERE archived = 0")
-                total = cursor.fetchone()[0]
-
-                cursor.execute("SELECT COUNT(*) as total FROM model_benchmarks WHERE archived = 1")
-                archived = cursor.fetchone()[0]
+                if self._detect_archived_column():
+                    cursor.execute("SELECT COUNT(*) as total FROM model_benchmarks WHERE archived = 0")
+                    total = cursor.fetchone()[0]
+                    cursor.execute("SELECT COUNT(*) as total FROM model_benchmarks WHERE archived = 1")
+                    archived = cursor.fetchone()[0]
+                else:
+                    cursor.execute("SELECT COUNT(*) as total FROM model_benchmarks")
+                    total = cursor.fetchone()[0]
+                    archived = 0
 
                 cursor.execute("SELECT value FROM metadata WHERE key = 'last_build'")
                 row = cursor.fetchone()
@@ -170,10 +198,16 @@ class ProviderDB:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM model_benchmarks WHERE model_id = ? AND archived = 0",
-                    (model_id,),
-                )
+                if self._detect_archived_column():
+                    cursor.execute(
+                        "SELECT * FROM model_benchmarks WHERE model_id = ? AND archived = 0",
+                        (model_id,),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT * FROM model_benchmarks WHERE model_id = ?",
+                        (model_id,),
+                    )
                 row = cursor.fetchone()
                 if row:
                     return dict(row)
@@ -254,12 +288,13 @@ class ProviderDB:
                 chunk_size = 250
                 queried_results = {}
 
+                archived_clause = " AND archived = 0" if self._detect_archived_column() else ""
                 for i in range(0, len(missing_models), chunk_size):
                     chunk = missing_models[i : i + chunk_size]
                     placeholders = ",".join("?" * len(chunk))
                     cursor.execute(
                         f"""SELECT * FROM model_benchmarks
-                            WHERE model_id IN ({placeholders}) AND archived = 0""",
+                            WHERE model_id IN ({placeholders}){archived_clause}""",
                         chunk,
                     )
                     for row in cursor.fetchall():
@@ -316,7 +351,10 @@ class ProviderDB:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM model_benchmarks WHERE archived = 0")
+                if self._detect_archived_column():
+                    cursor.execute("SELECT * FROM model_benchmarks WHERE archived = 0")
+                else:
+                    cursor.execute("SELECT * FROM model_benchmarks")
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.warning(f"Failed to get all benchmarks: {e}")
@@ -356,10 +394,16 @@ class ProviderDB:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM model_benchmarks WHERE model_id LIKE ? AND archived = 0",
-                    (f"%{name}%",),
-                )
+                if self._detect_archived_column():
+                    cursor.execute(
+                        "SELECT * FROM model_benchmarks WHERE model_id LIKE ? AND archived = 0",
+                        (f"%{name}%",),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT * FROM model_benchmarks WHERE model_id LIKE ?",
+                        (f"%{name}%",),
+                    )
                 row = cursor.fetchone()
                 if row:
                     return dict(row)

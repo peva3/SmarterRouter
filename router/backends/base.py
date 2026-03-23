@@ -1,7 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class LLMBackend(Protocol):
     async def chat(
         self,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         stream: bool = False,
         keep_alive: float = -1,
         **kwargs: object,

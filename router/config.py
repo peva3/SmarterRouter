@@ -1,5 +1,6 @@
 import logging
 import types
+from pathlib import Path
 from typing import Union
 
 from pydantic import Field, field_validator, model_validator
@@ -103,6 +104,34 @@ class Settings(BaseSettings):
                     del values[k]
 
         return values
+
+    @model_validator(mode="after")
+    def normalize_sqlite_database_url(self) -> "Settings":
+        """Normalize relative SQLite paths to absolute project paths."""
+        database_url = self.database_url
+        if not isinstance(database_url, str) or "sqlite" not in database_url.lower():
+            return self
+
+        if database_url.startswith("sqlite:////"):
+            return self
+
+        sqlite_prefixes = ("sqlite:///", "sqlite://")
+        path = None
+        for prefix in sqlite_prefixes:
+            if database_url.startswith(prefix):
+                path = database_url.replace(prefix, "", 1)
+                break
+
+        if path is None:
+            return self
+
+        if path.startswith("/"):
+            return self
+
+        base_dir = Path(__file__).resolve().parents[1]
+        resolved = (base_dir / path).resolve()
+        self.database_url = f"sqlite:////{resolved}"
+        return self
 
     polling_interval: int = Field(default=300)
     # Model Polling & Hot‑Swap (SmarterRouter 2.1.6+)

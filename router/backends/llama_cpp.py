@@ -143,7 +143,7 @@ class LlamaCppBackend(LLMBackend):
     async def chat(
         self,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         stream: bool = False,
         keep_alive: float = -1,
         **kwargs: Any,

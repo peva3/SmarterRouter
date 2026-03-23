@@ -102,6 +102,34 @@ async def test_select_model_fast_for_simple_prompt(router, sample_profiles):
             assert result.selected_model in ["llama3", "mistral", "codellama"]
 
 
+@pytest.mark.asyncio
+async def test_keyword_dispatch_with_external_benchmark(router, sample_profiles):
+    """Ensure external benchmarks are accepted during keyword dispatch."""
+    external_benchmarks = [
+        {
+            "ollama_name": "openai/gpt-4",
+            "reasoning_score": 90.0,
+            "coding_score": 90.0,
+            "general_score": 90.0,
+            "elo_rating": 1400.0,
+        }
+    ]
+
+    with patch.object(
+        router, "_get_all_profiles", new_callable=AsyncMock, return_value=sample_profiles
+    ):
+        with patch(
+            "router.router.get_benchmarks_for_models_with_external",
+            return_value=external_benchmarks,
+        ):
+            result = await router._keyword_dispatch(
+                "Write a short summary of this report",
+                ["openai/gpt-4", "llama3"],
+            )
+
+            assert result.selected_model == "openai/gpt-4"
+
+
 def test_analyze_prompt_coding(router):
     analysis = router._analyze_prompt(
         "Write a Python function to check if a string is a palindrome"

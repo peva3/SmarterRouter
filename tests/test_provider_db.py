@@ -1,6 +1,7 @@
 """Tests for provider_db module."""
 
 import os
+from pathlib import Path
 import time
 from unittest.mock import patch
 
@@ -188,6 +189,7 @@ class TestProviderDBCache:
         with (
             patch.object(db, "is_available", return_value=True),
             patch.object(db, "_get_connection", return_value=FakeConn()),
+            patch.object(db, "_detect_archived_column", return_value=True),
             patch("router.provider_db.settings") as mock_settings,
         ):
             mock_settings.provider_db_max_age_hours = 1
@@ -207,6 +209,23 @@ class TestProviderDBIntegration:
         db = get_provider_db()
         # Just verify it returns a ProviderDB instance
         assert isinstance(db, ProviderDB)
+
+    def test_real_provider_db_has_benchmarks(self):
+        """Ensure real provider.db is readable and non-empty when present."""
+        base_dir = Path(__file__).resolve().parents[1]
+        db_path = base_dir / "data" / "provider.db"
+        if not db_path.exists():
+            pytest.skip("provider.db not present in repo")
+
+        db = ProviderDB(str(db_path))
+        assert db.is_available() is True
+        stats = db.get_stats()
+        assert stats["available"] is True
+        assert stats["total_models"] > 0
+
+        benchmarks = db.get_all_benchmarks()
+        assert benchmarks
+        assert "model_id" in benchmarks[0]
 
     @patch("router.provider_db.settings")
     def test_get_provider_db_with_custom_path(self, mock_settings, tmp_path):

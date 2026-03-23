@@ -16,10 +16,13 @@ class TestSQLInjection:
         from router.schemas import sanitize_model_name
 
         malicious = "model'; DROP TABLE model_profiles; --"
-        sanitized = sanitize_model_name(malicious)
-
-        # Should sanitize or reject
-        assert sanitized is None or "DROP" not in str(sanitized).upper()
+        try:
+            sanitized = sanitize_model_name(malicious)
+            # If no exception, then check the result
+            assert sanitized is None or "DROP" not in str(sanitized).upper()
+        except ValueError:
+            # Exception is also acceptable (means the input was rejected)
+            pass
 
     def test_model_name_sql_injection_union_select(self):
         """Test UNION SELECT injection in model name."""

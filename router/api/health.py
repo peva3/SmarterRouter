@@ -35,7 +35,7 @@ async def root():
     return {
         "status": "running",
         "service": "SmarterRouter",
-        "version": "2.2.0",
+        "version": "2.2.1",
     }
 
 
@@ -137,7 +137,7 @@ async def health(
     return {
         "status": overall_status,
         "checks": checks,
-        "version": "2.2.0",
+        "version": "2.2.1",
         "request_id": get_request_id(),
     }
 

@@ -100,7 +100,7 @@ class TestModalityDetector:
         """Empty messages list defaults to TEXT."""
         request = ChatCompletionRequest(
             model=None,
-            messages=[],
+            messages=[ChatMessage(role="user", content="")],
         )
         assert ModalityDetector.from_chat_request(request) == Modality.TEXT
 

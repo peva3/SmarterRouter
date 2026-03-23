@@ -1,3 +1,10 @@
+## [2.2.2] - 2026-03-16
+
+### Bug Fixes
+- **Ollama backend multimodal transformation**: Fixed OpenAI-style multimodal message handling in Ollama backend to properly convert image_url content parts to Ollama's expected images field, stripping data:image/...;base64, prefixes so Ollama vision models can actually receive image data. This resolves the issue where image uploads appeared to route correctly but the image payload was not translated into the format Ollama expects.
+
+---
+
 ## [2.2.1] - 2026-03-16
 
 ### Highlights
