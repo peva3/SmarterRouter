@@ -205,18 +205,6 @@ async def startup_event() -> None:
         app_state.background_tasks.add(task)
         task.add_done_callback(app_state.background_tasks.discard)
 
-    # Start periodic persistent cache cleanup task if enabled
-    if settings.cache_cleanup_interval_hours > 0:
-        task = asyncio.create_task(background_cache_cleanup_task())
-        app_state.background_tasks.add(task)
-        task.add_done_callback(app_state.background_tasks.discard)
-
-    # Start DLQ auto-retry task
-    if settings.dlq_enabled:
-        task = asyncio.create_task(background_dlq_retry_task())
-        app_state.background_tasks.add(task)
-        task.add_done_callback(app_state.background_tasks.discard)
-
 
 async def shutdown_event() -> None:
     """Perform cleanup tasks during application shutdown.
@@ -448,10 +436,14 @@ async def download_provider_db() -> bool:
             response = await client.get(download_url)
             response.raise_for_status()
 
-            # Write to temp file first
+            # Write to temp file first (offload blocking I/O to thread)
             temp_path = f"{db_path}.tmp"
-            with open(temp_path, "wb") as f:
-                f.write(response.content)
+
+            def _write_temp() -> None:
+                with open(temp_path, "wb") as f:
+                    f.write(response.content)
+
+            await asyncio.to_thread(_write_temp)
 
             # Verify it's a valid SQLite database
             import sqlite3

@@ -12,6 +12,7 @@ previously scattered throughout main.py. It includes:
 
 import asyncio
 import hashlib
+import hmac
 import ipaddress
 import logging
 import time
@@ -464,7 +465,7 @@ async def verify_admin_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if credentials.credentials != config.admin_api_key:
+    if not hmac.compare_digest(credentials.credentials, config.admin_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin API key",

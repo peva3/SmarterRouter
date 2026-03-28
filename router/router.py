@@ -34,8 +34,9 @@ _PROFILE_CACHE_TTL = 60.0
 _MERGED_BENCHMARKS_CACHE: dict[frozenset, tuple[float, list[dict]]] = {}
 _MERGED_BENCHMARKS_CACHE_TTL = 300.0  # 5 minutes
 
-# Cache for prompt analysis to avoid repeated computation
-_PROMPT_ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
+# Cache for prompt analysis to avoid repeated computation (bounded with LRU eviction)
+_PROMPT_ANALYSIS_CACHE_MAX_SIZE = 4096
+_PROMPT_ANALYSIS_CACHE: OrderedDict[str, tuple[float, dict]] = OrderedDict()
 _PROMPT_ANALYSIS_CACHE_TTL = 300.0  # 5 minutes
 
 
@@ -1287,7 +1288,7 @@ Select the model that best matches the user's prompt needs."""
     ) -> RoutingResult:
         profiles = await self._get_all_profiles()
         benchmarks = get_benchmarks_for_models_with_external(model_names)
-        feedback_scores = self._get_model_feedback_scores()
+        feedback_scores = await asyncio.to_thread(self._get_model_feedback_scores)
 
         if not profiles and not benchmarks:
             logger.warning("No profiles or benchmarks found, selecting first available model")
@@ -1304,6 +1305,7 @@ Select the model that best matches the user's prompt needs."""
         if prompt_hash in _PROMPT_ANALYSIS_CACHE:
             cached_time, cached_analysis = _PROMPT_ANALYSIS_CACHE[prompt_hash]
             if (now - cached_time) < _PROMPT_ANALYSIS_CACHE_TTL:
+                _PROMPT_ANALYSIS_CACHE.move_to_end(prompt_hash)
                 analysis = cached_analysis
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"Using cached prompt analysis (age: {now - cached_time:.1f}s)")
@@ -1311,9 +1313,14 @@ Select the model that best matches the user's prompt needs."""
                 # Cache expired
                 analysis = self._analyze_prompt(prompt, request_obj)
                 _PROMPT_ANALYSIS_CACHE[prompt_hash] = (now, analysis)
+                _PROMPT_ANALYSIS_CACHE.move_to_end(prompt_hash)
         else:
             analysis = self._analyze_prompt(prompt, request_obj)
             _PROMPT_ANALYSIS_CACHE[prompt_hash] = (now, analysis)
+            _PROMPT_ANALYSIS_CACHE.move_to_end(prompt_hash)
+            # Evict oldest entry if cache exceeds max size
+            if len(_PROMPT_ANALYSIS_CACHE) > _PROMPT_ANALYSIS_CACHE_MAX_SIZE:
+                _PROMPT_ANALYSIS_CACHE.popitem(last=False)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Prompt analysis: {analysis}")

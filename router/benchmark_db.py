@@ -1,5 +1,6 @@
 import logging
 import time
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,7 +18,8 @@ _profiles_cache: list[dict] | None = None
 _profiles_cache_time: float = 0.0
 _PROFILE_CACHE_TTL = 60.0
 
-_benchmarks_for_models_cache: dict[frozenset, tuple[float, list[dict]]] = {}
+_BENCHMARKS_FOR_MODELS_CACHE_MAX_SIZE = 512
+_benchmarks_for_models_cache: OrderedDict[frozenset, tuple[float, list[dict]]] = OrderedDict()
 
 
 def get_benchmark(ollama_name: str) -> ModelBenchmark | None:
@@ -63,6 +65,7 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
     if cache_key in _benchmarks_for_models_cache:
         cached_time, cached_result = _benchmarks_for_models_cache[cache_key]
         if (now - cached_time) < _BENCHMARK_CACHE_TTL:
+            _benchmarks_for_models_cache.move_to_end(cache_key)
             return cached_result
 
     try:
@@ -94,6 +97,9 @@ def get_benchmarks_for_models(model_names: list[str]) -> list[dict]:
                 for b in all_benchmarks
             ]
             _benchmarks_for_models_cache[cache_key] = (now, result)
+            _benchmarks_for_models_cache.move_to_end(cache_key)
+            if len(_benchmarks_for_models_cache) > _BENCHMARKS_FOR_MODELS_CACHE_MAX_SIZE:
+                _benchmarks_for_models_cache.popitem(last=False)
             return result
     except Exception as e:
         logger.warning(f"Failed to get benchmarks for models: {e}")
@@ -158,11 +164,10 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
         return 0
 
     count = 0
-    # Use individual transactions for each benchmark to prevent partial commits
-    # on errors while maintaining database consistency
-    for cleaned in processed:
-        try:
-            with get_session() as session:
+    # Single transaction for all benchmarks — commit once at the end
+    with get_session() as session:
+        for cleaned in processed:
+            try:
                 existing = (
                     session.query(ModelBenchmark)
                     .filter(ModelBenchmark.ollama_name == cleaned.get("ollama_name"))
@@ -177,11 +182,12 @@ def bulk_upsert_benchmarks(benchmarks: list[dict[str, Any]]) -> int:
                     safe_data = {k: v for k, v in cleaned.items() if k in allowed_benchmark_fields}
                     session.add(ModelBenchmark(**safe_data))
 
-                session.commit()
                 count += 1
-        except Exception as e:
-            logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
-            # Continue with other benchmarks - error is isolated to this transaction
+            except Exception as e:
+                logger.warning(f"Failed to upsert benchmark for {cleaned.get('ollama_name')}: {e}")
+                # Continue with other benchmarks
+
+        session.commit()
 
     return count
 
@@ -259,7 +265,7 @@ def invalidate_benchmarks_cache() -> None:
     global _benchmarks_cache, _benchmarks_cache_time, _benchmarks_for_models_cache
     _benchmarks_cache = None
     _benchmarks_cache_time = 0.0
-    _benchmarks_for_models_cache = {}
+    _benchmarks_for_models_cache = OrderedDict()
     logger.debug("Benchmarks cache invalidated")
 
 
