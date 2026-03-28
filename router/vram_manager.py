@@ -116,6 +116,8 @@ class VRAMManager:
             if not self._backend_ref:
                 raise RuntimeError("VRAMManager: backend not set. Call set_backend() first.")
 
+            snapshot: dict[str, float] | None = None
+
             # Check if fits
             if not self.can_load(model_name, vram_estimate_gb):
                 needed = vram_estimate_gb - self.get_available_vram()
@@ -123,7 +125,16 @@ class VRAMManager:
                     f"VRAM: Need {needed:.1f}GB more for {model_name}, triggering unload..."
                 )
                 if self.auto_unload:
-                    await self._free_vram(needed)
+                    # Snapshot loaded models before unload so we can restore on failure
+                    snapshot = dict(self.loaded_models)
+                    try:
+                        await self._free_vram(needed)
+                    except VRAMExceededError:
+                        # Restore snapshot since _free_vram removes entries
+                        self.loaded_models.update(
+                            {k: v for k, v in snapshot.items() if k not in self.loaded_models}
+                        )
+                        raise
                 else:
                     raise VRAMExceededError(
                         f"Insufficient VRAM for {model_name} (need {vram_estimate_gb:.1f}GB, "
@@ -132,6 +143,10 @@ class VRAMManager:
 
                 # Re-check after unload attempts
                 if not self.can_load(model_name, vram_estimate_gb):
+                    # Restore previously unloaded models since we can't proceed
+                    self.loaded_models.update(
+                        {k: v for k, v in snapshot.items() if k not in self.loaded_models}
+                    )
                     raise VRAMExceededError(
                         f"Still cannot load {model_name} after unload attempts. "
                         f"Need {vram_estimate_gb:.1f}GB, available {self.get_available_vram():.1f}GB"
@@ -143,6 +158,11 @@ class VRAMManager:
                 await self._backend_ref.load_model(model_name)
             except Exception as e:
                 logger.error(f"Failed to load model {model_name}: {e}")
+                # Restore previously unloaded models if we took a snapshot
+                if snapshot is not None:
+                    self.loaded_models.update(
+                        {k: v for k, v in snapshot.items() if k not in self.loaded_models}
+                    )
                 raise
 
             self.loaded_models[model_name] = vram_estimate_gb

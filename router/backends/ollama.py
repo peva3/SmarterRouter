@@ -329,9 +329,7 @@ class OllamaBackend(LLMBackend):
             model_exists = any(m.name == model_name for m in available_models)
             if not model_exists:
                 logger.warning(f"Model {model_name} not found in available models")
-                # Don't fail - just return True so profiling can continue
-                # The actual API call will fail later if the model really doesn't exist
-                return True
+                return False
         except Exception as e:
             logger.warning(f"Could not verify model existence: {e}")
             # Continue anyway
@@ -378,14 +376,11 @@ class OllamaBackend(LLMBackend):
                     return True
             except httpx.HTTPError as e:
                 logger.warning(f"Model {model_name} warmup failed via both methods: {e}")
-                # Some backends don't support explicit loading, but that's OK
-                # Return True anyway to allow profiling to continue
-                return True
+                return False
 
         except Exception as e:
             logger.error(f"Unexpected error loading model {model_name}: {e}")
-            # Don't fail completely - some backends don't support explicit loading
-            return True
+            return False
 
     async def embed(
         self,

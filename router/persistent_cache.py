@@ -13,7 +13,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from router.database import get_session
 from router.models import EmbeddingCache, ResponseCache, RoutingCache
@@ -424,35 +424,33 @@ class PersistentCacheManager:
 
         try:
             counts = {"routing": 0, "response": 0, "embedding": 0}
-            now = datetime.now(UTC)
 
             with get_session() as session:
-                # Delete expired routing cache entries
-                routing_stmt = select(RoutingCache).where(
-                    (RoutingCache.expires_at.is_not(None)) & (RoutingCache.expires_at <= now)
-                )
-                routing_expired = session.execute(routing_stmt).scalars().all()
-                for routing_entry in routing_expired:
-                    session.delete(routing_entry)
-                counts["routing"] = len(routing_expired)
+                now_dt = datetime.now(UTC)
 
-                # Delete expired response cache entries
-                response_stmt = select(ResponseCache).where(
-                    (ResponseCache.expires_at.is_not(None)) & (ResponseCache.expires_at <= now)
+                # Bulk delete expired routing cache entries
+                result = session.execute(
+                    delete(RoutingCache).where(
+                        RoutingCache.expires_at.is_not(None), RoutingCache.expires_at <= now_dt
+                    )
                 )
-                response_expired = session.execute(response_stmt).scalars().all()
-                for response_entry in response_expired:
-                    session.delete(response_entry)
-                counts["response"] = len(response_expired)
+                counts["routing"] = result.rowcount or 0
 
-                # Delete expired embedding cache entries
-                embedding_stmt = select(EmbeddingCache).where(
-                    (EmbeddingCache.expires_at.is_not(None)) & (EmbeddingCache.expires_at <= now)
+                # Bulk delete expired response cache entries
+                result = session.execute(
+                    delete(ResponseCache).where(
+                        ResponseCache.expires_at.is_not(None), ResponseCache.expires_at <= now_dt
+                    )
                 )
-                embedding_expired = session.execute(embedding_stmt).scalars().all()
-                for embedding_entry in embedding_expired:
-                    session.delete(embedding_entry)
-                counts["embedding"] = len(embedding_expired)
+                counts["response"] = result.rowcount or 0
+
+                # Bulk delete expired embedding cache entries
+                result = session.execute(
+                    delete(EmbeddingCache).where(
+                        EmbeddingCache.expires_at.is_not(None), EmbeddingCache.expires_at <= now_dt
+                    )
+                )
+                counts["embedding"] = result.rowcount or 0
 
                 session.commit()
                 logger.info(
@@ -489,37 +487,20 @@ class PersistentCacheManager:
 
         try:
             with get_session() as session:
-                routing_count = len(
-                    session.execute(
-                        select(RoutingCache).where(
-                            RoutingCache.expires_at.is_(None)
-                            | (RoutingCache.expires_at > datetime.now(UTC))
-                        )
-                    )
-                    .scalars()
-                    .all()
+                now_dt = datetime.now(UTC)
+                active = RoutingCache.expires_at.is_(None) | (RoutingCache.expires_at > now_dt)
+                routing_count = session.scalar(
+                    select(func.count()).select_from(RoutingCache).where(active)
                 )
 
-                response_count = len(
-                    session.execute(
-                        select(ResponseCache).where(
-                            ResponseCache.expires_at.is_(None)
-                            | (ResponseCache.expires_at > datetime.now(UTC))
-                        )
-                    )
-                    .scalars()
-                    .all()
+                active = ResponseCache.expires_at.is_(None) | (ResponseCache.expires_at > now_dt)
+                response_count = session.scalar(
+                    select(func.count()).select_from(ResponseCache).where(active)
                 )
 
-                embedding_count = len(
-                    session.execute(
-                        select(EmbeddingCache).where(
-                            EmbeddingCache.expires_at.is_(None)
-                            | (EmbeddingCache.expires_at > datetime.now(UTC))
-                        )
-                    )
-                    .scalars()
-                    .all()
+                active = EmbeddingCache.expires_at.is_(None) | (EmbeddingCache.expires_at > now_dt)
+                embedding_count = session.scalar(
+                    select(func.count()).select_from(EmbeddingCache).where(active)
                 )
 
                 return {

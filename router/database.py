@@ -276,9 +276,8 @@ def _run_migrations() -> None:
         for index_name, table_name, columns in indexes_to_create:
             try:
                 result = conn.execute(
-                    text(
-                        f"SELECT name FROM sqlite_master WHERE type='index' AND name='{index_name}'"
-                    )
+                    text("SELECT name FROM sqlite_master WHERE type='index' AND name=:name"),
+                    {"name": index_name},
                 )
                 if not result.fetchone():
                     logger.info(f"Creating index: {index_name}")

@@ -1,7 +1,37 @@
-## [2.2.2] - 2026-03-16
+## [2.2.3] - 2026-03-27
+
+### Security Fixes
+- **SQL injection anti-pattern in index creation** (`database.py:278-281`): Changed f-string interpolation in DDL helper to parameterized query using `text(...).bindparams(...)`. The index name was hardcoded so not directly exploitable, but the pattern could be copied to user-facing code.
+- **Timing attack on admin API key comparison** (`state.py:467`): Changed string `!=` comparison to `hmac.compare_digest()` to prevent timing side-channel attacks on the admin API key.
+
+### Bug Fixes
+- **VRAM state inconsistency on model load failure** (`vram_manager.py:120-148`): Added snapshot of `loaded_models` before VRAM freeing; restores snapshot if `load_model()` raises or `VRAMExceededError` occurs. Previously, a failed load could free VRAM without adding the model.
+- **`load_model` always returns True in Ollama backend** (`ollama.py:330-388`): Returns `False` when the model doesn't exist, when both load attempts fail, or on generic exceptions. Previously all code paths returned `True` even on genuine failures.
+- **Duplicate background task registration** (`lifecycle.py:197-218`): Removed duplicate registration of `background_cache_cleanup_task` and `background_dlq_retry_task` that were creating redundant coroutines.
+
+### Performance Improvements
+- **Bulk delete for expired cache entries** (`persistent_cache.py`): Replaced O(N) row-by-row `session.delete()` loop with single `session.execute(delete(Model).where(...))` bulk SQL delete.
+- **Efficient cache count queries** (`persistent_cache.py`): Replaced `len(session.execute(...).scalars().all())` with `session.scalar(select(func.count()).where(...))` to avoid loading all rows into memory.
+- **Bounded prompt analysis cache** (`router.py`): Changed `_PROMPT_ANALYSIS_CACHE` from unbounded dict to `OrderedDict` with max 4096 entries and LRU eviction on write. Added `move_to_end` on read access.
+- **Bounded benchmark cache** (`benchmark_db.py`): Changed `_benchmarks_for_models_cache` from unbounded frozenset-keyed dict to `OrderedDict` with max 512 entries and LRU eviction.
+- **Async DB call for feedback scores** (`router.py:1291`): Changed synchronous `self._get_model_feedback_scores()` call in async `_keyword_dispatch` to `await asyncio.to_thread(...)` to avoid blocking the event loop.
+- **Async file I/O for provider.db download** (`lifecycle.py:441`): Wrapped blocking `open(...).write(...)` in `await asyncio.to_thread(_write_temp)` to prevent event loop stalls during download.
+- **Single-transaction bulk upsert** (`benchmark_db.py:166-186`): Moved session and commit outside the per-item loop so all benchmark rows are written in a single transaction.
+
+---
+
+## [2.2.2] - 2026-03-27
 
 ### Bug Fixes
 - **Ollama backend multimodal transformation**: Fixed OpenAI-style multimodal message handling in Ollama backend to properly convert image_url content parts to Ollama's expected images field, stripping data:image/...;base64, prefixes so Ollama vision models can actually receive image data. This resolves the issue where image uploads appeared to route correctly but the image payload was not translated into the format Ollama expects.
+- **Provider.db schema compatibility**: Added runtime detection for the `archived` column in provider.db. The bundled provider.db does not include this column, which caused `no such column: archived` errors during routing. The code now adapts SQL queries based on the actual schema.
+- **SQLite database URL normalization**: Relative SQLite URLs (e.g., `sqlite:///data/router.db`) are now resolved against the project root instead of the current working directory. This prevents creation of empty databases when running from outside the repo.
+- **Provider.db path resolution**: provider.db paths are now resolved relative to the project root for stability across different working directories.
+
+### Testing
+- Added integration test for real provider.db validation (`test_real_provider_db_has_benchmarks`).
+- Added test for `_keyword_dispatch` with external benchmark data (`test_keyword_dispatch_with_external_benchmark`).
+- Fixed stale metadata test to mock `_detect_archived_column` for schema compatibility.
 
 ---
 
