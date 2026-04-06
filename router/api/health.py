@@ -22,21 +22,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/")
-async def root():
-    """Root endpoint returning service status and version.
+    @router.get("/")
+    async def root():
+        """Root endpoint returning service status and version.
 
-    Used for simple liveness checks (e.g., Kubernetes readinessProbe can
-    check /health for more thorough health status).
+        Used for simple liveness checks (e.g., Kubernetes readinessProbe can
+        check /health for more thorough health status).
 
-    Returns:
-        JSON with keys: status, service, version.
-    """
-    return {
-        "status": "running",
-        "service": "SmarterRouter",
-        "version": "2.2.1",
-    }
+        Returns:
+            JSON with keys: status, service, version.
+        """
+        return {
+            "status": "running",
+            "service": "SmarterRouter",
+            "version": "2.2.4",
+        }
 
 
 @router.get("/health")
@@ -137,7 +137,7 @@ async def health(
     return {
         "status": overall_status,
         "checks": checks,
-        "version": "2.2.1",
+        "version": "2.2.4",
         "request_id": get_request_id(),
     }
 

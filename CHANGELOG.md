@@ -1,3 +1,21 @@
+## [2.2.4] - 2026-04-06
+
+### Security Fixes
+- **Weak MD5 hash in prompt analysis cache** (`router/router.py:1302`): Replaced `hashlib.md5()` with `hashlib.sha256()` for cryptographic security in cache key generation.
+- **Pickle deserialization vulnerability in Redis cache** (`router/cache_redis.py:97`): Replaced `pickle.loads()/pickle.dumps()` with `json.loads()/json.dumps()` to prevent potential remote code execution from untrusted cache data.
+- **Redis cache connection error handling** (`tests/test_cache_redis.py`): Fixed test to properly assert connection state and handle mocked exceptions.
+
+### Bug Fixes
+- **Enum class definitions** (`router/modality.py`, `router/security.py`): Changed from `str, Enum` to `StrEnum` for better type safety and compatibility.
+- **Whitespace in blank lines** (`router/backends/ollama.py`): Removed trailing whitespace from blank lines.
+- **Import block organization** (`main.py` and other files): Organized and sorted import statements per PEP 8.
+- **Unused loop variables** (`tests/test_provider_fixtures.py`): Renamed unused variables to `_` convention.
+
+### Performance Improvements
+- **None in this release** - All performance improvements were implemented in v2.2.3
+
+---
+
 ## [2.2.3] - 2026-03-27
 
 ### Security Fixes
