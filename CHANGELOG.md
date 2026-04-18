@@ -1,3 +1,24 @@
+## [2.2.5] - 2026-04-17
+
+### New Features
+- **Dynamic Model Metadata Registry** (`router/model_metadata.py`): Created comprehensive model metadata system with automatic capability detection from Ollama API, TTL caching, and pattern-based fallbacks. Supports vision, tool_calling, embedding, MoE, and quantization detection.
+- **Gemma 4 Support**: Added Gemma 4 series (e2b, e4b, 26b, 31b) to modality detection heuristics for both vision and tool calling capabilities.
+- **MoE-Aware VRAM Estimation**: Updated VRAM estimation to properly handle Mixture-of-Experts models with active parameter counting and quantization-aware size calculation.
+
+### Improvements
+- **Automated Capability Detection**: Model capabilities now automatically detected from Ollama's `/api/show` endpoint and model metadata, reducing need for manual pattern updates.
+- **TTL Caching for Model Metadata**: Model metadata cached with configurable TTL (default 1 hour) to reduce API calls while staying fresh.
+- **Configurable Capability Patterns**: Added `modality_custom_patterns` config option to override or extend built-in capability detection patterns.
+
+### Bug Fixes
+- **Circular Import in Model Metadata**: Fixed circular dependency issue by using lazy imports for `app_state`.
+- **Health Endpoint Indentation**: Restored proper indentation in `router/api/health.py` after corruption.
+
+### Testing
+- **Model Metadata Tests** (`tests/test_model_metadata.py`): Comprehensive test suite for dynamic metadata detection, caching, and VRAM estimation.
+
+---
+
 ## [2.2.4] - 2026-04-06
 
 ### Security Fixes

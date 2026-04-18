@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="SmarterRouter",
     description="AI-powered LLM router that intelligently selects the best model",
-    version="2.2.4",
+    version="2.2.5",
     lifespan=lifespan,
 )
 

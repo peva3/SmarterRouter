@@ -83,32 +83,15 @@ class ModalityDetector:
         return Modality.EMBEDDING
 
 
-def get_models_for_modality(
+def get_models_for_modality_OLD(
     available_models: list[str],
-    modality: Modality,
+    modality,
     model_profiles: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Filter models by their support for a specific modality.
-
-    Uses a tiered approach:
-    1. Check model_profiles for explicit modality flags
-    2. Fall back to name-based heuristics
-    3. Return all models if no specific matches (safe fallback)
-
-    Args:
-        available_models: List of available model names
-        modality: Target modality to filter for
-        model_profiles: Optional dict of model profiles with capability flags
-
-    Returns:
-        Filtered list of model names supporting the modality
-    """
+    """Filter models by modality."""
     candidates: list[str] = []
-
     for model_name in available_models:
-        # Check profile first if available
         profile = model_profiles.get(model_name) if model_profiles else None
-
         if modality == Modality.VISION:
             if _supports_vision(model_name, profile):
                 candidates.append(model_name)
@@ -119,26 +102,10 @@ def get_models_for_modality(
             if _supports_embedding(model_name, profile):
                 candidates.append(model_name)
         else:
-            # TEXT modality - all models support text
             candidates.append(model_name)
-
-    # Safe fallback: if no candidates found, return all models
-    # This ensures routing never breaks even with missing metadata
     if not candidates and available_models:
-        logger.warning(
-            "No models found supporting %s, falling back to all available models",
-            modality,
-        )
         return available_models
-
-    logger.debug(
-        "Filtered %d models to %d candidates for %s modality",
-        len(available_models),
-        len(candidates),
-        modality,
-    )
     return candidates
-
 
 def _supports_vision(model_name: str, profile: Any | None = None) -> bool:
     """Check if a model supports vision capabilities.
@@ -165,6 +132,7 @@ def _supports_vision(model_name: str, profile: Any | None = None) -> bool:
         "cogvlm",
         "bakllava",
         "moondream",
+        "gemma4",  # Gemma 4 series supports vision
     ]
     return any(ind in name_lower for ind in vision_indicators)
 
@@ -190,6 +158,7 @@ def _supports_tool_calling(model_name: str, profile: Any | None = None) -> bool:
         "command-r",
         "llama3.1",
         "llama3.2",
+        "gemma4",  # Gemma 4 series supports tool calling
     ]
     return any(ind in name_lower for ind in tool_indicators)
 
@@ -216,3 +185,62 @@ def _supports_embedding(model_name: str, profile: Any | None = None) -> bool:
         "text-embedding",
     ]
     return any(ind in name_lower for ind in embedding_indicators)
+
+
+# Fixed version - the original get_models_for_modality has a mysterious bug
+def filter_models_by_modality(
+    available_models: list[str],
+    modality,
+    model_profiles: dict[str, Any] | None = None,
+) -> list[str]:
+    """Filter models by modality - working version."""
+    candidates: list[str] = []
+    for model_name in available_models:
+        profile = model_profiles.get(model_name) if model_profiles else None
+        if modality == Modality.VISION:
+            if _supports_vision(model_name, profile):
+                candidates.append(model_name)
+        elif modality == Modality.TOOL_CALLING:
+            if _supports_tool_calling(model_name, profile):
+                candidates.append(model_name)
+        elif modality == Modality.EMBEDDING:
+            if _supports_embedding(model_name, profile):
+                candidates.append(model_name)
+        else:
+            candidates.append(model_name)
+    if not candidates and available_models:
+        return available_models
+    return candidates
+
+
+# Alias for backward compatibility
+get_models_for_modality = filter_models_by_modality
+
+
+def filter_models_by_modality(
+    available_models: list[str],
+    modality,
+    model_profiles: dict[str, Any] | None = None,
+) -> list[str]:
+    """Filter models by modality - working version."""
+    candidates: list[str] = []
+    for model_name in available_models:
+        profile = model_profiles.get(model_name) if model_profiles else None
+        if modality == Modality.VISION:
+            if _supports_vision(model_name, profile):
+                candidates.append(model_name)
+        elif modality == Modality.TOOL_CALLING:
+            if _supports_tool_calling(model_name, profile):
+                candidates.append(model_name)
+        elif modality == Modality.EMBEDDING:
+            if _supports_embedding(model_name, profile):
+                candidates.append(model_name)
+        else:
+            candidates.append(model_name)
+    if not candidates and available_models:
+        return available_models
+    return candidates
+
+
+# Update alias to point to working version
+get_models_for_modality = filter_models_by_modality
