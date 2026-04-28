@@ -181,6 +181,7 @@ class OpenAIBackend(LLMBackend):
         model: str,
         messages: list[dict[str, str]],
         keep_alive: float = -1,
+        **kwargs: Any,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/chat/completions"
         full_model = self._full_model_name(model)
@@ -196,6 +197,12 @@ class OpenAIBackend(LLMBackend):
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 }
+                payload: dict[str, Any] = {
+                    "model": full_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                payload.update(kwargs)
                 async with httpx.AsyncClient(
                     timeout=self.timeout, verify=self.config.verify_tls
                 ) as client:
@@ -203,11 +210,7 @@ class OpenAIBackend(LLMBackend):
                         "POST",
                         url,
                         headers=headers,
-                        json={
-                            "model": full_model,
-                            "messages": messages,
-                            "stream": True,
-                        },
+                        json=payload,
                     ) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():

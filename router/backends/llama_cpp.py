@@ -175,6 +175,7 @@ class LlamaCppBackend(LLMBackend):
         model: str,
         messages: list[dict[str, str]],
         keep_alive: float = -1,
+        **kwargs: Any,
     ) -> tuple[AsyncIterator[dict[str, Any]], float]:
         url = f"{self.base_url}/v1/chat/completions"
         full_model = self._full_model_name(model)
@@ -186,17 +187,19 @@ class LlamaCppBackend(LLMBackend):
 
             async def stream_generator() -> AsyncIterator[dict[str, Any]]:
                 nonlocal latency_ms, first_token_time
+                payload: dict[str, Any] = {
+                    "model": full_model,
+                    "messages": messages,
+                    "stream": True,
+                }
+                payload.update(kwargs)
                 async with httpx.AsyncClient(
                     timeout=self.timeout, verify=self.config.verify_tls
                 ) as client:
                     async with client.stream(
                         "POST",
                         url,
-                        json={
-                            "model": full_model,
-                            "messages": messages,
-                            "stream": True,
-                        },
+                        json=payload,
                     ) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():

@@ -36,6 +36,7 @@ class LLMBackend(Protocol):
         model: str,
         messages: list[dict[str, str]],
         keep_alive: float = -1,
+        **kwargs: object,
     ) -> tuple[AsyncIterator[dict], float]:
         """Send a streaming chat request. Returns (iterator, latency_ms)."""
         ...

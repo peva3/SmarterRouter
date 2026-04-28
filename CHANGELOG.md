@@ -1,3 +1,19 @@
+## [2.2.6] - 2026-04-28
+
+### Critical Bug Fixes
+- **Streaming backend kwargs passthrough** (`router/backends/base.py`, `ollama.py`, `openai.py`, `llama_cpp.py`): All `chat_streaming()` implementations were missing `**kwargs` in their method signatures. The Protocol `base.py` also lacked it. Any streaming request with extra parameters (`tools`, `tool_choice`, `temperature`, `top_p`, etc.) would crash with `TypeError: chat_streaming() got an unexpected keyword argument`. The non-streaming `chat()` path was unaffected as it already accepted `**kwargs`.
+- **Tools substitution in streaming chat** (`router/api/chat.py`): User-provided tool definitions were silently replaced with the router's internal `skills_registry.list_skills()`, discarding the client's original tool definitions. Now passes `validated_request.tools` directly to the backend.
+
+### Testing
+- **Backend streaming kwargs tests** (`tests/test_backend_streaming_kwargs.py`): Added 12 tests covering:
+  - Protocol conformance: verifies all backends and the Protocol itself declare `**kwargs`
+  - Tools forwarding: verifies `tools`, `tool_choice`, and `temperature` appear in outgoing HTTP payload
+  - Multi-backend coverage: tests Ollama, OpenAI-compatible, and llama.cpp backends
+  - Multiple kwargs: verifies batched extra params all arrive in the payload
+  - Required params preserved: verifies `model`, `messages`, `stream` remain present even with extra kwargs
+
+---
+
 ## [2.2.5] - 2026-04-17
 
 ### New Features

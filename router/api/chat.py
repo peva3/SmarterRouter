@@ -229,9 +229,7 @@ async def chat_completions(
         "logit_bias": validated_request.logit_bias,
         "user": validated_request.user,
         "seed": validated_request.seed,
-        "logprobs": validated_request.logprobs,
-        "top_logprobs": validated_request.top_logprobs,
-        "tools": skills_registry.list_skills() if validated_request.tools else None,
+        "tools": validated_request.tools,
         "tool_choice": validated_request.tool_choice,
         "keep_alive": config.model_keep_alive,
     }
