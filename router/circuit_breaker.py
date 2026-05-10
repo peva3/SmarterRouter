@@ -31,6 +31,7 @@ class CircuitBreakerConfig:
     reset_timeout: float = 60.0  # Time in seconds before attempting half-open
     half_open_max_attempts: int = 3  # Number of successful attempts needed to close
     sliding_window_size: int = 100  # Max number of recent calls to track
+    quota_reset_timeout: float = 3600.0  # Timeout for quota-exhausted failures (1h default; should be < one billing period to avoid perpetual loop)
 
 
 class CircuitBreaker:
@@ -58,6 +59,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: float | None = None
         self._last_state_change_time = time.monotonic()
+        self._last_failure_type: str | None = None
         self._lock = asyncio.Lock()
 
         # Sliding window of recent calls (True = success, False = failure)
@@ -74,13 +76,20 @@ class CircuitBreaker:
 
         Returns False if circuit is OPEN.
         Returns True if CLOSED or HALF_OPEN (but HALF_OPEN has limited capacity).
+
+        The reset timeout used depends on the last failure type:
+        - quota failures use quota_reset_timeout (longer)
+        - all other failures use reset_timeout (shorter)
         """
         if self._state == CircuitState.OPEN:
-            # Check if reset timeout has elapsed
             if self._last_failure_time is not None:
                 elapsed = time.monotonic() - self._last_failure_time
-                if elapsed >= self.config.reset_timeout:
-                    # Transition to HALF_OPEN
+                timeout = (
+                    self.config.quota_reset_timeout
+                    if self._last_failure_type == "quota"
+                    else self.config.reset_timeout
+                )
+                if elapsed >= timeout:
                     self._set_state(CircuitState.HALF_OPEN)
                     return True
             return False
@@ -128,8 +137,14 @@ class CircuitBreaker:
                 if len(self._recent_calls) >= 3 and all(self._recent_calls[-3:]):
                     self._failure_count = 0
 
-    async def record_failure(self) -> None:
-        """Record a failed call."""
+    async def record_failure(self, failure_type: str | None = None) -> None:
+        """Record a failed call.
+
+        Args:
+            failure_type: Optional classification of the failure.
+                "quota" = quota exhaustion (long reset timeout).
+                None / any other value = generic failure (short reset timeout).
+        """
         async with self._lock:
             self._recent_calls.append(False)
             if len(self._recent_calls) > self.config.sliding_window_size:
@@ -137,10 +152,13 @@ class CircuitBreaker:
 
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
+            self._last_failure_type = failure_type
 
             if self._state == CircuitState.HALF_OPEN:
-                # Immediate transition back to OPEN
                 self._set_state(CircuitState.OPEN)
+            elif self._state == CircuitState.CLOSED:
+                if self._failure_count >= self.config.failure_threshold:
+                    self._set_state(CircuitState.OPEN)
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.config.failure_threshold:
                     self._set_state(CircuitState.OPEN)
@@ -172,7 +190,7 @@ class CircuitBreaker:
 
     def get_stats(self) -> dict[str, Any]:
         """Get current circuit breaker statistics."""
-        return {
+        stats = {
             "name": self.name,
             "state": self._state.value,
             "failure_count": self._failure_count,
@@ -182,6 +200,9 @@ class CircuitBreaker:
             "last_failure_time": self._last_failure_time,
             "last_state_change_time": self._last_state_change_time,
         }
+        if self._last_failure_type:
+            stats["last_failure_type"] = self._last_failure_type
+        return stats
 
 
 class CircuitBreakerOpenError(Exception):

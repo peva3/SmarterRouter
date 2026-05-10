@@ -1,3 +1,30 @@
+## [2.2.7] - 2026-05-10
+
+### Bug Fixes
+- **Circuit breaker quota vs rate-limit disambiguation** (`router/circuit_breaker.py`, `router/backends/retry.py`, `router/backends/resilience.py`): Fixed a bug where monthly/daily quota-exhausted 429s were treated identically to transient rate-limit 429s, causing the circuit breaker to open/close loop for the entire quota period (~43,200 wasted calls/month per provider). The fix:
+  - Inspects 429 response body for quota keywords (`"quota exceeded"`, `"out of credits"`, `"monthly limit"`, etc.)
+  - Promotes quota 429s to a `QuotaExhaustedError` that bypasses retry entirely
+  - Feeds `failure_type="quota"` to the circuit breaker, which uses a longer `quota_reset_timeout` (default 1h, configurable via `ROUTER_BACKEND_CIRCUIT_BREAKER_QUOTA_RESET_TIMEOUT`) instead of the standard 60s `reset_timeout`
+  - Transient rate-limit 429s continue to use short circuit breaker timeouts and retry with backoff as before
+
+### New Features
+- **Quota exhaustion detection** (`router/backends/retry.py`): Added `QuotaExhaustedError` exception and `is_quota_exhausted()` function that pattern-matches 429 response bodies against a curated list of quota/cap keywords. The keyword list focuses on period-based limits (`monthly`, `daily`, `billing`, `plan`, `tier`) and avoids false matches on generic `"too many requests"` or `"rate limit exceeded"` messages.
+- **Configurable quota reset timeout** (`router/config.py`): Added `backend_circuit_breaker_quota_reset_timeout` setting (default 3600s/1h) for fine-tuning how long the circuit stays open after a quota-exhausted failure.
+
+### Testing
+- **Quota detection tests** (`tests/test_quota_detection.py`): 24 tests covering:
+  - Quota keyword detection in 429 response bodies
+  - Transient rate-limit bodies correctly NOT flagged as quota
+  - Non-429 status codes and non-HTTP errors not flagged
+  - Empty/unreadable response bodies handled gracefully
+  - All quota keywords verified to produce matches
+  - `is_retryable_exception()` returns False for quota 429s
+  - `retry_operation()` raises `QuotaExhaustedError` instantly (no retries) for quota 429s
+  - Circuit breaker records `failure_type` and uses correct timeout per type
+  - Mixed quota/generic failure sequences handled correctly
+
+---
+
 ## [2.2.6] - 2026-04-28
 
 ### Critical Bug Fixes

@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     backend_circuit_breaker_reset_timeout: float = Field(default=60.0)  # seconds
     backend_circuit_breaker_half_open_max_attempts: int = Field(default=3)
     backend_circuit_breaker_sliding_window_size: int = Field(default=100)
+    backend_circuit_breaker_quota_reset_timeout: float = Field(default=3600.0)  # seconds (1h)
 
     # Ollama settings
     ollama_url: str = Field(default="http://localhost:11434")
